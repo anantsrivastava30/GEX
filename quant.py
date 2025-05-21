@@ -159,7 +159,7 @@ def create_data_packet(ticker, overview_summary, pos_summary, iv_summary, ratios
             f"News Headlines: {news_summary}\n"
             f"Snapshot Summary: {snap_summary}\n" 
             "Please summarise expected dealer hedging behaviour\n" 
-            "I can only BUY puts and calls or straddles (which I prefer not to) (optinos level 2)\n"
+            "I can only buy PUTS and CALLS, don't suggest anything else no straddles, stranges, verticles etc, only calls and puts\n"
             "Suggest any concrete 0-DTE, weekly, and/or swing trade options strategy.\n"
             "and with each strategy recommended give a trade confidence (1-100)\n"
             "Figure out the max-pain and also suggest support and resistances."
