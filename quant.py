@@ -302,9 +302,9 @@ def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset
         save_analysis(
             ticker       = ticker,
             expirations  = exp,  # replaced selected_exps with exp
-            token_count = tokens,
             payload      = snapshot,
-            response     = analysis  # replaced response variable with analysis
+            response     = analysis,  # replaced response variable with analysis
+            token_count = tokens
         )
         st.success("✅ Analysis saved.")
     # ...existing error handling...
