@@ -54,7 +54,7 @@ if ticker:
     except Exception:
         st.sidebar.error("Error fetching spot price.")
 
-enable_ai = st.sidebar.checkbox("Enable AI Analysis", value=True)
+enable_ai = st.sidebar.checkbox("Enable AI Analysis", value=False)
 
 # --- Tabs ---
 tab_names = ["Overview Metrics", "Options Positioning", "Market News"]
@@ -218,12 +218,25 @@ with tab3:
 # --- Tab 4: AI Analysis ---
 if enable_ai and ai_tab:
     with ai_tab:
+        PIN = st.secrets["AI_PIN"]  # e.g. "1234"
         st.header("🤖 AI Analysis")
         st.write("Use the button below to query the OpenAI API for trade insights based on the charts and news.")
-        run_query = st.button("Run AI Analysis")
-        if run_query:
-            openai_query(df, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset, ticker, selected_exps)
+        if "want_ai" not in st.session_state:
+            st.session_state.want_ai = False
         
+        if st.button("Run AI Analysis"):
+            st.session_state.want_ai = True
+        
+        if st.session_state.want_ai:
+            user_pin = st.text_input("Enter 4-digit PIN to confirm", type="password")
+            if user_pin:
+                if user_pin == PIN:
+                    st.success("PIN accepted — running AI…")
+                    openai_query(df, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset, ticker, selected_exps)
+                    st.session_state.want_ai = False
+                else:
+                    st.error("❌ Incorrect PIN, try again.")
+
         st.markdown("---")
         st.header("📚 Past AI Analyses")
         hist = load_analyses(limit=10)
