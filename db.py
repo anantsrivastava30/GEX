@@ -5,43 +5,37 @@ from datetime import datetime
 
 DB_FILE = Path("ai_analysis.db")
 
+
 supabase = create_client(
   st.secrets["SUPABASE_URL"],
   st.secrets["SUPABASE_KEY"],
 )
 
 
-# def init_db():
-#     """Ensure the table exists."""
-#     con = sqlite3.connect(DB_FILE)
-#     con.execute("""
-#       CREATE TABLE IF NOT EXISTS ai_analysis (
-#          id            INTEGER PRIMARY KEY AUTOINCREMENT,
-#          ts            TEXT NOT NULL,
-#          ticker        TEXT NOT NULL,
-#          expirations   TEXT,
-#          payload       TEXT,
-#          response      TEXT
-#       )
-#     """)
-#     con.commit()
-#     con.close()
+def init_db():
+    """Ensure the table exists."""
+    con = sqlite3.connect(DB_FILE)
+    con.execute("""
+      CREATE TABLE IF NOT EXISTS ai_analysis (
+         id            INTEGER PRIMARY KEY AUTOINCREMENT,
+         ts            TEXT NOT NULL,
+         ticker        TEXT NOT NULL,
+         expirations   TEXT,
+         payload       TEXT,
+         response      TEXT
+      )
+    """)
+    con.commit()
+    con.close()
 
 def save_analysis(ticker, expirations, payload, response, token_count):
-    """
-    Insert one AI analysis run.
-    - ticker: the underlying symbol (str)
-    - expirations: list of expirations used
-    - payload: dict you sent to the model
-    - response: str the model returned
-    """
-        data = {
-      "ts":           datetime.utcnow().isoformat(),
-      "ticker":       ticker,
-      "expirations":  exps,
-      "payload":      payload,
-      "response":     response,
-      "token_count":  token_count
+    data = {
+      "ts": datetime.utcnow().isoformat(),
+      "ticker": ticker,
+      "expirations": expirations,
+      "payload": payload,
+      "response": response,
+      "token_count": token_count
     }
     supabase.table("ai_analysis").insert(data).execute()
 
