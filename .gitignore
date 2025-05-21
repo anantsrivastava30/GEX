@@ -36,3 +36,10 @@ MANIFEST
 # PyInstaller
 *.manifest
 *.
+
+# Additional ignores
+*.pyc
+.env
+*.db
+.idea/
+.vscode/
