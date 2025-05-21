@@ -2,6 +2,8 @@ import sqlite3
 from pathlib import Path
 import json
 from datetime import datetime
+from supabase import create_client
+import streamlit as st
 
 DB_FILE = Path("ai_analysis.db")
 
