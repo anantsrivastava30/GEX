@@ -47,16 +47,17 @@ def load_analyses(limit=20):
     """
     Return the last `limit` analyses as a list of dicts.
     """
+    # Ensure the table exists
     con = sqlite3.connect(DB_FILE)
     cur = con.execute("""
-      SELECT id, ts, ticker, expirations, payload, response
+      SELECT id, ts, ticker, expirations, payload, response, token_count
       FROM ai_analysis
       ORDER BY id DESC
       LIMIT ?
     """, (limit,))
     rows = cur.fetchall()
     con.close()
-    cols = ["id","ts","ticker","expirations","payload","response"]
+    cols = ["id","ts","ticker","expirations","payload","response","token_count"]
     results = []
     for r in rows:
         rec = dict(zip(cols, r))

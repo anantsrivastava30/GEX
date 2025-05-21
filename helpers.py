@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import yfinance as yf
-import streamlit as st
 
 
 API_URL = "https://api.tradier.com/v1"
@@ -17,6 +16,35 @@ def get_expirations(ticker, token, include_all_roots=False):
     r = requests.get(f"{API_URL}/markets/options/expirations", params=params, headers=headers)
     r.raise_for_status()
     return r.json().get("expirations", {}).get("date", [])
+
+def load_options_data(ticker, expirations, token):
+    """Fetch option chains and process data for positioning."""
+    all_opts = []
+    for exp in expirations:
+        try:
+            chain = get_option_chain(ticker, exp, token, include_all_roots=True)
+            for opt in chain:
+                opt['expiration_date'] = exp
+            all_opts.extend(chain)
+        except Exception:
+            continue
+
+    if not all_opts:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(all_opts)
+    if 'greeks' in df.columns:
+        greeks_df = pd.json_normalize(df.pop('greeks'))
+        df = pd.concat([df, greeks_df], axis=1)
+    df['expiration_date'] = pd.to_datetime(df['expiration_date'])
+    df['DTE'] = (df['expiration_date'] - datetime.now()).dt.days
+    # Compute exposures
+    df['GammaExposure'] = df.gamma * df.open_interest * df.contract_size
+    df['DeltaExposure'] = df.delta * df.open_interest * df.contract_size
+    # Mirror exposures for puts
+    df.loc[df.option_type == 'put', ['GammaExposure', 'DeltaExposure']] *= -1
+    df['strike'] = df['strike'].astype(float)
+    return df
 
 
 def get_option_chain(ticker, expiration, token, include_all_roots=True):
@@ -108,8 +136,6 @@ def compute_unusual_spikes(df, top_n=10):
     )
     return spikes
 
-import requests
-import pandas as pd
 
 def compute_greek_exposures(ticker, expirations, tradier_token, offset, spot):
     headers = {
@@ -261,10 +287,6 @@ def get_vix_info():
         "5d_return": float(ret_5d)
     }
 
-import requests
-import pandas as pd
-import numpy as np
-
 # ─── Helper Functions ──────────────────────────────────────────────────────
 
 def compute_risk_reversal(chain):
@@ -274,7 +296,6 @@ def compute_risk_reversal(chain):
     """
     df = chain
     greeks_df = pd.json_normalize(df.pop('greeks'))
-    st.write(df)
     df['delta']  = df['delta'].astype(float)
     df['mid_iv'] = df['mid_iv'].astype(float)
     

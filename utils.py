@@ -203,6 +203,40 @@ def plot_iv_skew(iv_skew_df, S):
     plt.tight_layout()
     return plt
 
+def plot_exposure(df, value_column, label, ticker, offset, spot):
+    """Generate a mirror bar chart for option exposure."""
+    title = f"{ticker} {label} by Strike & DTE (±{offset} around {spot:.1f})"
+    fig = px.bar(
+        df,
+        x=value_column,
+        y='strike',
+        color='DTE',
+        orientation='h',
+        facet_col='option_type',
+        category_orders={'option_type': ['put', 'call']},
+        labels={value_column: label, 'strike': 'Strike', 'DTE': 'Days to Exp'},
+        title=title,
+        template='presentation'
+    )
+    fig.update_layout(barmode='relative', height=800)
+    fig.update_yaxes(
+        tickfont=dict(size=16),
+        autorange='reversed',
+        showgrid=True,
+        gridcolor='lightgray',
+        gridwidth=1,
+        griddash='dot'
+    )
+    fig.update_xaxes(
+        tickfont=dict(size=16),
+        showgrid=True,
+        gridcolor='lightgray',
+        gridwidth=1,
+        griddash='dot'
+    )
+    fig.for_each_annotation(lambda a: a.update(text=a.text.split('=')[-1]))
+    return fig
+
 def show_put_call_ratios(vol_ratio, oi_ratio):
     s = f"📈 Put/Call Volume Ratio: {vol_ratio:.2f}\n"
     s += f"\n📊 Put/Call OI Ratio:     {oi_ratio:.2f}"
