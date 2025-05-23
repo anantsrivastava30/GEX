@@ -10,7 +10,8 @@ from helpers import (
     get_stock_quote,
     compute_put_call_ratios,
     compute_unusual_spikes,
-    load_options_data
+    load_options_data,
+    fetch_av_news
 )
 from utils import (
     plot_put_call_ratios,
@@ -54,7 +55,7 @@ if ticker:
     except Exception:
         st.sidebar.error("Error fetching spot price.")
 
-enable_ai = st.sidebar.checkbox("Enable AI Analysis", value=False)
+enable_ai = st.sidebar.checkbox("Enable AI Analysis", value=True)
 
 # --- Tabs ---
 tab_names = ["Overview Metrics", "Options Positioning", "Market News"]
@@ -134,7 +135,7 @@ with tab1:
             st.markdown("""
             - The term "bearish tail risk premium" refers to the additional compensation 
               investors demand for holding assets that are more likely to experience extreme negative returns (i.e., "left tail" events) during bearish market conditions or a downturn.
-            - A negative skew means calls are richer → bullish bias or “callers’ fear.”
+            - A negative skew means calls are richer → bullish bias or "callers" fear.”
               - **Bullish bias** reflects an optimistic outlook, anticipating rising asset prices and market gains
             """)
         st.markdown("---")
@@ -183,35 +184,14 @@ with tab2:
 with tab3:
     st.header("📰 Market & Sentiment News")
     try:
-        NEWS_API_KEY = st.secrets.get("NEWSAPI_KEY")
-        params = {
-            "q": "finance OR market OR stock OR Fed OR inflation OR CPI OR "
-                  "economy OR wall street OR rates OR trump OR tarrifs OR gdb or GDP",
-            "language": "en",
-            "sortBy": "publishedAt",
-            "pageSize": 50,
-            "apiKey": NEWS_API_KEY
-        }
-        news_url = "https://newsapi.org/v2/everything"
-        resp = requests.get(news_url, params=params)
-        resp.raise_for_status()
-        articles = resp.json().get("articles", [])
-        if articles:
-            for art in articles[:30]:
-                title = art.get("title", "No title")
-                src = art.get("source", {}).get("name", "Unknown")
-                url = art.get("url", "#")
-                published = art.get("publishedAt", "")[:10]
-                st.markdown(
-                    f"<p style='font-size:18px; line-height:1.5;'>"
-                    f"<strong>{published}</strong>: "
-                    f"<a href='{url}' target='_blank'>{title}</a> "
-                    f"<em style='color:gray;'>(via {src})</em>"
-                    f"</p>",
-                    unsafe_allow_html=True
-                )
-        else:
-            st.info("No recent market or sentiment news found.")
+        NEWS_KEY = st.secrets.get("NEWS_ALPHA_KEY")
+        news = fetch_av_news(25)
+        for art in news:
+            st.markdown(
+                f"**[{art['title']}]({art['url']})**  \n"
+                f"<small>{art['source']} – {art['date']}</small>",
+                unsafe_allow_html=True
+            )
     except Exception as e:
         st.error(f"Error fetching news: {e}")
 
@@ -232,7 +212,7 @@ if enable_ai and ai_tab:
             if user_pin:
                 if user_pin == PIN:
                     st.success("PIN accepted — running AI…")
-                    openai_query(df, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset, ticker, selected_exps)
+                    openai_query(df, iv_skew_df, vol_ratio, oi_ratio, news, spot, offset, ticker, selected_exps)
                     st.session_state.want_ai = False
                 else:
                     st.error("❌ Incorrect PIN, try again.")

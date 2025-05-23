@@ -122,6 +122,20 @@ def build_headlines_section(payload):
         m.append("")
     return m
 
+def build_treasury_section(payload):
+    md = []
+    # … prior sections …
+
+    # Bond Yields
+    md.append("### Key Treasury Yields")
+    for key, info in payload.get("bond_yields", {}).items():
+        md.append(
+            f"- **{key.upper()}** ({info['symbol']}): {info['spot']:.2f}%  "
+            f"1d: {info['1d_return']:.2f}%, 5d: {info['5d_return']:.2f}%"
+        )
+    md.append("")
+    return md
+
 # Updated modularized payload_to_markdown function
 def payload_to_markdown(payload, ticker=None, exp=None, offset=None):
     """
@@ -131,9 +145,10 @@ def payload_to_markdown(payload, ticker=None, exp=None, offset=None):
     md.extend(build_header(payload))
     md.extend(build_returns_section(payload))
     md.extend(build_technical_section(payload))
-    md.extend(build_vix_section(payload))
-    md.extend(build_iv_skew_section(payload))
     md.extend(build_greek_exposures_section(payload))
+    md.extend(build_vix_section(payload))
+    md.extend(build_treasury_section(payload))
+    md.extend(build_iv_skew_section(payload))
     md.extend(build_vol_spikes_section(payload))
     md.extend(build_events_section(payload))
     if ticker is not None and exp is not None and offset is not None:
@@ -238,7 +253,7 @@ def dummy_response_decorator(func):
         """
     return wrapper
 
-# @dummy_response_decorator
+@dummy_response_decorator
 def call_openai_api(data_packet, api_key):
     client = OpenAI(api_key=api_key)
     try:
@@ -277,7 +292,7 @@ def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset
     # reuse articles list from tab3
     try:
         for art in articles[:15]:
-            headlines.append(f"- {art['publishedAt'][:10]}: {art['title']}")
+            headlines.append(f"- {art['date'][:10]}: {art['title']}")
     except:
         pass
     news_summary = "\n".join(headlines)

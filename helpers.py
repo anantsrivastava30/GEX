@@ -1,12 +1,57 @@
 import requests
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import yfinance as yf
 
 
 API_URL = "https://api.tradier.com/v1"
 
+def parse_av_timestamp(ts_str: str) -> datetime:
+    """
+    Parse AlphaVantage timestamp which may be ISO8601 or compact (YYYYMMDDTHHMMSS).
+    Always returns an aware UTC datetime.
+    """
+    try:
+        # e.g. "2025-05-23T08:26:21Z" or "2025-05-23T08:26:21+00:00"
+        dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+    except ValueError:
+        # fallback for "YYYYMMDDTHHMMSS"
+        dt = datetime.strptime(ts_str, "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
+    return dt
+
+def fetch_av_news(key, limit=10):
+    topic_list = [
+        "finance","market","stock","Fed","inflation",
+        "CPI","economy","bonds","bond_yield",
+        "rates","trump","tariffs","GDP"
+    ]
+    params = {
+        "function": "NEWS_SENTIMENT",
+        "topics":   ",".join(topic_list),
+        "apikey":   key,
+        "sort":     "LATEST",
+        "limit":    limit
+    }
+    url = "https://www.alphavantage.co/query"
+    r = requests.get(url, params=params, timeout=10)
+    r.raise_for_status()
+    feed = r.json().get("feed", [])
+
+    articles = []
+    for art in feed:
+        # parse the weird timestamp
+        dt_utc = parse_av_timestamp(art["time_published"])
+        # convert to local timezone
+        dt_local = dt_utc.astimezone()  
+        articles.append({
+            "title":  art["title"],
+            "url":    art["url"],
+            "source": art["source"],
+            "date":   dt_local.strftime("%Y-%m-%d %H:%M")
+        })
+
+    return articles
 
 def get_expirations(ticker, token, include_all_roots=False):
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
@@ -183,6 +228,21 @@ def compute_greek_exposures(ticker, expirations, tradier_token, offset, spot):
     df = pd.DataFrame(rows)
     return df
 
+def get_bond_yield_info(ticker="^TYX"):
+    """
+    Fetch the spot yield and 1d/5d returns for a given Treasury‐yield index via yfinance.
+    Default '^TYX' is the CBOE 30-year Treasury yield.
+    """
+    hist = yf.Ticker(ticker).history(period="6d")["Close"]
+    spot = float(hist.iloc[-1])
+    ret_1d = (spot / hist.iloc[-2] - 1) * 100
+    ret_5d = (spot / hist.iloc[-6] - 1) * 100
+    return {
+        "symbol":      ticker,
+        "spot":        spot,
+        "1d_return":   ret_1d,
+        "5d_return":   ret_5d
+    }
 
 def get_market_snapshot(tradier_token, ticker, expirations, offset=20):
     headers = {
@@ -264,6 +324,12 @@ def get_market_snapshot(tradier_token, ticker, expirations, offset=20):
     # -- VIX term structure -----------------
     payload["vix"] = get_vix_info()
 
+    # -- Bond yield term structure ----------
+    payload["bond_yields"] = {
+        "30y": get_bond_yield_info("^TYX"),
+        "10y": get_bond_yield_info("^TNX"),
+        "5y":  get_bond_yield_info("^FVX"),
+    }
     
     # ── Timestamp & Payload Date ────────────────────────────────
     ts = datetime.utcnow()
