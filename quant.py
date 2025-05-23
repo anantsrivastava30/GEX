@@ -253,7 +253,7 @@ def dummy_response_decorator(func):
         """
     return wrapper
 
-@dummy_response_decorator
+# @dummy_response_decorator
 def call_openai_api(data_packet, api_key):
     client = OpenAI(api_key=api_key)
     try:
