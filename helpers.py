@@ -3,9 +3,44 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta, timezone
 import yfinance as yf
+import feedparser
+from zoneinfo import ZoneInfo
 
 
 API_URL = "https://api.tradier.com/v1"
+
+RSS_FEEDS = [
+    # Global wire & major publications
+    "https://feeds.reuters.com/Reuters/BusinessNews",
+    "https://www.ft.com/?format=rss",
+    "https://seekingalpha.com/market-news.rss",
+    "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
+
+    # U.S. business & markets
+    "https://www.cnbc.com/id/10001147/device/rss/rss.html",
+    "https://www.marketwatch.com/rss/topstories",
+    "https://www.bloomberg.com/feed/podcast/etf-report.xml",
+    "https://feeds.bizjournals.com/bizj_national.xml",
+
+    # Tech & innovation (often drives big moves)
+    "https://feeds.feedburner.com/TechCrunch/",
+    "https://www.theinformation.com/rss/articles",
+
+    # Sector-specific deep dives
+    "https://www.spglobal.com/marketintelligence/feed-news",
+    "https://www.forbes.com/business/feed2/",
+
+    # Alternative data & sentiment
+    "https://www.investopedia.com/feedbuilder/feed/getfeed/?feedName=LatestNews",
+    "https://www.barrons.com/xml/rss/3_7031.xml"
+]
+
+
+TOPICS = [
+    "finance","market","stock","fed","inflation",
+    "cpi","economy","bonds","yield",
+    "rates","trump","tariff","gdp"
+]
 
 def parse_av_timestamp(ts_str: str) -> datetime:
     """
@@ -20,38 +55,38 @@ def parse_av_timestamp(ts_str: str) -> datetime:
         dt = datetime.strptime(ts_str, "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
     return dt
 
-def fetch_av_news(key, limit=10):
-    topic_list = [
-        "finance","market","stock","Fed","inflation",
-        "CPI","economy","bonds","bond_yield",
-        "rates","trump","tariffs","GDP"
-    ]
-    params = {
-        "function": "NEWS_SENTIMENT",
-        "topics":   ",".join(topic_list),
-        "apikey":   key,
-        "sort":     "LATEST",
-        "limit":    limit
-    }
-    url = "https://www.alphavantage.co/query"
-    r = requests.get(url, params=params, timeout=10)
-    r.raise_for_status()
-    feed = r.json().get("feed", [])
+def fetch_and_filter_rss(feeds=RSS_FEEDS, topics=TOPICS, limit_per_feed=10):
+    """
+    Fetch items from each RSS URL, filter by topics in title/summary,
+    and return as a combined list of dicts.
+    """
+    results = []
+    for url in feeds:
+        feed = feedparser.parse(url)
+        for entry in feed.entries[:limit_per_feed]:
+            text = (entry.get("title","") + " " + entry.get("summary","")).lower()
+            if any(topic.lower() in text for topic in topics):
+                # Parse published timestamp
+                if hasattr(entry, "published_parsed"):
+                    dt = datetime(*entry.published_parsed[:6], tzinfo=ZoneInfo("UTC"))
+                else:
+                    dt = datetime.now(tz=ZoneInfo("UTC"))
+                # Convert to local
+                local_dt = dt.astimezone(ZoneInfo("America/Los_Angeles"))
+                results.append({
+                    "title": entry.title,
+                    "link":  entry.link,
+                    "source": feed.feed.get("title", url),
+                    "date":  local_dt.strftime("%Y-%m-%d %H:%M")
+                })
+    # sort by date descending and dedupe by title
+    seen = set(); uniq = []
+    for art in sorted(results, key=lambda x: x["date"], reverse=True):
+        if art["title"] not in seen:
+            seen.add(art["title"])
+            uniq.append(art)
+    return uniq
 
-    articles = []
-    for art in feed:
-        # parse the weird timestamp
-        dt_utc = parse_av_timestamp(art["time_published"])
-        # convert to local timezone
-        dt_local = dt_utc.astimezone()  
-        articles.append({
-            "title":  art["title"],
-            "url":    art["url"],
-            "source": art["source"],
-            "date":   dt_local.strftime("%Y-%m-%d %H:%M")
-        })
-
-    return articles
 
 def get_expirations(ticker, token, include_all_roots=False):
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}

@@ -11,7 +11,7 @@ from helpers import (
     compute_put_call_ratios,
     compute_unusual_spikes,
     load_options_data,
-    fetch_av_news
+    fetch_and_filter_rss
 )
 from utils import (
     plot_put_call_ratios,
@@ -184,14 +184,16 @@ with tab2:
 with tab3:
     st.header("📰 Market & Sentiment News")
     try:
-        NEWS_KEY = st.secrets.get("NEWS_ALPHA_KEY")
-        news = fetch_av_news(25)
-        for art in news:
-            st.markdown(
-                f"**[{art['title']}]({art['url']})**  \n"
-                f"<small>{art['source']} - {art['date']}</small>",
-                unsafe_allow_html=True
-            )
+        articles = fetch_and_filter_rss(limit_per_feed=5)
+        if not articles:
+            st.write("No recent articles matching your topics.")
+        else:
+            for art in articles[:100]:
+                st.markdown(
+                    f"**[{art['title']}]({art['link']})**  \n"
+                    f"<small>{art['source']} — {art['date']}</small>",
+                    unsafe_allow_html=True
+                )
     except Exception as e:
         st.error(f"Error fetching news: {e}")
 
@@ -212,7 +214,7 @@ if enable_ai and ai_tab:
             if user_pin:
                 if user_pin == PIN:
                     st.success("PIN accepted — running AI…")
-                    openai_query(df, iv_skew_df, vol_ratio, oi_ratio, news, spot, offset, ticker, selected_exps)
+                    openai_query(df, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset, ticker, selected_exps)
                     st.session_state.want_ai = False
                 else:
                     st.error("❌ Incorrect PIN, try again.")
