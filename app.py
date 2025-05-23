@@ -189,7 +189,7 @@ with tab3:
         for art in news:
             st.markdown(
                 f"**[{art['title']}]({art['url']})**  \n"
-                f"<small>{art['source']} – {art['date']}</small>",
+                f"<small>{art['source']} - {art['date']}</small>",
                 unsafe_allow_html=True
             )
     except Exception as e:

@@ -195,7 +195,7 @@ def plot_iv_skew(iv_skew_df, S):
     plt.plot(iv_skew_df['strike'], iv_skew_df['iv_skew'], marker='o')
     plt.axhline(0, color='gray', linewidth=1)
     plt.axvline(S, color='red', linestyle='--', label=f"Spot = {S:.2f}")
-    plt.title("IV Skew (Put IV – Call IV) by Strike")
+    plt.title("IV Skew (Put IV - Call IV) by Strike")
     plt.xlabel("Strike")
     plt.ylabel("IV Skew")
     plt.legend()

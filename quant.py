@@ -201,17 +201,17 @@ def dummy_response_decorator(func):
         
         Dealer Gamma/Delta Hedging Summary v2
 
-        Around spot (≈592.8) dealers are net long gamma (net positive GEX from roughly 585–600 strikes). That means:
+        Around spot (≈592.8) dealers are net long gamma (net positive GEX from roughly 585-600 strikes). That means:
         • On an uptick they will be selling futures/ETF to stay hedged (‐ve delta adjustments).
         • On a downtick they will be buying futures/ETF to stay hedged (+ve delta adjustments).
-        → In practice this creates a mean-reversion pinning effect in the 590–595 zone during the day.
+        → In practice this creates a mean-reversion pinning effect in the 590-595 zone during the day.
         Beyond roughly ±10 points (~<582 or >602), dealers become net short gamma, so rapid moves beyond those levels tend to accelerate (sharp breakouts or breakdowns).
 
         Max-Pain and Key Option Barriers
 
-        Max-Pain ≈592–593 (highest combined OI on calls and puts, and volume spikes).
+        Max-Pain ≈592-593 (highest combined OI on calls and puts, and volume spikes).
         Resistance: 595 (very heavy call gamma/oi), then 600 (clustered call strikes).
-        Support: 590 (put gamma/oi concentration), then 585 (next big put block around 580–585).
+        Support: 590 (put gamma/oi concentration), then 585 (next big put block around 580-585).
 
         Suggested Trades (you can only buy calls or puts)
 
@@ -223,12 +223,12 @@ def dummy_response_decorator(func):
 
         B. Short-Term (Weekly expiry May 23)
         Trade: Buy SPY May 23 590 put
-        Rationale: Dealers’ positive gamma pegs 592–595, so a drop back into that area will squeeze front-week vols higher. Vega is still relatively low (≈15% on ATM), so buying puts gets vol kicker if realized vol ticks up.
+        Rationale: Dealers’ positive gamma pegs 592-595, so a drop back into that area will squeeze front-week vols higher. Vega is still relatively low (≈15% on ATM), so buying puts gets vol kicker if realized vol ticks up.
         Confidence: 65/100
 
-        C. Swing (2–4 weeks)
+        C. Swing (2-4 weeks)
         Trade: Buy SPY June 20 580 put
-        Rationale: A broader pullback into the strong put-gamma wall at 585–580 will accelerate if the fence breaks. Gives time for any Fed/rate headlines to drag SPY lower.
+        Rationale: A broader pullback into the strong put-gamma wall at 585-580 will accelerate if the fence breaks. Gives time for any Fed/rate headlines to drag SPY lower.
         Confidence: 55/100
 
         D. Optional Bull-Breakout (Weekly expiry May 23)
@@ -239,7 +239,7 @@ def dummy_response_decorator(func):
         Positioning Risk & Execution Notes
 
         Keep very tight stops on 0DTE (large theta burn).
-        For weekly/swing, size for a 1–2% move; your breakeven is vol-driven.
+        For weekly/swing, size for a 1-2% move; your breakeven is vol-driven.
         Watch printed dealer hedges: quick take-profits if you see futures selling into your move (tells you dealers are hedging).
 
         Support/Resistance Levels Recap
@@ -248,7 +248,7 @@ def dummy_response_decorator(func):
         Near-term resistance: 595, then 600
 
         Final Comment
-        Dealers’ long gamma in the 590–595 zone will work against trend extensions within that band, so your best odds come from trades that either fade rallies into 595 or catch a breakdown through 590–585.
+        Dealers’ long gamma in the 590-595 zone will work against trend extensions within that band, so your best odds come from trades that either fade rallies into 595 or catch a breakdown through 590-585.
 
         """
     return wrapper
