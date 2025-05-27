@@ -378,7 +378,7 @@ def get_vix_info():
     Returns current VIX spot price plus 1-day and 5-day % changes.
     """
     v = yf.Ticker("^VIX")
-    hist = v.history(period="6d")["Close"]  # last 6 trading days
+    hist = v.history(period="10d")["Close"]  # last 6 trading days
     spot = hist.iloc[-1]
     ret_1d = (spot / hist.iloc[-2] - 1) * 100
     ret_5d = (spot / hist.iloc[-6] - 1) * 100
