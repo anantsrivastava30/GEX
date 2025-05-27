@@ -17,7 +17,8 @@ from utils import (
     plot_put_call_ratios,
     plot_volume_spikes_stacked,
     interpret_net_gex,
-    plot_exposure
+    plot_exposure,
+    plot_price_and_delta_projection
 )
 from quant import openai_query
 from db import init_db, save_analysis, load_analyses
@@ -50,7 +51,7 @@ offset = st.sidebar.slider("Strike Range ±", min_value=1, max_value=300, value=
 spot = None
 if ticker:
     try:
-        spot = get_stock_quote(ticker, st.secrets.get("TRADIER_TOKEN"))
+        spot = get_stock_quote(ticker,  st.secrets.get("TRADIER_TOKEN"))
         st.sidebar.markdown(f"**Spot Price:** ***{spot:.2f}***")
     except Exception:
         st.sidebar.error("Error fetching spot price.")
@@ -70,11 +71,12 @@ ai_tab = tabs[3] if enable_ai else None
 # --- Tab 1: Overview Metrics ---
 with tab1:
     st.header("📈 Overview Metrics")
+    tradier_token = st.secrets.get("TRADIER_TOKEN")
     if ticker and selected_exps and spot is not None:
         exp0 = selected_exps[0]
         try:
             chain0 = get_option_chain(
-                ticker, exp0, st.secrets.get("TRADIER_TOKEN"), include_all_roots=True
+                ticker, exp0, tradier_token, include_all_roots=True
             )
         except Exception:
             st.error(f"Failed to fetch options for {exp0}")
@@ -153,6 +155,10 @@ with tab1:
         st.write(spikes_df)
         fig = plot_volume_spikes_stacked(spikes_df, offset=offset, spot=spot)
         st.plotly_chart(fig, use_container_width=True)
+
+        # Price and dealers detla hedge and projection
+        fig = plot_price_and_delta_projection(ticker, exp0, tradier_token, offset=offset)
+        st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Select ticker, expirations, and ensure spot price loaded.")
 
@@ -184,7 +190,7 @@ with tab2:
 with tab3:
     st.header("📰 Market & Sentiment News")
     try:
-        articles = fetch_and_filter_rss(limit_per_feed=5)
+        articles = fetch_and_filter_rss(limit_per_feed=20)
         if not articles:
             st.write("No recent articles matching your topics.")
         else:

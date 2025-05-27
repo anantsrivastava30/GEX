@@ -4,6 +4,7 @@ import numpy as np
 from datetime import datetime, timedelta, timezone
 import yfinance as yf
 import feedparser
+import streamlit as st
 from zoneinfo import ZoneInfo
 
 
@@ -58,19 +59,22 @@ def parse_av_timestamp(ts_str: str) -> datetime:
 def fetch_and_filter_rss(feeds=RSS_FEEDS, topics=TOPICS, limit_per_feed=10):
     """
     Fetch items from each RSS URL, filter by topics in title/summary,
-    and return as a combined list of dicts.
+    and return as a combined list of dicts. Skip if the article is older than 30 days.
     """
     results = []
     for url in feeds:
         feed = feedparser.parse(url)
         for entry in feed.entries[:limit_per_feed]:
-            text = (entry.get("title","") + " " + entry.get("summary","")).lower()
+            text = (entry.get("title", "") + " " + entry.get("summary", "")).lower()
             if any(topic.lower() in text for topic in topics):
                 # Parse published timestamp
                 if hasattr(entry, "published_parsed"):
                     dt = datetime(*entry.published_parsed[:6], tzinfo=ZoneInfo("UTC"))
                 else:
                     dt = datetime.now(tz=ZoneInfo("UTC"))
+                # Skip if the article is older than 30 days
+                if datetime.now(tz=ZoneInfo("UTC")) - dt > timedelta(days=30):
+                    continue
                 # Convert to local
                 local_dt = dt.astimezone(ZoneInfo("America/Los_Angeles"))
                 results.append({
@@ -80,7 +84,8 @@ def fetch_and_filter_rss(feeds=RSS_FEEDS, topics=TOPICS, limit_per_feed=10):
                     "date":  local_dt.strftime("%Y-%m-%d %H:%M")
                 })
     # sort by date descending and dedupe by title
-    seen = set(); uniq = []
+    seen = set()
+    uniq = []
     for art in sorted(results, key=lambda x: x["date"], reverse=True):
         if art["title"] not in seen:
             seen.add(art["title"])
@@ -268,7 +273,8 @@ def get_bond_yield_info(ticker="^TYX"):
     Fetch the spot yield and 1d/5d returns for a given Treasury‐yield index via yfinance.
     Default '^TYX' is the CBOE 30-year Treasury yield.
     """
-    hist = yf.Ticker(ticker).history(period="6d")["Close"]
+    hist = yf.Ticker(ticker).history(period="10d")["Close"]
+    st.write(hist)
     spot = float(hist.iloc[-1])
     ret_1d = (spot / hist.iloc[-2] - 1) * 100
     ret_5d = (spot / hist.iloc[-6] - 1) * 100
@@ -279,6 +285,21 @@ def get_bond_yield_info(ticker="^TYX"):
         "5d_return":   ret_5d
     }
 
+def get_vix_info():
+    """
+    Returns current VIX spot price plus 1-day and 5-day % changes.
+    """
+    v = yf.Ticker("^VIX")
+    hist = v.history(period="10d")["Close"]  # last 6 trading days
+    spot = hist.iloc[-1]
+    ret_1d = (spot / hist.iloc[-2] - 1) * 100
+    ret_5d = (spot / hist.iloc[-6] - 1) * 100
+    return {
+        "spot": float(spot),
+        "1d_return": float(ret_1d),
+        "5d_return": float(ret_5d)
+    }
+
 def get_market_snapshot(tradier_token, ticker, expirations, offset=20):
     headers = {
         "Authorization": f"Bearer {tradier_token}",
@@ -286,7 +307,7 @@ def get_market_snapshot(tradier_token, ticker, expirations, offset=20):
     }
     
     payload = {}
-    # ── Spot & Quote ─────────────────────────────────────────────
+    # ── Spot & Quote
     q = requests.get(
         f"{API_URL}/markets/quotes",
         params={"symbols": ticker},
@@ -298,7 +319,7 @@ def get_market_snapshot(tradier_token, ticker, expirations, offset=20):
     payload["expirations"] = expirations
     payload["offset"] = offset
     
-    # ── Price History & Returns/RSI ─────────────────────────────
+    # ── Price History & Returns/RSI
     today = datetime.utcnow().date()
     # fetch at least 14 trading days to compute RSI(14)
     start = today - timedelta(days=30)
@@ -332,13 +353,13 @@ def get_market_snapshot(tradier_token, ticker, expirations, offset=20):
     rsi = 100 - (100 / (1 + rs))
     payload["technical"] = {"RSI14": float(rsi.iloc[-1])}
 
-    # ── Volume/OI Spikes by Type ────────────────────────────────
+    # ── Volume/OI Spikes by Type 
     chain0    = get_option_chain(ticker, expirations[0], tradier_token, include_all_roots=True)
     df_opts = pd.DataFrame(chain0)  # full chain for first expiry
     spikes  = compute_unusual_spikes(df_opts, top_n=10)
     payload["vol_oi_spikes"] = spikes.to_dict(orient="records")
     
-    # # # ── Greek Exposures (all expirations) ───────────────────────
+    # # # ── Greek Exposures (all expirations)
     df_greeks = compute_greek_exposures(ticker, expirations, tradier_token, offset=offset, spot=spot)
     payload["greek_exposures"] = {
         g: (

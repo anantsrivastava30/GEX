@@ -6,6 +6,10 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import plotly.express as px
 import plotly.graph_objects as go
+import yfinance as yf
+from plotly.subplots import make_subplots
+import requests
+from datetime import datetime, timedelta, time
 
 def interpret_net_gex(df_net, S, offset=25):
     """
@@ -332,4 +336,142 @@ def plot_volume_spikes_stacked(spikes_df, offset=None, spot=None):
     fig.update_layout(xaxis_tickangle=45, yaxis_tickformat='.2f')
     fig.update_xaxes(tickfont=dict(size=14))
     fig.update_yaxes(tickfont=dict(size=14))
+    return fig
+
+def get_intraday_prices_with_prev_close(ticker: str, interval: str = "30m") -> pd.Series:
+    df = yf.Ticker(ticker).history(period="2d", interval=interval)
+    df['date'] = df.index.date
+    dates = sorted(df['date'].unique())
+    yday, today = dates[0], dates[-1]
+
+    # yesterday’s final bar at 16:00
+    df_y = df[df['date'] == yday]
+    yday_close = df_y['Close'].iloc[-1]
+    tz = df.index.tz
+    yday_ts = datetime.combine(yday, time(16, 0)).replace(tzinfo=tz)
+    ser_y = pd.Series([yday_close], index=pd.DatetimeIndex([yday_ts], tz=tz), name="Close")
+
+    # today’s intraday
+    df_t = df[df['date'] == today]['Close'].copy()
+    df_t.name = "Close"
+
+    # combine
+    combined = pd.concat([ser_y, df_t]).sort_index()
+    return combined
+
+def get_delta_exposure_at_times(
+    ticker, expiration, tradier_token, offset, price_series: pd.Series
+) -> pd.Series:
+    exposures = []
+    headers = {"Authorization": f"Bearer {tradier_token}", "Accept":"application/json"}
+
+    # skip the first index (yesterday’s close)
+    for ts, spot in price_series.iloc[1:].items():
+        spot = float(spot)
+        resp = requests.get(
+            "https://api.tradier.com/v1/markets/options/chains",
+            params={
+                "symbol": ticker,
+                "expiration": expiration,
+                "greeks": "true",
+                "includeAllRoots": "true"
+            },
+            headers=headers
+        )
+        data = resp.json().get("options", {}).get("option", [])
+        df_chain = pd.DataFrame(data)
+        df_chain['strike'] = df_chain['strike'].astype(float)
+        df_chain['delta']  = df_chain['greeks'].apply(lambda g: g.get('delta', 0.0))
+        df_chain['oi']     = df_chain['open_interest'].astype(int)
+
+        mask = (df_chain['strike'] >= spot-offset) & (df_chain['strike'] <= spot+offset)
+        df_chain = df_chain.loc[mask]
+
+        df_chain['side'] = df_chain['option_type'].str.lower().map({'call':1,'put':-1})
+        df_chain['d_exposure'] = (
+            df_chain['delta']*
+            df_chain['oi']*
+            df_chain['contract_size']*
+            df_chain['side']
+        )
+        exposures.append(df_chain['d_exposure'].sum())
+
+    # build a Series aligned to the *trading-day* timestamps
+    idx = price_series.index[1:]  # skip the first
+    return pd.Series(exposures, index=idx, name="Net Delta Exposure")
+
+def plot_price_and_delta_projection(
+    ticker, expiration, tradier_token, offset, interval="30m"
+):
+    # 1) get price series (with yday close)
+    price_series = get_intraday_prices_with_prev_close(ticker, interval)
+
+    # 2) compute exposures only for today’s bars
+    delta_series = get_delta_exposure_at_times(
+        ticker, expiration, tradier_token, offset, price_series
+    )
+
+    # 3) linear trend on exposures
+    hours = np.array([
+        (ts - delta_series.index[0]).total_seconds()/3600
+        for ts in delta_series.index
+    ])
+    coeff = np.polyfit(hours, delta_series.values, 1)
+    trend = np.poly1d(coeff)
+
+    # project to end-of-day 16:00
+    last_ts = delta_series.index[-1]
+    tz = last_ts.tzinfo
+    end_ts = datetime.combine(last_ts.date(), time(16,0)).replace(tzinfo=tz)
+    end_hour = (end_ts - delta_series.index[0]).total_seconds()/3600
+    proj = float(trend(end_hour))
+
+    # 4) make subplot with secondary y-axis
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    # spot price (includes yday close)
+    fig.add_trace(
+        go.Scatter(
+            x=price_series.index,
+            y=price_series.values,
+            mode="lines+markers",
+            name="Spot Price",
+            line=dict(color="blue")
+        ),
+        secondary_y=False
+    )
+
+    # delta exposure bars (today only)
+    fig.add_trace(
+        go.Bar(
+            x=delta_series.index,
+            y=delta_series.values,
+            name="Net Delta Exposure",
+            marker_color="red",
+            opacity=0.6
+        ),
+        secondary_y=True
+    )
+
+    # projection point
+    fig.add_trace(
+        go.Scatter(
+            x=[end_ts], y=[proj],
+            mode="markers+lines",
+            name="Projected Exposure",
+            marker=dict(color="green", size=10),
+            line=dict(dash="dash")
+        ),
+        secondary_y=True
+    )
+
+    fig.update_layout(
+        title=f"{ticker} Price & Net Delta Exposure Projection",
+        xaxis=dict(title="Time"),
+        template="plotly_white",
+        height=450, width=900
+    )
+    fig.update_yaxes(title_text="Spot Price", secondary_y=False)
+    fig.update_yaxes(title_text="Delta Exposure", secondary_y=True)
+
     return fig

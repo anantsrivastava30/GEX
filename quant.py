@@ -260,6 +260,7 @@ def call_openai_api(data_packet, api_key):
         completion = client.chat.completions.create(
             # model="gpt-4o",
             model="o4-mini",
+            # model="gpt-4.5-preview",
             messages=data_packet["messages"],
         )
         return completion.choices[0].message.content
