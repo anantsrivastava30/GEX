@@ -1,0 +1,43 @@
+openai:
+  model: "gpt-4o-2024-05-13"
+  
+tradier:
+  api_url: "https://api.tradier.com/v1"
+
+tradingEconomics:
+  api_url: "https://api.tradingeconomics.com"
+
+news:
+  rss_feeds:
+    - "https://feeds.reuters.com/Reuters/BusinessNews"
+    - "https://www.ft.com/?format=rss"
+    # - "https://seekingalpha.com/market-news.rss"
+    - "https://feeds.a.dj.com/rss/RSSMarketsMain.xml"
+    - "https://www.cnbc.com/id/10001147/device/rss/rss.html"
+    - "https://www.marketwatch.com/rss/topstories"
+    # - "https://www.bloomberg.com/feed/podcast/etf-report.xml"
+    # - "https://feeds.bizjournals.com/bizj_national.xml"
+    - "https://feeds.feedburner.com/TechCrunch/"
+    # - "https://www.theinformation.com/rss/articles"
+    # - "https://www.spglobal.com/marketintelligence/feed-news"
+    - "https://www.forbes.com/business/feed2/"
+    # - "https://www.investopedia.com/feedbuilder/feed/getfeed/?feedName=LatestNews"
+    # - "https://www.barrons.com/xml/rss/3_7031.xml"
+  topics:
+    - finance
+    - market
+    - stock
+    - fed
+    - inflation
+    - cpi
+    - economy
+    - bonds
+    - yield
+    - rates
+    - trump
+    - tariff
+    - gdp
+
+database:
+  sqlite_db: "ai_analysis.db"
+  supabase_table: "ai_analysis"

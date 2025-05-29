@@ -1,21 +1,22 @@
+import yaml
 import os
-import sqlite3
-import json
+
+# Load configuration from YAML file
+with open(os.path.join(os.path.dirname(__file__), "config.yaml"), "r") as f:
+    CONFIG = yaml.safe_load(f)
+
 from supabase import create_client
 import streamlit as st
 
-# ─── CONFIG ────────────────────────────────────────────────────────────────
-# Make sure your .streamlit/secrets.toml has SUPABASE_URL and SUPABASE_KEY
-# SUPA_URL = os.getenv("SUPABASE_URL")
 SUPA_URL = st.secrets.get("SUPABASE_URL")
-# SUPA_KEY = os.getenv("SUPABASE_KEY")
 SUPA_KEY = st.secrets.get("SUPABASE_KEY")
 supabase = create_client(SUPA_URL, SUPA_KEY)
 
-SQLITE_DB = "ai_analysis.db"   # path to your local SQLite file
-TABLE     = "ai_analysis"      # Supabase table name
+# Use config for SQLite path and table name:
+SQLITE_DB = CONFIG.get("database", {}).get("sqlite_db", "ai_analysis.db")
+TABLE     = CONFIG.get("database", {}).get("supabase_table", "ai_analysis")
 
-# ─── MIGRATION ─────────────────────────────────────────────────────────────
+# - Migration
 def migrate_sqlite_to_supabase():
     # 1) Open SQLite & fetch everything except the auto-increment id
     conn = sqlite3.connect(SQLITE_DB)

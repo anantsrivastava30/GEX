@@ -6,6 +6,13 @@ from helpers import get_market_snapshot, augment_payload_with_extras
 import streamlit as st
 import pandas as pd
 from db import save_analysis
+import yaml
+import os
+
+
+# Load configuration from YAML file
+with open(os.path.join(os.path.dirname(__file__), "config.yaml"), "r") as f:
+    CONFIG = yaml.safe_load(f)
 
 
 # New helper functions for modularized markdown building
@@ -258,9 +265,7 @@ def call_openai_api(data_packet, api_key):
     client = OpenAI(api_key=api_key)
     try:
         completion = client.chat.completions.create(
-            # model="gpt-4o",
-            model="o4-mini",
-            # model="gpt-4.5-preview",
+            model=CONFIG.get("openai", {}).get("model", "gpt-4o"),
             messages=data_packet["messages"],
         )
         return completion.choices[0].message.content

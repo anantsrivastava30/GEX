@@ -11,6 +11,7 @@ setup(
         "streamlit",
         "pandas",
         "supabase",
+        "pyyaml",
     ],
     entry_points={
         "console_scripts": [

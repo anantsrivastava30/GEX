@@ -6,55 +6,19 @@ import yfinance as yf
 import feedparser
 import streamlit as st
 from zoneinfo import ZoneInfo
+import yaml
+import os
+import cloudscraper
 
+# Load configuration from YAML file
+with open(os.path.join(os.path.dirname(__file__), "config.yaml"), "r") as f:
+    CONFIG = yaml.safe_load(f)
 
-API_URL = "https://api.tradier.com/v1"
+API_URL = CONFIG.get("tradier", {}).get("api_url", "https://api.tradier.com/v1")
 
-RSS_FEEDS = [
-    # Global wire & major publications
-    "https://feeds.reuters.com/Reuters/BusinessNews",
-    "https://www.ft.com/?format=rss",
-    "https://seekingalpha.com/market-news.rss",
-    "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",
+RSS_FEEDS = CONFIG.get("news", {}).get("rss_feeds", [])
 
-    # U.S. business & markets
-    "https://www.cnbc.com/id/10001147/device/rss/rss.html",
-    "https://www.marketwatch.com/rss/topstories",
-    "https://www.bloomberg.com/feed/podcast/etf-report.xml",
-    "https://feeds.bizjournals.com/bizj_national.xml",
-
-    # Tech & innovation (often drives big moves)
-    "https://feeds.feedburner.com/TechCrunch/",
-    "https://www.theinformation.com/rss/articles",
-
-    # Sector-specific deep dives
-    "https://www.spglobal.com/marketintelligence/feed-news",
-    "https://www.forbes.com/business/feed2/",
-
-    # Alternative data & sentiment
-    "https://www.investopedia.com/feedbuilder/feed/getfeed/?feedName=LatestNews",
-    "https://www.barrons.com/xml/rss/3_7031.xml"
-]
-
-
-TOPICS = [
-    "finance","market","stock","fed","inflation",
-    "cpi","economy","bonds","yield",
-    "rates","trump","tariff","gdp"
-]
-
-def parse_av_timestamp(ts_str: str) -> datetime:
-    """
-    Parse AlphaVantage timestamp which may be ISO8601 or compact (YYYYMMDDTHHMMSS).
-    Always returns an aware UTC datetime.
-    """
-    try:
-        # e.g. "2025-05-23T08:26:21Z" or "2025-05-23T08:26:21+00:00"
-        dt = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-    except ValueError:
-        # fallback for "YYYYMMDDTHHMMSS"
-        dt = datetime.strptime(ts_str, "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
-    return dt
+TOPICS = CONFIG.get("news", {}).get("topics", [])
 
 def fetch_and_filter_rss(feeds=RSS_FEEDS, topics=TOPICS, limit_per_feed=10):
     """
@@ -78,6 +42,7 @@ def fetch_and_filter_rss(feeds=RSS_FEEDS, topics=TOPICS, limit_per_feed=10):
                 # Convert to local
                 local_dt = dt.astimezone(ZoneInfo("America/Los_Angeles"))
                 results.append({
+                    "url":   entry.link,
                     "title": entry.title,
                     "link":  entry.link,
                     "source": feed.feed.get("title", url),
@@ -91,7 +56,6 @@ def fetch_and_filter_rss(feeds=RSS_FEEDS, topics=TOPICS, limit_per_feed=10):
             seen.add(art["title"])
             uniq.append(art)
     return uniq
-
 
 def get_expirations(ticker, token, include_all_roots=False):
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
@@ -274,7 +238,6 @@ def get_bond_yield_info(ticker="^TYX"):
     Default '^TYX' is the CBOE 30-year Treasury yield.
     """
     hist = yf.Ticker(ticker).history(period="10d")["Close"]
-    st.write(hist)
     spot = float(hist.iloc[-1])
     ret_1d = (spot / hist.iloc[-2] - 1) * 100
     ret_5d = (spot / hist.iloc[-6] - 1) * 100

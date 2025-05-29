@@ -62,10 +62,12 @@ enable_ai = st.sidebar.checkbox("Enable AI Analysis", value=True)
 tab_names = ["Overview Metrics", "Options Positioning", "Market News"]
 if enable_ai:
     tab_names.append("AI Analysis")
+tab_names.append("Economic Calendar")
 tabs = st.tabs(tab_names)
 tab1 = tabs[0]
 tab2 = tabs[1]
-tab3 = tabs[2]
+news_tab = tabs[2]
+calender_tab = tabs[4]
 ai_tab = tabs[3] if enable_ai else None
 
 # --- Tab 1: Overview Metrics ---
@@ -187,21 +189,39 @@ with tab2:
         st.info("Select ticker and expirations to view positioning.")
 
 # --- Tab 3: Market News ---
-with tab3:
+with news_tab:
     st.header("📰 Market & Sentiment News")
     try:
-        articles = fetch_and_filter_rss(limit_per_feed=20)
+        articles = fetch_and_filter_rss(limit_per_feed=30)
         if not articles:
             st.write("No recent articles matching your topics.")
         else:
-            for art in articles[:100]:
+            for art in articles[:100]:               
                 st.markdown(
                     f"**[{art['title']}]({art['link']})**  \n"
                     f"<small>{art['source']} — {art['date']}</small>",
                     unsafe_allow_html=True
                 )
+        fetch_economic_calendar()
     except Exception as e:
         st.error(f"Error fetching news: {e}")
+
+with calender_tab:
+    st.header("📅 Economic Calendar")
+    st.components.v1.html(
+        """
+        <iframe src="https://sslecal2.investing.com?columns=exc_flags,exc_currency,exc_importance,exc_actual,exc_forecast,exc_previous&importance=2,3&features=datepicker,timezone,filters&countries=5&calType=week&timeZone=8&lang=1"
+         width="800" height="1000" frameborder="0" allowtransparency="true" marginwidth="0" marginheight="0"></iframe>
+        <div class="poweredBy" style="font-family: Arial, Helvetica, sans-serif;">
+          <span style="font-size: 11px;color: #333333;text-decoration: none;">
+            Real Time Economic Calendar provided by 
+            <a href="https://www.investing.com/" rel="nofollow" target="_blank" style="font-size: 11px;color: #06529D; font-weight: bold;" class="underline_link">Investing.com</a>.
+          </span>
+        </div>
+        """,
+        height=520,  # Match iframe + a little for the attribution
+        scrolling=True,
+    )
 
 # --- Tab 4: AI Analysis ---
 if enable_ai and ai_tab:
