@@ -159,8 +159,8 @@ with tab1:
         st.plotly_chart(fig, use_container_width=True)
 
         # Price and dealers detla hedge and projection
-        fig = plot_price_and_delta_projection(ticker, exp0, tradier_token, offset=offset)
-        st.plotly_chart(fig, use_container_width=True)
+        # fig = plot_price_and_delta_projection(ticker, exp0, tradier_token, offset=offset)
+        # st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Select ticker, expirations, and ensure spot price loaded.")
 
