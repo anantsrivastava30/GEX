@@ -8,7 +8,6 @@ import streamlit as st
 from zoneinfo import ZoneInfo
 import yaml
 import os
-import cloudscraper
 
 # Load configuration from YAML file
 with open(os.path.join(os.path.dirname(__file__), "config.yaml"), "r") as f:
