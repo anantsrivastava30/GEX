@@ -396,75 +396,105 @@ def get_delta_exposure_at_times(
     return pd.Series(exposures, index=idx, name="Net Delta Exposure")
 
 def plot_price_and_delta_projection(
-    ticker, expiration, tradier_token, offset, interval="30m"
-):
-    # 1) get price series (with yday close)
+    ticker: str,
+    expiration: str,
+    tradier_token: str,
+    offset: float,
+    interval: str = "30m",
+) -> go.Figure:
+    """Plot intraday price alongside estimated dealer delta exposure.
+
+    Parameters
+    ----------
+    ticker : str
+        Equity ticker to chart.
+    expiration : str
+        Expiration used when pulling the option chain.
+    tradier_token : str
+        Auth token for the Tradier API.
+    offset : float
+        Strike range around the current spot when computing exposure.
+    interval : str, optional
+        Intraday bar interval used for price history (default ``"30m"``).
+
+    Returns
+    -------
+    plotly.graph_objects.Figure
+        Figure with spot price on the left axis and net delta exposure on the
+        right. A simple linear projection of the exposure trend to the market
+        close is also included.
+    """
+
+    # ── 1) Intraday prices including the previous close ───────────────────
     price_series = get_intraday_prices_with_prev_close(ticker, interval)
 
-    # 2) compute exposures only for today’s bars
+    # ── 2) Delta exposure for each intraday bar ───────────────────────────
     delta_series = get_delta_exposure_at_times(
         ticker, expiration, tradier_token, offset, price_series
     )
 
-    # 3) linear trend on exposures
-    hours = np.array([
-        (ts - delta_series.index[0]).total_seconds()/3600
-        for ts in delta_series.index
-    ])
-    coeff = np.polyfit(hours, delta_series.values, 1)
-    trend = np.poly1d(coeff)
+    # Ensure there are at least two points before fitting a trend
+    if len(delta_series) > 1:
+        hours = np.array(
+            [(ts - delta_series.index[0]).total_seconds() / 3600 for ts in delta_series.index]
+        )
+        coeff = np.polyfit(hours, delta_series.values, 1)
+        trend = np.poly1d(coeff)
+        last_ts = delta_series.index[-1]
+        tz = last_ts.tzinfo
+        end_ts = datetime.combine(last_ts.date(), time(16, 0)).replace(tzinfo=tz)
+        end_hour = (end_ts - delta_series.index[0]).total_seconds() / 3600
+        proj = float(trend(end_hour))
+    else:
+        # fallback if only one bar available
+        last_ts = delta_series.index[-1]
+        tz = last_ts.tzinfo
+        end_ts = datetime.combine(last_ts.date(), time(16, 0)).replace(tzinfo=tz)
+        proj = delta_series.iloc[-1]
 
-    # project to end-of-day 16:00
-    last_ts = delta_series.index[-1]
-    tz = last_ts.tzinfo
-    end_ts = datetime.combine(last_ts.date(), time(16,0)).replace(tzinfo=tz)
-    end_hour = (end_ts - delta_series.index[0]).total_seconds()/3600
-    proj = float(trend(end_hour))
-
-    # 4) make subplot with secondary y-axis
+    # ── 3) Build figure with secondary y-axis ─────────────────────────────
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-    # spot price (includes yday close)
     fig.add_trace(
         go.Scatter(
             x=price_series.index,
             y=price_series.values,
             mode="lines+markers",
             name="Spot Price",
-            line=dict(color="blue")
+            line=dict(color="blue"),
         ),
-        secondary_y=False
+        secondary_y=False,
     )
 
-    # delta exposure bars (today only)
     fig.add_trace(
         go.Bar(
             x=delta_series.index,
             y=delta_series.values,
             name="Net Delta Exposure",
             marker_color="red",
-            opacity=0.6
+            opacity=0.6,
         ),
-        secondary_y=True
+        secondary_y=True,
     )
 
-    # projection point
     fig.add_trace(
         go.Scatter(
-            x=[end_ts], y=[proj],
+            x=[end_ts],
+            y=[proj],
             mode="markers+lines",
             name="Projected Exposure",
             marker=dict(color="green", size=10),
-            line=dict(dash="dash")
+            line=dict(dash="dash"),
         ),
-        secondary_y=True
+        secondary_y=True,
     )
 
     fig.update_layout(
         title=f"{ticker} Price & Net Delta Exposure Projection",
         xaxis=dict(title="Time"),
         template="plotly_white",
-        height=450, width=900
+        height=450,
+        width=900,
     )
     fig.update_yaxes(title_text="Spot Price", secondary_y=False)
     fig.update_yaxes(title_text="Delta Exposure", secondary_y=True)
