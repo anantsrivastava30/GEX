@@ -26,6 +26,11 @@ Run the project locally with:
 streamlit run quant.py
 ```
 
+### Optional Thread Debugging
+
+Set the environment variable `THREAD_DEBUG=1` before running the app to log
+thread creation and completion across all modules.
+
 ## Testing
 
 Tests can be added under a `tests/` directory; then run:

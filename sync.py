@@ -1,6 +1,14 @@
 import yaml
 import os
 
+# Optionally enable thread debugging
+if os.getenv("THREAD_DEBUG"):
+    try:
+        from thread_debug import enable as enable_thread_debug
+        enable_thread_debug()
+    except Exception as e:  # pragma: no cover - best effort
+        print(f"Thread debug failed: {e}")
+
 # Load configuration from YAML file
 with open(os.path.join(os.path.dirname(__file__), "config.yaml"), "r") as f:
     CONFIG = yaml.safe_load(f)
