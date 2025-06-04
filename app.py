@@ -4,6 +4,7 @@ import plotly.express as px
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import requests
+import asyncio
 from helpers import (
     get_expirations,
     get_option_chain,
@@ -181,7 +182,7 @@ with tab2:
     st.header("🎯 Options Positioning")
     if ticker and selected_exps and spot is not None:
         token = st.secrets.get("TRADIER_TOKEN")
-        df = load_options_data(ticker, selected_exps, token)
+        df = asyncio.run(load_options_data(ticker, selected_exps, token))
         if df.empty:
             st.info("No options data available.")
         else:
