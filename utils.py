@@ -8,8 +8,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import yfinance as yf
 from plotly.subplots import make_subplots
-import requests
 from datetime import datetime, timedelta, time
+from tradier_api import TradierAPI
 
 def interpret_net_gex(df_net, S, offset=25):
     """
@@ -363,22 +363,17 @@ def get_delta_exposure_at_times(
     ticker, expiration, tradier_token, offset, price_series: pd.Series
 ) -> pd.Series:
     exposures = []
-    headers = {"Authorization": f"Bearer {tradier_token}", "Accept":"application/json"}
+    api = TradierAPI(tradier_token)
 
     # skip the first index (yesterday’s close)
     for ts, spot in price_series.iloc[1:].items():
         spot = float(spot)
-        resp = requests.get(
-            "https://api.tradier.com/v1/markets/options/chains",
-            params={
-                "symbol": ticker,
-                "expiration": expiration,
-                "greeks": "true",
-                "includeAllRoots": "true"
-            },
-            headers=headers
+        data = api.option_chain(
+            ticker,
+            expiration,
+            greeks="true",
+            include_all_roots=True,
         )
-        data = resp.json().get("options", {}).get("option", [])
         df_chain = pd.DataFrame(data)
         df_chain['strike'] = df_chain['strike'].astype(float)
         df_chain['delta']  = df_chain['greeks'].apply(lambda g: g.get('delta', 0.0))
