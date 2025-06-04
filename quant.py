@@ -164,6 +164,8 @@ def payload_to_markdown(payload, ticker=None, exp=None, offset=None):
     return "\n".join(md)
 
 # New helper function to build the data packet (prompt messages)
+MAX_MODEL_TOKENS = 128000
+
 def create_data_packet(ticker, overview_summary, pos_summary, iv_summary, ratios_summary, news_summary, snap_summary):
     system_msg = {
         "role": "system",
@@ -183,21 +185,35 @@ def create_data_packet(ticker, overview_summary, pos_summary, iv_summary, ratios
             "Please summarise expected dealer hedging behaviour\n" 
             "I can only buy PUTS and CALLS, don't suggest anything else no straddles, stranges, verticles etc, only calls and puts\n"
             "Suggest any concrete 0-DTE, weekly, and/or swing trade options strategy.\n"
-            "and with each strategy recommended give a trade confidence (1-100)\n"
+            "For each trade provide a trade confidence (1-100), suggested stop-loss level,"
+            " and a risk/reward ratio.\n"
             "Figure out the max-pain and also suggest support and resistances."
         )
     }
     return {"messages": [system_msg, user_msg]}
 
 # Helper function to estimate token count
-def estimate_token_count(data_packet):
+def estimate_token_count(data_packet, max_tokens=MAX_MODEL_TOKENS):
+    """Estimate tokens and truncate the user message if above model limit."""
     try:
         enc = tiktoken.encoding_for_model("gpt-4o")
         tokens = sum(len(enc.encode(m["content"])) for m in data_packet["messages"])
         st.write(f"Estimated total tokens: **{tokens}**")
+        if tokens > max_tokens:
+            st.warning(
+                f"Token count {tokens} exceeds model limit {max_tokens}. Truncating user message."
+            )
+            user_msg = data_packet["messages"][-1]
+            user_tokens = len(enc.encode(user_msg["content"]))
+            allowed = max_tokens - (tokens - user_tokens)
+            if allowed > 0:
+                truncated = enc.decode(enc.encode(user_msg["content"])[:allowed])
+                user_msg["content"] = truncated
+                tokens = sum(len(enc.encode(m["content"])) for m in data_packet["messages"])
+                st.write(f"Truncated token count: **{tokens}**")
     except Exception as e:
         print(f"Token estimation error: {e}")
-    
+
     return tokens
     
 # Helper function to call OpenAI API and return response analysis
@@ -316,7 +332,7 @@ def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset
     st.subheader("Data Packet JSON")
     st.json(data_packet)
     
-    tokens = estimate_token_count(data_packet)
+    tokens = estimate_token_count(data_packet, MAX_MODEL_TOKENS)
     
     analysis = call_openai_api(data_packet, api_key)
     if analysis:
