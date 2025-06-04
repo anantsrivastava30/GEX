@@ -263,6 +263,7 @@ def dummy_response_decorator(func):
 # @dummy_response_decorator
 def call_openai_api(data_packet, api_key):
     client = OpenAI(api_key=api_key)
+    st.write("model used :", CONFIG.get("openai", {}).get("model", "gpt-4o"))
     try:
         completion = client.chat.completions.create(
             model=CONFIG.get("openai", {}).get("model", "gpt-4o"),
