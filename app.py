@@ -5,6 +5,10 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import requests
 import asyncio
+import subprocess
+import hashlib
+import os
+import json
 from helpers import (
     get_expirations,
     get_option_chain,
@@ -28,9 +32,24 @@ from db import init_db, save_analysis, load_analyses
 from db import init_db
 init_db()
 
+def get_commit_id():
+    """Return short Git commit hash if available."""
+    try:
+        return subprocess.check_output([
+            "git", "rev-parse", "--short", "HEAD"
+        ]).decode().strip()
+    except Exception:
+        return "unknown"
+
 # ---------------- Streamlit Config ----------------
 st.set_page_config(layout="wide", page_title="Options Analytics Dashboard")
 st.title("📊 Options Analytics Dashboard")
+commit_id = get_commit_id()
+st.sidebar.caption(f"Version: {commit_id}")
+if "ai_user" not in st.session_state:
+    st.session_state.ai_user = None
+if st.session_state.ai_user:
+    st.sidebar.success(f"User: {st.session_state.ai_user}")
 
 # --- Sidebar Inputs ---
 ticker = st.sidebar.text_input("Ticker", "SPY").upper()
@@ -58,19 +77,31 @@ if ticker:
     except Exception:
         st.sidebar.error("Error fetching spot price.")
 
-enable_ai = st.sidebar.checkbox("Enable AI Analysis", value=True)
+user_map = st.secrets.get("AI_USERS")
+if not user_map:
+    try:
+        user_map = json.loads(os.getenv("AI_USERS", "{}"))
+    except Exception:
+        user_map = {}
+enable_ai = st.sidebar.checkbox("Enable AI Analysis", value=bool(user_map))
+if enable_ai and not user_map:
+    st.sidebar.warning("AI features require AI_USERS to be configured")
 
 # --- Tabs ---
 tab_names = ["Overview Metrics", "Options Positioning", "Market News"]
-if enable_ai:
+if enable_ai and user_map:
     tab_names.append("AI Analysis")
 tab_names.append("Economic Calendar")
 tabs = st.tabs(tab_names)
 tab1 = tabs[0]
 tab2 = tabs[1]
 news_tab = tabs[2]
-calender_tab = tabs[4]
-ai_tab = tabs[3] if enable_ai else None
+if enable_ai and user_map:
+    ai_tab = tabs[3]
+    calender_tab = tabs[4]
+else:
+    ai_tab = None
+    calender_tab = tabs[3]
 
 # --- Tab 1: Overview Metrics ---
 with tab1:
@@ -239,24 +270,36 @@ with calender_tab:
 # --- Tab 4: AI Analysis ---
 if enable_ai and ai_tab:
     with ai_tab:
-        PIN = st.secrets["AI_PIN"]  # e.g. "1234"
-        st.header("🤖 AI Analysis")
-        st.write("Use the button below to query the OpenAI API for trade insights based on the charts and news.")
-        if "want_ai" not in st.session_state:
-            st.session_state.want_ai = False
-        
-        if st.button("Run AI Analysis"):
-            st.session_state.want_ai = True
-        
-        if st.session_state.want_ai:
-            user_pin = st.text_input("Enter 4-digit PIN to confirm", type="password")
-            if user_pin:
-                if user_pin == PIN:
-                    st.success("PIN accepted — running AI…")
+        if not user_map:
+            st.info("AI analysis is disabled: no user accounts configured.")
+        else:
+            st.header("🤖 AI Analysis")
+            st.write("Authorized users can run the model after logging in.")
+
+            if "ai_user" not in st.session_state:
+                st.session_state.ai_user = None
+
+            @st.dialog("Login")
+            def login_dialog():
+                username = st.text_input("Username", key="dlg_user")
+                password = st.text_input("Password", type="password", key="dlg_pass")
+                if st.button("Submit", key="dlg_submit"):
+                    hashed = hashlib.sha256(password.encode()).hexdigest()
+                    if user_map.get(username) == hashed:
+                        st.session_state.ai_user = username
+                        st.rerun()
+                    else:
+                        st.error("Invalid credentials")
+
+            if st.session_state.ai_user:
+                st.success(f"Logged in as {st.session_state.ai_user}")
+                if st.button("Run AI Analysis"):
                     openai_query(df, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset, ticker, selected_exps)
-                    st.session_state.want_ai = False
-                else:
-                    st.error("❌ Incorrect PIN, try again.")
+                if st.button("Logout"):
+                    st.session_state.ai_user = None
+            else:
+                if st.button("Run AI Analysis"):
+                    login_dialog()
 
         st.markdown("---")
         st.header("📚 Past AI Analyses")
