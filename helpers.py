@@ -1,4 +1,3 @@
-import requests
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta, timezone
@@ -8,6 +7,8 @@ import streamlit as st
 from zoneinfo import ZoneInfo
 import yaml
 import os
+
+from tradier_api import TradierAPI
 
 # Load configuration from YAML file
 with open(os.path.join(os.path.dirname(__file__), "config.yaml"), "r") as f:
@@ -57,13 +58,8 @@ def fetch_and_filter_rss(feeds=RSS_FEEDS, topics=TOPICS, limit_per_feed=10):
     return uniq
 
 def get_expirations(ticker, token, include_all_roots=False):
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    params = {"symbol": ticker}
-    if include_all_roots:
-        params["includeAllRoots"] = "true"
-    r = requests.get(f"{API_URL}/markets/options/expirations", params=params, headers=headers)
-    r.raise_for_status()
-    return r.json().get("expirations", {}).get("date", [])
+    api = TradierAPI(token, API_URL)
+    return api.expirations(ticker, include_all_roots)
 
 def load_options_data(ticker, expirations, token):
     """Fetch option chains and process data for positioning."""
@@ -96,22 +92,13 @@ def load_options_data(ticker, expirations, token):
 
 
 def get_option_chain(ticker, expiration, token, include_all_roots=True):
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    params = {"symbol": ticker, "expiration": expiration, "greeks": "true"}
-    if include_all_roots:
-        params["includeAllRoots"] = "true"
-    r = requests.get(f"{API_URL}/markets/options/chains", params=params, headers=headers)
-    r.raise_for_status()
-    return r.json().get("options", {}).get("option", [])
+    api = TradierAPI(token, API_URL)
+    return api.option_chain(ticker, expiration, include_all_roots=include_all_roots)
 
 
 def get_stock_quote(ticker, token):
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    r = requests.get(f"{API_URL}/markets/quotes", params={"symbols": ticker}, headers=headers)
-    r.raise_for_status()
-    data = r.json().get("quotes", {}).get("quote")
-    if isinstance(data, list):
-        data = data[0]
+    api = TradierAPI(token, API_URL)
+    data = api.quote(ticker)
     return data.get("last")
 
 
@@ -186,25 +173,16 @@ def compute_unusual_spikes(df, top_n=10):
 
 
 def compute_greek_exposures(ticker, expirations, tradier_token, offset, spot):
-    headers = {
-        "Authorization": f"Bearer {tradier_token}",
-        "Accept":        "application/json"
-    }
+    api = TradierAPI(tradier_token, API_URL)
 
     rows = []
     for exp in expirations:
-        response = requests.get(
-            f"{API_URL}/markets/options/chains",
-            params={
-                "symbol": ticker,
-                "expiration": exp,
-                "greeks": "true",
-                "includeAllRoots": "true"
-            },
-            headers=headers
+        options = api.option_chain(
+            ticker,
+            exp,
+            greeks="true",
+            include_all_roots=True,
         )
-        response.raise_for_status()
-        options = response.json().get("options", {}).get("option", [])
 
         for opt in options:
             strike = float(opt.get("strike", 0))
@@ -263,19 +241,12 @@ def get_vix_info():
     }
 
 def get_market_snapshot(tradier_token, ticker, expirations, offset=20):
-    headers = {
-        "Authorization": f"Bearer {tradier_token}",
-        "Accept":        "application/json"
-    }
-    
+    api = TradierAPI(tradier_token, API_URL)
+
     payload = {}
     # ── Spot & Quote
-    q = requests.get(
-        f"{API_URL}/markets/quotes",
-        params={"symbols": ticker},
-        headers=headers
-    ).json()["quotes"]["quote"]
-    spot = q["last"]
+    q = api.quote(ticker)
+    spot = q.get("last")
     payload["spot"] = spot
     payload["ticker"] = ticker
     payload["expirations"] = expirations
@@ -285,16 +256,12 @@ def get_market_snapshot(tradier_token, ticker, expirations, offset=20):
     today = datetime.utcnow().date()
     # fetch at least 14 trading days to compute RSI(14)
     start = today - timedelta(days=30)
-    hist = requests.get(
-        f"{API_URL}/markets/history",
-        params={
-            "symbol":   ticker,
-            "interval": "daily",
-            "start":    start.isoformat(),
-            "end":      today.isoformat()
-        },
-        headers=headers
-    ).json().get("history", {}).get("day", [])
+    hist = api.history(
+        ticker,
+        interval="daily",
+        start=start.isoformat(),
+        end=today.isoformat(),
+    )
     df_hist = pd.DataFrame(hist)
     df_hist["date"]  = pd.to_datetime(df_hist["date"])
     df_hist = df_hist.sort_values("date").set_index("date")
@@ -356,21 +323,6 @@ def get_market_snapshot(tradier_token, ticker, expirations, offset=20):
     
     return payload
 
-def get_vix_info():
-    """
-    Returns current VIX spot price plus 1-day and 5-day % changes.
-    """
-    v = yf.Ticker("^VIX")
-    hist = v.history(period="10d")["Close"]  # last 6 trading days
-    spot = hist.iloc[-1]
-    ret_1d = (spot / hist.iloc[-2] - 1) * 100
-    ret_5d = (spot / hist.iloc[-6] - 1) * 100
-    return {
-        "spot": float(spot),
-        "1d_return": float(ret_1d),
-        "5d_return": float(ret_5d)
-    }
-
 # ─── Helper Functions ──────────────────────────────────────────────────────
 
 def compute_risk_reversal(chain):
@@ -424,15 +376,15 @@ def compute_term_structure_slope(tradier_token, ticker, expirations, spot, offse
     Compute term structure slope = IV_near - IV_far for your ±offset strikes.
     Uses the first and last in expirations list.
     """
-    API_URL = "https://api.tradier.com/v1"
-    headers = {"Authorization": f"Bearer {tradier_token}", "Accept":"application/json"}
+    api = TradierAPI(tradier_token, API_URL)
     ivs = []
     for exp in [expirations[0], expirations[-1]]:
-        resp = requests.get(
-            f"{API_URL}/markets/options/chains",
-            params={"symbol": ticker, "expiration": exp, "greeks": "false", "includeAllRoots":"true"},
-            headers=headers
-        ).json().get("options", {}).get("option", [])
+        resp = api.option_chain(
+            ticker,
+            exp,
+            greeks="false",
+            include_all_roots=True,
+        )
         df = pd.DataFrame(resp)
         greeks_df = pd.json_normalize(df.greeks)
         df = pd.concat([df, greeks_df], axis=1)
@@ -462,16 +414,15 @@ def augment_payload_with_extras(payload, tradier_token, ticker, expirations, off
     to an existing payload dict.
     """
     # use first expiration's chain
-    API_URL = "https://api.tradier.com/v1"
-    headers = {"Authorization": f"Bearer {tradier_token}", "Accept":"application/json"}
+    api = TradierAPI(tradier_token, API_URL)
     all_opts = []
     for exp in expirations:
-        resp = requests.get(
-            f"{API_URL}/markets/options/chains",
-            params={"symbol": ticker, "expiration": exp, "greeks":"true", "includeAllRoots":"true"},
-            headers=headers
+        chain0 = api.option_chain(
+            ticker,
+            exp,
+            greeks="true",
+            include_all_roots=True,
         )
-        chain0 = resp.json().get("options", {}).get("option", [])
         all_opts.extend(chain0)
     
     df = pd.DataFrame(all_opts)
