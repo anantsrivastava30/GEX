@@ -18,7 +18,8 @@ from utils import (
     plot_volume_spikes_stacked,
     interpret_net_gex,
     plot_exposure,
-    plot_price_and_delta_projection
+    plot_price_and_delta_projection,
+    get_recent_trading_dates
 )
 from quant import openai_query
 from db import init_db, save_analysis, load_analyses
@@ -158,9 +159,20 @@ with tab1:
         fig = plot_volume_spikes_stacked(spikes_df, offset=offset, spot=spot)
         st.plotly_chart(fig, use_container_width=True)
 
-        # Price and dealers detla hedge and projection
-        # fig = plot_price_and_delta_projection(ticker, exp0, tradier_token, offset=offset)
-        # st.plotly_chart(fig, use_container_width=True)
+        # Price and dealers delta hedge and projection
+        dates = get_recent_trading_dates(ticker, 3)
+        if dates:
+            labels = [d.strftime("%Y-%m-%d") for d in reversed(dates)]
+            sel = st.selectbox("Intraday Date", labels)
+            days_ago = labels.index(sel)
+            fig_delta = plot_price_and_delta_projection(
+                ticker,
+                exp0,
+                tradier_token,
+                offset=offset,
+                days_ago=days_ago,
+            )
+            st.plotly_chart(fig_delta, use_container_width=True)
     else:
         st.info("Select ticker, expirations, and ensure spot price loaded.")
 
