@@ -7,6 +7,8 @@ import streamlit as st
 from zoneinfo import ZoneInfo
 import yaml
 import os
+import asyncio
+import httpx
 
 
 # Optionally enable thread debugging across the app
@@ -71,34 +73,60 @@ def get_expirations(ticker, token, include_all_roots=False):
     api = TradierAPI(token, API_URL)
     return api.expirations(ticker, include_all_roots)
 
-def load_options_data(ticker, expirations, token):
-    """Fetch option chains and process data for positioning."""
-    all_opts = []
-    for exp in expirations:
-        try:
-            chain = get_option_chain(ticker, exp, token, include_all_roots=True)
-            for opt in chain:
-                opt['expiration_date'] = exp
-            all_opts.extend(chain)
-        except Exception:
-            continue
+async def load_options_data(ticker, expirations, token):
+    """Fetch option chains and process data for positioning asynchronously."""
 
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+    }
+
+    async def fetch_chain(client, exp):
+        try:
+            resp = await client.get(
+                "/markets/options/chains",
+                params={
+                    "symbol": ticker,
+                    "expiration": exp,
+                    "greeks": "true",
+                    "includeAllRoots": "true",
+                },
+                headers=headers,
+            )
+            resp.raise_for_status()
+            chain = resp.json().get("options", {}).get("option", [])
+            for opt in chain:
+                opt["expiration_date"] = exp
+            return chain
+        except Exception:
+            return []
+
+    async with httpx.AsyncClient(base_url=API_URL) as client:
+        tasks = [fetch_chain(client, exp) for exp in expirations]
+        results = await asyncio.gather(*tasks)
+
+    all_opts = [opt for chain in results for opt in chain]
     if not all_opts:
         return pd.DataFrame()
 
     df = pd.DataFrame(all_opts)
-    if 'greeks' in df.columns:
-        greeks_df = pd.json_normalize(df.pop('greeks'))
+    if "greeks" in df.columns:
+        greeks_df = pd.json_normalize(df.pop("greeks"))
         df = pd.concat([df, greeks_df], axis=1)
-    df['expiration_date'] = pd.to_datetime(df['expiration_date'])
-    df['DTE'] = (df['expiration_date'] - datetime.now()).dt.days
+    df["expiration_date"] = pd.to_datetime(df["expiration_date"])
+    df["DTE"] = (df["expiration_date"] - datetime.now()).dt.days
     # Compute exposures
-    df['GammaExposure'] = df.gamma * df.open_interest * df.contract_size
-    df['DeltaExposure'] = df.delta * df.open_interest * df.contract_size
+    df["GammaExposure"] = df.gamma * df.open_interest * df.contract_size
+    df["DeltaExposure"] = df.delta * df.open_interest * df.contract_size
     # Mirror exposures for puts
-    df.loc[df.option_type == 'put', ['GammaExposure', 'DeltaExposure']] *= -1
-    df['strike'] = df['strike'].astype(float)
+    df.loc[df.option_type == "put", ["GammaExposure", "DeltaExposure"]] *= -1
+    df["strike"] = df["strike"].astype(float)
     return df
+
+
+def load_options_data_sync(ticker, expirations, token):
+    """Synchronous wrapper for :func:`load_options_data`."""
+    return asyncio.run(load_options_data(ticker, expirations, token))
 
 
 def get_option_chain(ticker, expiration, token, include_all_roots=True):
