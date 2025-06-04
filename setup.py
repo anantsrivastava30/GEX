@@ -12,6 +12,7 @@ setup(
         "pandas",
         "supabase",
         "pyyaml",
+        "psutil",
     ],
     entry_points={
         "console_scripts": [
