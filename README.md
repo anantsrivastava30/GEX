@@ -26,6 +26,13 @@ Run the project locally with:
 streamlit run quant.py
 ```
 
+### Optional Thread Debugging
+
+Set the environment variable `THREAD_DEBUG=1` before running the app to log
+thread start and completion. Runtime, CPU, and memory deltas are printed for
+each thread so you can gauge resource usage. Debugging is enabled automatically
+via `helpers.py` so any module that imports it will patch the threading layer.
+
 ## Testing
 
 Tests can be added under a `tests/` directory; then run:

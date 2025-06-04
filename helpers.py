@@ -8,7 +8,17 @@ from zoneinfo import ZoneInfo
 import yaml
 import os
 
+
+# Optionally enable thread debugging across the app
+if os.getenv("THREAD_DEBUG"):
+    try:
+        from thread_debug import enable as enable_thread_debug
+        enable_thread_debug()
+    except Exception as e:  # pragma: no cover - best effort
+        print(f"Thread debug failed: {e}")
+
 from tradier_api import TradierAPI
+
 
 # Load configuration from YAML file
 with open(os.path.join(os.path.dirname(__file__), "config.yaml"), "r") as f:
