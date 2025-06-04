@@ -338,26 +338,54 @@ def plot_volume_spikes_stacked(spikes_df, offset=None, spot=None):
     fig.update_yaxes(tickfont=dict(size=14))
     return fig
 
-def get_intraday_prices_with_prev_close(ticker: str, interval: str = "30m") -> pd.Series:
-    df = yf.Ticker(ticker).history(period="2d", interval=interval)
-    df['date'] = df.index.date
-    dates = sorted(df['date'].unique())
-    yday, today = dates[0], dates[-1]
+def get_intraday_prices_with_prev_close(
+    ticker: str,
+    interval: str = "30m",
+    days_ago: int = 0,
+) -> pd.Series:
+    """Intraday price series for a given trading day with prior close.
 
-    # yesterday’s final bar at 16:00
-    df_y = df[df['date'] == yday]
-    yday_close = df_y['Close'].iloc[-1]
+    Parameters
+    ----------
+    ticker : str
+        Equity ticker to pull prices for.
+    interval : str, optional
+        Bar interval for intraday prices.
+    days_ago : int, optional
+        Trading days back from today to fetch. ``0`` corresponds to the most
+        recent trading day, ``1`` to the previous day, and so on.
+
+    Returns
+    -------
+    pandas.Series
+        Series of closing prices including the prior day's 16:00 close as the
+        first observation.
+    """
+
+    # we need at least the target day and the day before
+    period_days = days_ago + 2
+    df = yf.Ticker(ticker).history(period=f"{period_days}d", interval=interval)
+    df["date"] = df.index.date
+    dates = sorted(df["date"].unique())
+
+    if len(dates) <= days_ago:
+        raise ValueError("Not enough historical data for requested days_ago")
+
+    target_date = dates[-1 - days_ago]
+    prev_date = dates[dates.index(target_date) - 1]
+
+    # previous day's final bar at 16:00
+    df_prev = df[df["date"] == prev_date]
+    prev_close = df_prev["Close"].iloc[-1]
     tz = df.index.tz
-    yday_ts = datetime.combine(yday, time(16, 0)).replace(tzinfo=tz)
-    ser_y = pd.Series([yday_close], index=pd.DatetimeIndex([yday_ts], tz=tz), name="Close")
+    prev_ts = datetime.combine(prev_date, time(16, 0)).replace(tzinfo=tz)
+    ser_prev = pd.Series([prev_close], index=pd.DatetimeIndex([prev_ts], tz=tz), name="Close")
 
-    # today’s intraday
-    df_t = df[df['date'] == today]['Close'].copy()
-    df_t.name = "Close"
+    # target day intraday
+    df_target = df[df["date"] == target_date]["Close"].copy()
+    df_target.name = "Close"
 
-    # combine
-    combined = pd.concat([ser_y, df_t]).sort_index()
-    return combined
+    return pd.concat([ser_prev, df_target]).sort_index()
 
 def get_delta_exposure_at_times(
     ticker, expiration, tradier_token, offset, price_series: pd.Series
@@ -401,6 +429,7 @@ def plot_price_and_delta_projection(
     tradier_token: str,
     offset: float,
     interval: str = "30m",
+    days_ago: int = 0,
 ) -> go.Figure:
     """Plot intraday price alongside estimated dealer delta exposure.
 
@@ -416,6 +445,9 @@ def plot_price_and_delta_projection(
         Strike range around the current spot when computing exposure.
     interval : str, optional
         Intraday bar interval used for price history (default ``"30m"``).
+    days_ago : int, optional
+        Number of trading days in the past to analyze. ``0`` is the most recent
+        day, ``1`` is the previous trading day, etc. Default ``0``.
 
     Returns
     -------
@@ -426,7 +458,7 @@ def plot_price_and_delta_projection(
     """
 
     # ── 1) Intraday prices including the previous close ───────────────────
-    price_series = get_intraday_prices_with_prev_close(ticker, interval)
+    price_series = get_intraday_prices_with_prev_close(ticker, interval, days_ago)
 
     # ── 2) Delta exposure for each intraday bar ───────────────────────────
     delta_series = get_delta_exposure_at_times(
@@ -489,8 +521,9 @@ def plot_price_and_delta_projection(
         secondary_y=True,
     )
 
+    plot_date = price_series.index[1].date() if len(price_series) > 1 else price_series.index[0].date()
     fig.update_layout(
-        title=f"{ticker} Price & Net Delta Exposure Projection",
+        title=f"{ticker} {plot_date} Price & Net Delta Exposure Projection",
         xaxis=dict(title="Time"),
         template="plotly_white",
         height=450,
