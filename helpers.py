@@ -356,21 +356,6 @@ def get_market_snapshot(tradier_token, ticker, expirations, offset=20):
     
     return payload
 
-def get_vix_info():
-    """
-    Returns current VIX spot price plus 1-day and 5-day % changes.
-    """
-    v = yf.Ticker("^VIX")
-    hist = v.history(period="10d")["Close"]  # last 6 trading days
-    spot = hist.iloc[-1]
-    ret_1d = (spot / hist.iloc[-2] - 1) * 100
-    ret_5d = (spot / hist.iloc[-6] - 1) * 100
-    return {
-        "spot": float(spot),
-        "1d_return": float(ret_1d),
-        "5d_return": float(ret_5d)
-    }
-
 # ─── Helper Functions ──────────────────────────────────────────────────────
 
 def compute_risk_reversal(chain):
