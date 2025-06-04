@@ -1,3 +1,5 @@
+"""Helpers for observing thread activity and resource usage."""
+
 import threading
 import time
 import os
