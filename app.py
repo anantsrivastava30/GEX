@@ -4,6 +4,8 @@ import plotly.express as px
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import requests
+import concurrent.futures
+import os
 from helpers import (
     get_expirations,
     get_option_chain,
@@ -70,6 +72,16 @@ news_tab = tabs[2]
 calender_tab = tabs[4]
 ai_tab = tabs[3] if enable_ai else None
 
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 1)
+f_chain0 = None
+f_options = None
+f_articles = executor.submit(fetch_and_filter_rss, limit_per_feed=30)
+if ticker and selected_exps and spot is not None:
+    token = st.secrets.get("TRADIER_TOKEN")
+    exp0 = selected_exps[0]
+    f_chain0 = executor.submit(get_option_chain, ticker, exp0, token, include_all_roots=True)
+    f_options = executor.submit(load_options_data, ticker, selected_exps, token)
+
 # --- Tab 1: Overview Metrics ---
 with tab1:
     st.header("📈 Overview Metrics")
@@ -77,9 +89,7 @@ with tab1:
     if ticker and selected_exps and spot is not None:
         exp0 = selected_exps[0]
         try:
-            chain0 = get_option_chain(
-                ticker, exp0, tradier_token, include_all_roots=True
-            )
+            chain0 = f_chain0.result()
         except Exception:
             st.error(f"Failed to fetch options for {exp0}")
             st.stop()
@@ -169,7 +179,7 @@ with tab2:
     st.header("🎯 Options Positioning")
     if ticker and selected_exps and spot is not None:
         token = st.secrets.get("TRADIER_TOKEN")
-        df = load_options_data(ticker, selected_exps, token)
+        df = f_options.result()
         if df.empty:
             st.info("No options data available.")
         else:
@@ -192,7 +202,7 @@ with tab2:
 with news_tab:
     st.header("📰 Market & Sentiment News")
     try:
-        articles = fetch_and_filter_rss(limit_per_feed=30)
+        articles = f_articles.result()
         if not articles:
             st.write("No recent articles matching your topics.")
         else:
@@ -260,3 +270,5 @@ if enable_ai and ai_tab:
                 st.markdown(rec["token_count"])
                 st.markdown("**Response:**")
                 st.markdown(rec["response"])
+
+executor.shutdown(wait=False)

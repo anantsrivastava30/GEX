@@ -8,6 +8,7 @@ import streamlit as st
 from zoneinfo import ZoneInfo
 import yaml
 import os
+import concurrent.futures
 
 # Load configuration from YAML file
 with open(os.path.join(os.path.dirname(__file__), "config.yaml"), "r") as f:
@@ -25,28 +26,32 @@ def fetch_and_filter_rss(feeds=RSS_FEEDS, topics=TOPICS, limit_per_feed=10):
     and return as a combined list of dicts. Skip if the article is older than 30 days.
     """
     results = []
-    for url in feeds:
+
+    def fetch_feed(url):
+        feed_items = []
         feed = feedparser.parse(url)
         for entry in feed.entries[:limit_per_feed]:
             text = (entry.get("title", "") + " " + entry.get("summary", "")).lower()
             if any(topic.lower() in text for topic in topics):
-                # Parse published timestamp
                 if hasattr(entry, "published_parsed"):
                     dt = datetime(*entry.published_parsed[:6], tzinfo=ZoneInfo("UTC"))
                 else:
                     dt = datetime.now(tz=ZoneInfo("UTC"))
-                # Skip if the article is older than 30 days
                 if datetime.now(tz=ZoneInfo("UTC")) - dt > timedelta(days=30):
                     continue
-                # Convert to local
                 local_dt = dt.astimezone(ZoneInfo("America/Los_Angeles"))
-                results.append({
+                feed_items.append({
                     "url":   entry.link,
                     "title": entry.title,
                     "link":  entry.link,
                     "source": feed.feed.get("title", url),
                     "date":  local_dt.strftime("%Y-%m-%d %H:%M")
                 })
+        return feed_items
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(feeds), os.cpu_count() or 1)) as executor:
+        for items in executor.map(fetch_feed, feeds):
+            results.extend(items)
     # sort by date descending and dedupe by title
     seen = set()
     uniq = []
@@ -68,14 +73,20 @@ def get_expirations(ticker, token, include_all_roots=False):
 def load_options_data(ticker, expirations, token):
     """Fetch option chains and process data for positioning."""
     all_opts = []
-    for exp in expirations:
-        try:
-            chain = get_option_chain(ticker, exp, token, include_all_roots=True)
-            for opt in chain:
-                opt['expiration_date'] = exp
-            all_opts.extend(chain)
-        except Exception:
-            continue
+
+    def fetch_chain(exp):
+        chain = get_option_chain(ticker, exp, token, include_all_roots=True)
+        for opt in chain:
+            opt['expiration_date'] = exp
+        return chain
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(expirations), os.cpu_count() or 1)) as executor:
+        futures = [executor.submit(fetch_chain, exp) for exp in expirations]
+        for fut in futures:
+            try:
+                all_opts.extend(fut.result())
+            except Exception:
+                continue
 
     if not all_opts:
         return pd.DataFrame()
@@ -191,9 +202,8 @@ def compute_greek_exposures(ticker, expirations, tradier_token, offset, spot):
         "Accept":        "application/json"
     }
 
-    rows = []
-    for exp in expirations:
-        response = requests.get(
+    def fetch_and_process(exp):
+        resp = requests.get(
             f"{API_URL}/markets/options/chains",
             params={
                 "symbol": ticker,
@@ -203,30 +213,37 @@ def compute_greek_exposures(ticker, expirations, tradier_token, offset, spot):
             },
             headers=headers
         )
-        response.raise_for_status()
-        options = response.json().get("options", {}).get("option", [])
-
+        resp.raise_for_status()
+        options = resp.json().get("options", {}).get("option", [])
+        items = []
         for opt in options:
             strike = float(opt.get("strike", 0))
-            # filter by spot ± offset
             if not (spot - offset <= strike <= spot + offset):
                 continue
-
             oi   = opt.get("open_interest", 0)
             size = opt.get("contract_size", 100)
             greeks = opt.get("greeks", {})
-
             gamma = greeks.get("gamma", 0.0) or 0.0
             delta = greeks.get("delta", 0.0) or 0.0
             vega  = greeks.get("vega",  0.0) or 0.0
-
-            rows.append({
-                "strike":          strike,
-                "option_type":     opt.get("option_type", "").upper(),
-                "GammaExposure":   gamma * oi * size,
-                "DeltaExposure":   delta * oi * size,
-                "VegaExposure":    vega  * oi * size
+            items.append({
+                "strike":       strike,
+                "option_type":  opt.get("option_type", "").upper(),
+                "GammaExposure": gamma * oi * size,
+                "DeltaExposure": delta * oi * size,
+                "VegaExposure":  vega  * oi * size,
             })
+        return items
+
+    rows = []
+    with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(len(expirations), os.cpu_count() or 1)) as executor:
+        futures = [executor.submit(fetch_and_process, exp) for exp in expirations]
+        for fut in futures:
+            try:
+                rows.extend(fut.result())
+            except Exception:
+                continue
 
     df = pd.DataFrame(rows)
     return df
@@ -315,14 +332,17 @@ def get_market_snapshot(tradier_token, ticker, expirations, offset=20):
     rsi = 100 - (100 / (1 + rs))
     payload["technical"] = {"RSI14": float(rsi.iloc[-1])}
 
-    # ── Volume/OI Spikes by Type 
-    chain0    = get_option_chain(ticker, expirations[0], tradier_token, include_all_roots=True)
-    df_opts = pd.DataFrame(chain0)  # full chain for first expiry
+    # ── Volume/OI Spikes & Greek Exposures in parallel
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        f_chain = executor.submit(get_option_chain, ticker, expirations[0], tradier_token, include_all_roots=True)
+        f_greeks = executor.submit(compute_greek_exposures, ticker, expirations, tradier_token, offset, spot)
+
+        chain0 = f_chain.result()
+        df_greeks = f_greeks.result()
+
+    df_opts = pd.DataFrame(chain0)
     spikes  = compute_unusual_spikes(df_opts, top_n=10)
     payload["vol_oi_spikes"] = spikes.to_dict(orient="records")
-    
-    # # # ── Greek Exposures (all expirations)
-    df_greeks = compute_greek_exposures(ticker, expirations, tradier_token, offset=offset, spot=spot)
     payload["greek_exposures"] = {
         g: (
             df_greeks
@@ -426,8 +446,8 @@ def compute_term_structure_slope(tradier_token, ticker, expirations, spot, offse
     """
     API_URL = "https://api.tradier.com/v1"
     headers = {"Authorization": f"Bearer {tradier_token}", "Accept":"application/json"}
-    ivs = []
-    for exp in [expirations[0], expirations[-1]]:
+
+    def fetch_iv(exp):
         resp = requests.get(
             f"{API_URL}/markets/options/chains",
             params={"symbol": ticker, "expiration": exp, "greeks": "false", "includeAllRoots":"true"},
@@ -439,7 +459,11 @@ def compute_term_structure_slope(tradier_token, ticker, expirations, spot, offse
         df['strike']  = df['strike'].astype(float)
         df['mid_iv']  = df['mid_iv'].astype(float)
         df = df[(df['strike']>=spot-offset)&(df['strike']<=spot+offset)]
-        ivs.append(df['mid_iv'].mean())
+        return df['mid_iv'].mean()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        ivs = list(executor.map(fetch_iv, [expirations[0], expirations[-1]]))
+
     return ivs[0] - ivs[1]
 
 
@@ -464,15 +488,19 @@ def augment_payload_with_extras(payload, tradier_token, ticker, expirations, off
     # use first expiration's chain
     API_URL = "https://api.tradier.com/v1"
     headers = {"Authorization": f"Bearer {tradier_token}", "Accept":"application/json"}
-    all_opts = []
-    for exp in expirations:
+
+    def fetch_chain(exp):
         resp = requests.get(
             f"{API_URL}/markets/options/chains",
             params={"symbol": ticker, "expiration": exp, "greeks":"true", "includeAllRoots":"true"},
             headers=headers
         )
-        chain0 = resp.json().get("options", {}).get("option", [])
-        all_opts.extend(chain0)
+        return resp.json().get("options", {}).get("option", [])
+
+    all_opts = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(expirations), os.cpu_count() or 1)) as executor:
+        for chain in executor.map(fetch_chain, expirations):
+            all_opts.extend(chain)
     
     df = pd.DataFrame(all_opts)
     greeks_df = pd.json_normalize(df.greeks)
