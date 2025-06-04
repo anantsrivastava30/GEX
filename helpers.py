@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import yaml
 import os
 import concurrent.futures
+from debug_utils import get_executor
 
 # Load configuration from YAML file
 with open(os.path.join(os.path.dirname(__file__), "config.yaml"), "r") as f:
@@ -49,7 +50,7 @@ def fetch_and_filter_rss(feeds=RSS_FEEDS, topics=TOPICS, limit_per_feed=10):
                 })
         return feed_items
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(feeds), os.cpu_count() or 1)) as executor:
+    with get_executor(max_workers=min(len(feeds), os.cpu_count() or 1)) as executor:
         for items in executor.map(fetch_feed, feeds):
             results.extend(items)
     # sort by date descending and dedupe by title
@@ -80,7 +81,7 @@ def load_options_data(ticker, expirations, token):
             opt['expiration_date'] = exp
         return chain
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(expirations), os.cpu_count() or 1)) as executor:
+    with get_executor(max_workers=min(len(expirations), os.cpu_count() or 1)) as executor:
         futures = [executor.submit(fetch_chain, exp) for exp in expirations]
         for fut in futures:
             try:
@@ -236,7 +237,7 @@ def compute_greek_exposures(ticker, expirations, tradier_token, offset, spot):
         return items
 
     rows = []
-    with concurrent.futures.ThreadPoolExecutor(
+    with get_executor(
             max_workers=min(len(expirations), os.cpu_count() or 1)) as executor:
         futures = [executor.submit(fetch_and_process, exp) for exp in expirations]
         for fut in futures:
@@ -333,7 +334,7 @@ def get_market_snapshot(tradier_token, ticker, expirations, offset=20):
     payload["technical"] = {"RSI14": float(rsi.iloc[-1])}
 
     # ── Volume/OI Spikes & Greek Exposures in parallel
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+    with get_executor(max_workers=2) as executor:
         f_chain = executor.submit(get_option_chain, ticker, expirations[0], tradier_token, include_all_roots=True)
         f_greeks = executor.submit(compute_greek_exposures, ticker, expirations, tradier_token, offset, spot)
 
@@ -461,7 +462,7 @@ def compute_term_structure_slope(tradier_token, ticker, expirations, spot, offse
         df = df[(df['strike']>=spot-offset)&(df['strike']<=spot+offset)]
         return df['mid_iv'].mean()
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+    with get_executor(max_workers=2) as executor:
         ivs = list(executor.map(fetch_iv, [expirations[0], expirations[-1]]))
 
     return ivs[0] - ivs[1]
@@ -498,7 +499,7 @@ def augment_payload_with_extras(payload, tradier_token, ticker, expirations, off
         return resp.json().get("options", {}).get("option", [])
 
     all_opts = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(expirations), os.cpu_count() or 1)) as executor:
+    with get_executor(max_workers=min(len(expirations), os.cpu_count() or 1)) as executor:
         for chain in executor.map(fetch_chain, expirations):
             all_opts.extend(chain)
     

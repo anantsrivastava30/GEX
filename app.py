@@ -5,6 +5,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import requests
 import concurrent.futures
+from debug_utils import get_executor
 import os
 from helpers import (
     get_expirations,
@@ -72,7 +73,7 @@ news_tab = tabs[2]
 calender_tab = tabs[4]
 ai_tab = tabs[3] if enable_ai else None
 
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 1)
+executor = get_executor(max_workers=os.cpu_count() or 1, label="preload")
 f_chain0 = None
 f_options = None
 f_articles = executor.submit(fetch_and_filter_rss, limit_per_feed=30)
