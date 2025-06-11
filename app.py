@@ -70,8 +70,7 @@ tab_names = [
     "Options Positioning",
     "Binomial Tree",
     "Market Sentiment",
-    "Market News",
-    "Liquidity",
+    "Market News"
 ]
 if enable_ai:
     tab_names.append("AI Analysis")
@@ -82,13 +81,12 @@ tab2 = tabs[1]
 binom_tab = tabs[2]
 sentiment_tab = tabs[3]
 news_tab = tabs[4]
-liq_tab = tabs[5]
 if enable_ai:
-    ai_tab = tabs[6]
-    calender_tab = tabs[7]
+    ai_tab = tabs[5]
+    calender_tab = tabs[6]
 else:
     ai_tab = None
-    calender_tab = tabs[6]
+    calender_tab = tabs[5]
 
 # --- Tab 1: Overview Metrics ---
 with tab1:
@@ -303,30 +301,6 @@ with sentiment_tab:
     st.caption(
         "Rising yields often signal expectations of higher inflation or interest rates, while falling yields suggest the opposite."
     )
-
-# --- Tab 4: Liquidity Metrics ---
-with liq_tab:
-    st.header("💧 Liquidity Metrics")
-    if ticker:
-        try:
-            liq = get_liquidity_metrics(ticker, st.secrets.get("TRADIER_TOKEN"))
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Trading Volume", f"{liq['volume']:,}")
-            if liq.get("bid_ask_spread_pct") is not None:
-                c2.metric("Bid-Ask Spread (%)", f"{liq['bid_ask_spread_pct']*100:.2f}")
-            else:
-                c2.write("N/A")
-            if liq.get("order_book_depth") is not None:
-                c3.metric("Order Book Depth", f"{liq['order_book_depth']:,}")
-            else:
-                c3.write("N/A")
-            st.markdown(
-                "Lower volume, wider spreads and shallow depth typically signal **low liquidity**."
-            )
-        except Exception as e:
-            st.error(f"Error fetching liquidity metrics: {e}")
-    else:
-        st.info("Enter a ticker to view liquidity metrics.")
 
 # --- Tab 5: Market News ---
 with news_tab:
