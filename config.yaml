@@ -8,6 +8,9 @@ tradier:
 tradingEconomics:
   api_url: "https://api.tradingeconomics.com"
 
+fred:
+  api_url: "https://api.stlouisfed.org/fred"
+
 news:
   rss_feeds:
     - "https://feeds.reuters.com/Reuters/BusinessNews"

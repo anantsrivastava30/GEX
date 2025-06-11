@@ -12,7 +12,10 @@ from helpers import (
     compute_unusual_spikes,
     load_options_data,
     fetch_and_filter_rss,
-    get_liquidity_metrics
+    get_liquidity_metrics,
+    get_futures_quotes,
+    get_bid_to_cover,
+    get_bond_yield_info
 )
 from utils import (
     plot_put_call_ratios,
@@ -60,20 +63,22 @@ if ticker:
 enable_ai = st.sidebar.checkbox("Enable AI Analysis", value=True)
 
 # --- Tabs ---
-tab_names = ["Overview Metrics", "Options Positioning", "Market News", "Liquidity"]
+tab_names = ["Overview Metrics", "Options Positioning", "Market Sentiment", "Market News", "Liquidity"]
 if enable_ai:
     tab_names.append("AI Analysis")
 tab_names.append("Economic Calendar")
 tabs = st.tabs(tab_names)
 tab1 = tabs[0]
 tab2 = tabs[1]
-news_tab = tabs[2]
+sentiment_tab = tabs[2]
+news_tab = tabs[3]
+liq_tab = tabs[4]
 if enable_ai:
-    ai_tab = tabs[3]
-    calender_tab = tabs[4]
+    ai_tab = tabs[5]
+    calender_tab = tabs[6]
 else:
     ai_tab = None
-    calender_tab = tabs[3]
+    calender_tab = tabs[5]
 
 # --- Tab 1: Overview Metrics ---
 with tab1:
@@ -220,7 +225,35 @@ with tab2:
     else:
         st.info("Select ticker and expirations to view positioning.")
 
-# --- Tab 3: Liquidity Metrics ---
+# --- Tab 3: Market Sentiment ---
+with sentiment_tab:
+    st.header("🌅 Market Sentiment & Futures")
+    futs = get_futures_quotes()
+    if futs:
+        df_fut = pd.DataFrame([
+            {"Symbol": k, "Last": v["last"], "Change %": v["change_pct"]}
+            for k, v in futs.items()
+        ])
+        st.table(df_fut)
+    b2c = get_bid_to_cover(api_key=st.secrets.get("FRED_API_KEY"))
+    if b2c.get("value") is not None:
+        st.metric("10Y Auction Bid-to-Cover", f"{b2c['value']:.2f}")
+        st.caption(
+            "Strong bid-to-cover typically means solid demand and can help stabilize yields."
+        )
+    else:
+        st.write("Bid-to-cover ratio unavailable.")
+    ten = get_bond_yield_info("^TNX")
+    st.metric(
+        "10Y Treasury Yield",
+        f"{ten['spot']:.2f}%",
+        delta=f"{ten['1d_return']:.2f}% 1d",
+    )
+    st.caption(
+        "Rising yields often signal expectations of higher inflation or interest rates, while falling yields suggest the opposite."
+    )
+
+# --- Tab 4: Liquidity Metrics ---
 with liq_tab:
     st.header("💧 Liquidity Metrics")
     if ticker:
@@ -244,7 +277,7 @@ with liq_tab:
     else:
         st.info("Enter a ticker to view liquidity metrics.")
 
-# --- Tab 4: Market News ---
+# --- Tab 5: Market News ---
 with news_tab:
     st.header("📰 Market & Sentiment News")
     try:
@@ -279,7 +312,7 @@ with calender_tab:
         scrolling=True,
     )
 
-# --- Tab 4: AI Analysis ---
+# --- Tab 6: AI Analysis ---
 if enable_ai and ai_tab:
     with ai_tab:
         PIN = st.secrets["AI_PIN"]  # e.g. "1234"
