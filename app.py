@@ -12,14 +12,19 @@ from helpers import (
     compute_unusual_spikes,
     load_options_data,
     fetch_and_filter_rss,
-    get_liquidity_metrics
+    get_liquidity_metrics,
+    get_futures_quotes,
+    get_bid_to_cover,
+    get_bond_yield_info
 )
 from utils import (
     plot_put_call_ratios,
     plot_volume_spikes_stacked,
     interpret_net_gex,
     plot_exposure,
-    plot_price_and_delta_projection
+    plot_price_and_delta_projection,
+    generate_binomial_tree,
+    plot_binomial_tree,
 )
 from quant import openai_query
 from db import init_db, save_analysis, load_analyses
@@ -60,20 +65,30 @@ if ticker:
 enable_ai = st.sidebar.checkbox("Enable AI Analysis", value=True)
 
 # --- Tabs ---
-tab_names = ["Overview Metrics", "Options Positioning", "Market News", "Liquidity"]
+tab_names = [
+    "Overview Metrics",
+    "Options Positioning",
+    "Binomial Tree",
+    "Market Sentiment",
+    "Market News",
+    "Liquidity",
+]
 if enable_ai:
     tab_names.append("AI Analysis")
 tab_names.append("Economic Calendar")
 tabs = st.tabs(tab_names)
 tab1 = tabs[0]
 tab2 = tabs[1]
-news_tab = tabs[2]
+binom_tab = tabs[2]
+sentiment_tab = tabs[3]
+news_tab = tabs[4]
+liq_tab = tabs[5]
 if enable_ai:
-    ai_tab = tabs[3]
-    calender_tab = tabs[4]
+    ai_tab = tabs[6]
+    calender_tab = tabs[7]
 else:
     ai_tab = None
-    calender_tab = tabs[3]
+    calender_tab = tabs[6]
 
 # --- Tab 1: Overview Metrics ---
 with tab1:
@@ -220,7 +235,76 @@ with tab2:
     else:
         st.info("Select ticker and expirations to view positioning.")
 
-# --- Tab 3: Liquidity Metrics ---
+# --- Tab 3: Binomial Tree ---
+with binom_tab:
+    st.header("🧮 Binomial Tree")
+    if ticker and expirations and spot is not None:
+        exp = st.selectbox("Expiration", expirations)
+        token = st.secrets.get("TRADIER_TOKEN")
+        try:
+            chain = get_option_chain(ticker, exp, token, include_all_roots=True)
+        except Exception:
+            st.error("Failed to fetch options chain")
+            chain = []
+
+        strikes = sorted({float(opt.get("strike", 0)) for opt in chain})
+        default_strike = min(strikes, key=lambda x: abs(x - spot)) if strikes else spot
+        strike = st.number_input("Strike", value=float(default_strike))
+        opt_side = st.selectbox("Option Type", ["call", "put"])
+        steps = st.slider("Steps", 1, 25, 5)
+
+        rf = get_bond_yield_info("^TNX")["spot"] / 100
+        iv = None
+        for opt in chain:
+            if float(opt.get("strike", 0)) == strike and opt.get("option_type") == opt_side:
+                iv = opt.get("greeks", {}).get("iv") or opt.get("greeks", {}).get("mid_iv")
+                if iv:
+                    iv = float(iv)
+                    break
+        if iv is None:
+            iv = 0.2
+
+        T = (
+            datetime.strptime(exp, "%Y-%m-%d").date() - datetime.utcnow().date()
+        ).days / 365
+
+        if st.button("Build Tree"):
+            tree_df = generate_binomial_tree(spot, strike, T, rf, iv, steps, opt_side)
+            fig = plot_binomial_tree(tree_df)
+            st.plotly_chart(fig, use_container_width=True)
+            st.dataframe(tree_df)
+    else:
+        st.info("Enter ticker and expiration to build a tree.")
+
+# --- Tab 3: Market Sentiment ---
+with sentiment_tab:
+    st.header("🌅 Market Sentiment & Futures")
+    futs = get_futures_quotes()
+    if futs:
+        df_fut = pd.DataFrame([
+            {"Symbol": k, "Last": v["last"], "Change %": v["change_pct"]}
+            for k, v in futs.items()
+        ])
+        st.table(df_fut)
+    b2c = get_bid_to_cover(api_key=st.secrets.get("FRED_API_KEY"))
+    if b2c.get("value") is not None:
+        st.metric("10Y Auction Bid-to-Cover", f"{b2c['value']:.2f}")
+        st.caption(
+            "Strong bid-to-cover typically means solid demand and can help stabilize yields."
+        )
+    else:
+        st.write("Bid-to-cover ratio unavailable.")
+    ten = get_bond_yield_info("^TNX")
+    st.metric(
+        "10Y Treasury Yield",
+        f"{ten['spot']:.2f}%",
+        delta=f"{ten['1d_return']:.2f}% 1d",
+    )
+    st.caption(
+        "Rising yields often signal expectations of higher inflation or interest rates, while falling yields suggest the opposite."
+    )
+
+# --- Tab 4: Liquidity Metrics ---
 with liq_tab:
     st.header("💧 Liquidity Metrics")
     if ticker:
@@ -244,7 +328,7 @@ with liq_tab:
     else:
         st.info("Enter a ticker to view liquidity metrics.")
 
-# --- Tab 4: Market News ---
+# --- Tab 5: Market News ---
 with news_tab:
     st.header("📰 Market & Sentiment News")
     try:
@@ -279,7 +363,7 @@ with calender_tab:
         scrolling=True,
     )
 
-# --- Tab 4: AI Analysis ---
+# --- Tab 6: AI Analysis ---
 if enable_ai and ai_tab:
     with ai_tab:
         PIN = st.secrets["AI_PIN"]  # e.g. "1234"
