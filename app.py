@@ -60,7 +60,7 @@ if ticker:
 enable_ai = st.sidebar.checkbox("Enable AI Analysis", value=True)
 
 # --- Tabs ---
-tab_names = ["Overview Metrics", "Options Positioning", "Market News", "Liquidity"]
+tab_names = ["Overview Metrics", "Options Positioning", "Market News"]
 if enable_ai:
     tab_names.append("AI Analysis")
 tab_names.append("Economic Calendar")
@@ -219,30 +219,6 @@ with tab2:
 
     else:
         st.info("Select ticker and expirations to view positioning.")
-
-# --- Tab 3: Liquidity Metrics ---
-with liq_tab:
-    st.header("💧 Liquidity Metrics")
-    if ticker:
-        try:
-            liq = get_liquidity_metrics(ticker, st.secrets.get("TRADIER_TOKEN"))
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Trading Volume", f"{liq['volume']:,}")
-            if liq.get("bid_ask_spread_pct") is not None:
-                c2.metric("Bid-Ask Spread (%)", f"{liq['bid_ask_spread_pct']*100:.2f}")
-            else:
-                c2.write("N/A")
-            if liq.get("order_book_depth") is not None:
-                c3.metric("Order Book Depth", f"{liq['order_book_depth']:,}")
-            else:
-                c3.write("N/A")
-            st.markdown(
-                "Lower volume, wider spreads and shallow depth typically signal **low liquidity**."
-            )
-        except Exception as e:
-            st.error(f"Error fetching liquidity metrics: {e}")
-    else:
-        st.info("Enter a ticker to view liquidity metrics.")
 
 # --- Tab 4: Market News ---
 with news_tab:

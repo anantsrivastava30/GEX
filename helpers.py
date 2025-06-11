@@ -137,6 +137,7 @@ def get_liquidity_metrics(ticker, token):
         pass
 
     hist_spread = _historical_spread_pct(ticker, token)
+    # st.write(hist_spread, spread_pct)
 
     return {
         "volume": volume,
