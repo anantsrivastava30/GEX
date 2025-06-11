@@ -61,3 +61,8 @@ class TradierAPI:
         data = self.get("markets/history", params)
         return data.get("history", {}).get("day", [])
 
+    def orderbook(self, symbol: str) -> Dict[str, Any]:
+        """Return the current order book for a symbol if available."""
+        data = self.get("markets/orderbook", {"symbol": symbol})
+        return data.get("book", {})
+
