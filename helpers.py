@@ -269,6 +269,44 @@ def get_bond_yield_info(ticker="^TYX"):
         "5d_return":   ret_5d
     }
 
+
+def get_futures_quotes(symbols=("ES=F", "NQ=F", "YM=F", "RTY=F")):
+    """Fetch intraday futures quotes using yfinance."""
+    quotes = {}
+    for sym in symbols:
+        try:
+            df = yf.download(sym, period="1d", interval="1m")
+            close = df["Close"].dropna()
+            if not close.empty:
+                last = float(close.iloc[-1])
+                first = float(close.iloc[0])
+                change_pct = (last / first - 1) * 100
+                quotes[sym] = {"last": last, "change_pct": change_pct}
+            else:
+                quotes[sym] = {"last": None, "change_pct": None}
+        except Exception as e:
+            quotes[sym] = {"last": None, "change_pct": None, "error": str(e)}
+    return quotes
+
+
+def get_bid_to_cover(series_id="BTC10", api_key=None):
+    """Return the latest bid-to-cover ratio from the FRED API."""
+    url = "https://api.stlouisfed.org/fred/series/observations"
+    params = {
+        "series_id": series_id,
+        "sort_order": "desc",
+        "limit": 1,
+        "api_key": api_key or "",
+        "file_type": "json",
+    }
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        obs = r.json().get("observations", [{}])[0]
+        return {"date": obs.get("date"), "value": float(obs.get("value", "nan"))}
+    except Exception as e:
+        return {"date": None, "value": None, "error": str(e)}
+
 def get_vix_info():
     """
     Returns current VIX spot price plus 1-day and 5-day % changes.
