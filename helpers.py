@@ -5,6 +5,7 @@ import yfinance as yf
 import feedparser
 import streamlit as st
 from zoneinfo import ZoneInfo
+from typing import Optional
 import yaml
 import os
 
@@ -102,6 +103,19 @@ def get_stock_quote(ticker, token):
     return data.get("last")
 
 
+def _historical_spread_pct(ticker: str, token: str, days: int = 5) -> Optional[float]:
+    """Return average daily high/low spread pct over the past `days`."""
+    api = TradierAPI(token, API_URL)
+    end = datetime.utcnow().date()
+    start = end - timedelta(days=days + 1)
+    hist = api.history(ticker, start=start.isoformat(), end=end.isoformat())
+    df = pd.DataFrame(hist)
+    if df.empty or len(df) < 2:
+        return None
+    df["spread_pct"] = (df["high"] - df["low"]) / ((df["high"] + df["low"]) / 2)
+    return float(df["spread_pct"].iloc[:-1].mean())
+
+
 def get_liquidity_metrics(ticker, token):
     """Return volume, bid-ask spread pct and order book depth for a stock."""
     api = TradierAPI(token, API_URL)
@@ -123,10 +137,13 @@ def get_liquidity_metrics(ticker, token):
     except Exception:
         pass
 
+    hist_spread = _historical_spread_pct(ticker, token)
+
     return {
         "volume": volume,
         "bid_ask_spread_pct": spread_pct,
         "order_book_depth": depth,
+        "avg_spread_pct": hist_spread,
     }
 
 
