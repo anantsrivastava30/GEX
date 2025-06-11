@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import plotly.express as px
 import plotly.graph_objects as go
+import math
 import yfinance as yf
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta, time
@@ -468,5 +469,88 @@ def plot_price_and_delta_projection(
     )
     fig.update_yaxes(title_text="Spot Price", secondary_y=False)
     fig.update_yaxes(title_text="Delta Exposure", secondary_y=True)
+
+    return fig
+
+
+def generate_binomial_tree(S0, K, T, r, sigma, steps, option_type="call"):
+    """Generate a CRR binomial tree of underlying and option values."""
+    dt = T / steps
+    u = math.exp(sigma * math.sqrt(dt))
+    d = 1 / u
+    p = (math.exp(r * dt) - d) / (u - d)
+
+    prices = np.zeros((steps + 1, steps + 1))
+    prices[0, 0] = S0
+    for i in range(1, steps + 1):
+        prices[i, 0] = prices[i - 1, 0] * u
+        for j in range(1, i + 1):
+            prices[i, j] = prices[i - 1, j - 1] * d
+
+    option = np.zeros_like(prices)
+    if option_type.lower() == "call":
+        option[steps, : steps + 1] = np.maximum(prices[steps, : steps + 1] - K, 0)
+    else:
+        option[steps, : steps + 1] = np.maximum(K - prices[steps, : steps + 1], 0)
+
+    for i in range(steps - 1, -1, -1):
+        for j in range(i + 1):
+            option[i, j] = math.exp(-r * dt) * (
+                p * option[i + 1, j] + (1 - p) * option[i + 1, j + 1]
+            )
+
+    data = []
+    for i in range(steps + 1):
+        for j in range(i + 1):
+            data.append(
+                {
+                    "step": i,
+                    "node": j,
+                    "price": prices[i, j],
+                    "option": option[i, j],
+                }
+            )
+
+    return pd.DataFrame(data)
+
+
+def plot_binomial_tree(df):
+    """Plot a binomial tree using plotly with prices and option values."""
+    import plotly.graph_objects as go
+
+    steps = int(df["step"].max())
+    fig = go.Figure()
+
+    for i in range(steps + 1):
+        df_step = df[df["step"] == i]
+        fig.add_trace(
+            go.Scatter(
+                x=[i] * len(df_step),
+                y=df_step["price"],
+                mode="markers+text",
+                text=[
+                    f"S={row.price:.2f}<br>O={row.option:.2f}"
+                    for row in df_step.itertuples()
+                ],
+                textposition="top center",
+                marker=dict(size=10, color="blue"),
+                showlegend=False,
+            )
+        )
+
+    for i in range(steps):
+        for j in range(i + 1):
+            y0 = df[(df["step"] == i) & (df["node"] == j)]["price"].values[0]
+            y1 = df[(df["step"] == i + 1) & (df["node"] == j)]["price"].values[0]
+            fig.add_shape(type="line", x0=i, y0=y0, x1=i + 1, y1=y1, line=dict(color="gray"))
+            y1 = df[(df["step"] == i + 1) & (df["node"] == j + 1)]["price"].values[0]
+            fig.add_shape(type="line", x0=i, y0=y0, x1=i + 1, y1=y1, line=dict(color="gray"))
+
+    fig.update_layout(
+        title="Binomial Tree",
+        xaxis_title="Step",
+        yaxis_title="Underlying Price",
+        template="seaborn",
+    )
 
     return fig
