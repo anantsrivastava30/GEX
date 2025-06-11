@@ -11,7 +11,8 @@ from helpers import (
     compute_put_call_ratios,
     compute_unusual_spikes,
     load_options_data,
-    fetch_and_filter_rss
+    fetch_and_filter_rss,
+    get_liquidity_metrics
 )
 from utils import (
     plot_put_call_ratios,
@@ -59,7 +60,7 @@ if ticker:
 enable_ai = st.sidebar.checkbox("Enable AI Analysis", value=True)
 
 # --- Tabs ---
-tab_names = ["Overview Metrics", "Options Positioning", "Market News"]
+tab_names = ["Overview Metrics", "Options Positioning", "Market News", "Liquidity"]
 if enable_ai:
     tab_names.append("AI Analysis")
 tab_names.append("Economic Calendar")
@@ -67,8 +68,12 @@ tabs = st.tabs(tab_names)
 tab1 = tabs[0]
 tab2 = tabs[1]
 news_tab = tabs[2]
-calender_tab = tabs[4]
-ai_tab = tabs[3] if enable_ai else None
+if enable_ai:
+    ai_tab = tabs[3]
+    calender_tab = tabs[4]
+else:
+    ai_tab = None
+    calender_tab = tabs[3]
 
 # --- Tab 1: Overview Metrics ---
 with tab1:
@@ -153,6 +158,32 @@ with tab1:
         with col2:
             st.plotly_chart(fig, use_container_width=True)
 
+        try:
+            liq = get_liquidity_metrics(ticker, tradier_token)
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Trading Volume", f"{liq['volume']:,}")
+            if liq.get("bid_ask_spread_pct") is not None:
+                delta = None
+                hist = liq.get("avg_spread_pct")
+                if hist is not None:
+                    delta = f"{(liq['bid_ask_spread_pct']/hist-1)*100:+.1f}% vs avg"
+                c2.metric(
+                    "Bid-Ask Spread (%)",
+                    f"{liq['bid_ask_spread_pct']*100:.2f}",
+                    delta=delta
+                )
+            else:
+                c2.write("N/A")
+            if liq.get("order_book_depth") is not None:
+                c3.metric("Order Book Depth", f"{liq['order_book_depth']:,}")
+            else:
+                c3.write("N/A")
+            st.caption(
+                "Lower volume, wider spreads and shallow depth typically signal **low liquidity**."
+            )
+        except Exception as e:
+            st.warning(f"Liquidity metrics unavailable: {e}")
+
         spikes_df = compute_unusual_spikes(df0)
         st.write(spikes_df)
         fig = plot_volume_spikes_stacked(spikes_df, offset=offset, spot=spot)
@@ -185,10 +216,35 @@ with tab2:
             # Plot Delta Exposure
             fig_dex2 = plot_exposure(df, 'DeltaExposure', 'Delta Exposure', ticker, offset, spot)
             st.plotly_chart(fig_dex2, use_container_width=True)
+
     else:
         st.info("Select ticker and expirations to view positioning.")
 
-# --- Tab 3: Market News ---
+# --- Tab 3: Liquidity Metrics ---
+with liq_tab:
+    st.header("💧 Liquidity Metrics")
+    if ticker:
+        try:
+            liq = get_liquidity_metrics(ticker, st.secrets.get("TRADIER_TOKEN"))
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Trading Volume", f"{liq['volume']:,}")
+            if liq.get("bid_ask_spread_pct") is not None:
+                c2.metric("Bid-Ask Spread (%)", f"{liq['bid_ask_spread_pct']*100:.2f}")
+            else:
+                c2.write("N/A")
+            if liq.get("order_book_depth") is not None:
+                c3.metric("Order Book Depth", f"{liq['order_book_depth']:,}")
+            else:
+                c3.write("N/A")
+            st.markdown(
+                "Lower volume, wider spreads and shallow depth typically signal **low liquidity**."
+            )
+        except Exception as e:
+            st.error(f"Error fetching liquidity metrics: {e}")
+    else:
+        st.info("Enter a ticker to view liquidity metrics.")
+
+# --- Tab 4: Market News ---
 with news_tab:
     st.header("📰 Market & Sentiment News")
     try:
