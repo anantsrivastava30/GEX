@@ -115,7 +115,6 @@ def _historical_spread_pct(ticker: str, token: str, days: int = 5) -> Optional[f
     df["spread_pct"] = (df["high"] - df["low"]) / ((df["high"] + df["low"]) / 2)
     return float(df["spread_pct"].iloc[:-1].mean())
 
-
 def get_liquidity_metrics(ticker, token):
     """Return volume, bid-ask spread pct and order book depth for a stock."""
     api = TradierAPI(token, API_URL)
