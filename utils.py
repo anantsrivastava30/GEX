@@ -599,7 +599,6 @@ def plot_binomial_tree_pyvis(df):
             title=title,
             level=row.step,
             shape="box",
-            color="lightblue",
         )
 
     for i in range(steps):
@@ -607,8 +606,20 @@ def plot_binomial_tree_pyvis(df):
             G.add_edge(f"{i}_{j}", f"{i+1}_{j}")
             G.add_edge(f"{i}_{j}", f"{i+1}_{j+1}")
 
-    net = Network(height="600px", width="100%", directed=True)
+    net = Network(
+        height="600px",
+        width="100%",
+        directed=True,
+        bgcolor="#1e1e1e",
+        font_color="white",
+    )
     net.from_nx(G)
+    for node in net.nodes:
+        node["color"] = {
+            "background": "#ff4500",
+            "border": "#ff7043",
+            "highlight": {"background": "#ff7043", "border": "#ffa07a"},
+        }
     net.set_options(
         "var options = {\n"
         "  \"layout\": {\n"
@@ -619,9 +630,14 @@ def plot_binomial_tree_pyvis(df):
         "    }\n"
         "  },\n"
         "  \"edges\": {\n"
-        "    \"arrows\": \"to\"\n"
+        "    \"arrows\": \"to\",\n"
+        "    \"color\": \"#cccccc\"\n"
+        "  },\n"
+        "  \"interaction\": {\n"
+        "    \"hover\": true\n"
         "  }\n"
         "}"
     )
 
     return net.generate_html()
+
