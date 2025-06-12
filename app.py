@@ -237,19 +237,21 @@ with tab2:
 with binom_tab:
     st.header("🧮 Binomial Tree")
     if ticker and expirations and spot is not None:
-        exp = st.selectbox("Expiration", expirations)
-        token = st.secrets.get("TRADIER_TOKEN")
-        try:
-            chain = get_option_chain(ticker, exp, token, include_all_roots=True)
-        except Exception:
-            st.error("Failed to fetch options chain")
-            chain = []
+        with st.form("binom_form"):
+            exp = st.selectbox("Expiration", expirations, key="binom_exp")
+            token = st.secrets.get("TRADIER_TOKEN")
+            try:
+                chain = get_option_chain(ticker, exp, token, include_all_roots=True)
+            except Exception:
+                st.error("Failed to fetch options chain")
+                chain = []
 
-        strikes = sorted({float(opt.get("strike", 0)) for opt in chain})
-        default_strike = min(strikes, key=lambda x: abs(x - spot)) if strikes else spot
-        strike = st.number_input("Strike", value=float(default_strike))
-        opt_side = st.selectbox("Option Type", ["call", "put"])
-        steps = st.slider("Steps", 1, 25, 5)
+            strikes = sorted({float(opt.get("strike", 0)) for opt in chain})
+            default_strike = min(strikes, key=lambda x: abs(x - spot)) if strikes else spot
+            strike = st.number_input("Strike", value=float(default_strike), key="binom_strike")
+            opt_side = st.selectbox("Option Type", ["call", "put"], key="binom_side")
+            steps = st.slider("Steps", 1, 25, 5, key="binom_steps")
+            build_tree = st.form_submit_button("Build Tree")
 
         rf = get_bond_yield_info("^TNX")["spot"] / 100
         iv = None
@@ -266,7 +268,7 @@ with binom_tab:
             datetime.strptime(exp, "%Y-%m-%d").date() - datetime.utcnow().date()
         ).days / 365
 
-        if st.button("Build Tree"):
+        if build_tree:
             tree_df = generate_binomial_tree(spot, strike, T, rf, iv, steps, opt_side)
             fig = plot_binomial_tree(tree_df)
             st.plotly_chart(fig, use_container_width=True)
