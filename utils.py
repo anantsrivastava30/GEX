@@ -474,7 +474,12 @@ def plot_price_and_delta_projection(
 
 
 def generate_binomial_tree(S0, K, T, r, sigma, steps, option_type="call"):
-    """Generate a CRR binomial tree of underlying and option values."""
+    """Generate a CRR binomial tree of underlying and option values.
+
+    Each node will also contain the calendar date/time corresponding to that
+    step. ``T`` is expressed in years.
+    """
+
     dt = T / steps
     u = math.exp(sigma * math.sqrt(dt))
     d = 1 / u
@@ -499,8 +504,10 @@ def generate_binomial_tree(S0, K, T, r, sigma, steps, option_type="call"):
                 p * option[i + 1, j] + (1 - p) * option[i + 1, j + 1]
             )
 
+    start = datetime.utcnow()
     data = []
     for i in range(steps + 1):
+        step_time = start + timedelta(days=365 * dt * i)
         for j in range(i + 1):
             data.append(
                 {
@@ -508,6 +515,7 @@ def generate_binomial_tree(S0, K, T, r, sigma, steps, option_type="call"):
                     "node": j,
                     "price": prices[i, j],
                     "option": option[i, j],
+                    "date": step_time,
                 }
             )
 
@@ -528,12 +536,21 @@ def plot_binomial_tree(df):
                 x=[i] * len(df_step),
                 y=df_step["price"],
                 mode="markers+text",
-                text=[
-                    f"S={row.price:.2f}<br>O={row.option:.2f}"
-                    for row in df_step.itertuples()
-                ],
-                textposition="top center",
-                marker=dict(size=10, color="blue"),
+                text=[f"{row.price:.2f}\n{row.option:.2f}" for row in df_step.itertuples()],
+                textposition="bottom center",
+                marker=dict(
+                    size=20,
+                    symbol="square",
+                    color="lightblue",
+                    line=dict(color="blue", width=1),
+                ),
+                customdata=df_step[["step", "date", "option"]],
+                hovertemplate=(
+                    "Step: %{customdata[0]}<br>"
+                    "Date: %{customdata[1]|%Y-%m-%d}<br>"
+                    "Price: %{y:.2f}<br>"
+                    "Option: %{customdata[2]:.2f}<extra></extra>"
+                ),
                 showlegend=False,
             )
         )
@@ -541,16 +558,20 @@ def plot_binomial_tree(df):
     for i in range(steps):
         for j in range(i + 1):
             y0 = df[(df["step"] == i) & (df["node"] == j)]["price"].values[0]
-            y1 = df[(df["step"] == i + 1) & (df["node"] == j)]["price"].values[0]
-            fig.add_shape(type="line", x0=i, y0=y0, x1=i + 1, y1=y1, line=dict(color="gray"))
-            y1 = df[(df["step"] == i + 1) & (df["node"] == j + 1)]["price"].values[0]
-            fig.add_shape(type="line", x0=i, y0=y0, x1=i + 1, y1=y1, line=dict(color="gray"))
+            y1u = df[(df["step"] == i + 1) & (df["node"] == j)]["price"].values[0]
+            y1d = df[(df["step"] == i + 1) & (df["node"] == j + 1)]["price"].values[0]
+            fig.add_annotation(x=i + 1, y=y1u, ax=i, ay=y0,
+                              showarrow=True, arrowhead=2, arrowsize=1,
+                              arrowcolor="gray")
+            fig.add_annotation(x=i + 1, y=y1d, ax=i, ay=y0,
+                              showarrow=True, arrowhead=2, arrowsize=1,
+                              arrowcolor="gray")
 
     fig.update_layout(
         title="Binomial Tree",
         xaxis_title="Step",
         yaxis_title="Underlying Price",
-        template="seaborn",
+        template="plotly_white",
     )
 
     return fig
