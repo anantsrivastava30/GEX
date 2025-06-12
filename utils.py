@@ -11,6 +11,8 @@ import yfinance as yf
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta, time
 from tradier_api import TradierAPI
+import networkx as nx
+from pyvis.network import Network
 
 def interpret_net_gex(df_net, S, offset=25):
     """
@@ -575,3 +577,51 @@ def plot_binomial_tree(df):
     )
 
     return fig
+
+
+def plot_binomial_tree_pyvis(df):
+    """Return an interactive binomial tree diagram as HTML."""
+    steps = int(df["step"].max())
+
+    G = nx.DiGraph()
+    for row in df.itertuples(index=False):
+        node_id = f"{row.step}_{row.node}"
+        label = f"{row.price:.2f}\n{row.option:.2f}"
+        title = (
+            f"Step: {row.step}<br>"
+            f"Date: {row.date:%Y-%m-%d}<br>"
+            f"Price: {row.price:.2f}<br>"
+            f"Option: {row.option:.2f}"
+        )
+        G.add_node(
+            node_id,
+            label=label,
+            title=title,
+            level=row.step,
+            shape="box",
+            color="lightblue",
+        )
+
+    for i in range(steps):
+        for j in range(i + 1):
+            G.add_edge(f"{i}_{j}", f"{i+1}_{j}")
+            G.add_edge(f"{i}_{j}", f"{i+1}_{j+1}")
+
+    net = Network(height="600px", width="100%", directed=True)
+    net.from_nx(G)
+    net.set_options(
+        "var options = {\n"
+        "  \"layout\": {\n"
+        "    \"hierarchical\": {\n"
+        "      \"enabled\": true,\n"
+        "      \"direction\": \"LR\",\n"
+        "      \"sortMethod\": \"directed\"\n"
+        "    }\n"
+        "  },\n"
+        "  \"edges\": {\n"
+        "    \"arrows\": \"to\"\n"
+        "  }\n"
+        "}"
+    )
+
+    return net.generate_html()

@@ -24,7 +24,7 @@ from utils import (
     plot_exposure,
     plot_price_and_delta_projection,
     generate_binomial_tree,
-    plot_binomial_tree,
+    plot_binomial_tree_pyvis,
 )
 from quant import openai_query
 from db import init_db, save_analysis, load_analyses
@@ -270,8 +270,8 @@ with binom_tab:
 
         if build_tree:
             tree_df = generate_binomial_tree(spot, strike, T, rf, iv, steps, opt_side)
-            fig = plot_binomial_tree(tree_df)
-            st.plotly_chart(fig, use_container_width=True)
+            html = plot_binomial_tree_pyvis(tree_df)
+            st.components.v1.html(html, height=620, scrolling=False)
             st.dataframe(tree_df)
     else:
         st.info("Enter ticker and expiration to build a tree.")
