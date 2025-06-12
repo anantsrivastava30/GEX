@@ -11,6 +11,7 @@ import yfinance as yf
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta, time
 from tradier_api import TradierAPI
+from graphviz import Digraph
 
 def interpret_net_gex(df_net, S, offset=25):
     """
@@ -575,3 +576,22 @@ def plot_binomial_tree(df):
     )
 
     return fig
+
+
+def plot_binomial_tree_graphviz(df):
+    """Create a binomial tree diagram using Graphviz and return PNG bytes."""
+    steps = int(df["step"].max())
+    dot = Digraph(format="png")
+    dot.attr(rankdir="LR")
+
+    for row in df.itertuples(index=False):
+        node_id = f"{row.step}_{row.node}"
+        label = f"{row.price:.2f}\n{row.option:.2f}"
+        dot.node(node_id, label)
+
+    for i in range(steps):
+        for j in range(i + 1):
+            dot.edge(f"{i}_{j}", f"{i+1}_{j}")
+            dot.edge(f"{i}_{j}", f"{i+1}_{j+1}")
+
+    return dot.pipe()
