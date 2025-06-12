@@ -14,7 +14,6 @@ from tradier_api import TradierAPI
 import networkx as nx
 from pyvis.network import Network
 
-
 def interpret_net_gex(df_net, S, offset=25):
     """
     Returns a list of strings with automated interpretation:
@@ -611,8 +610,18 @@ def plot_binomial_tree_pyvis(df):
     net = Network(height="600px", width="100%", directed=True)
     net.from_nx(G)
     net.set_options(
-        "var options = {layout: {hierarchical: {enabled: true, direction: 'LR', sortMethod: 'directed'}}, edges: {arrows:'to'}}"
+        "var options = {\n"
+        "  \"layout\": {\n"
+        "    \"hierarchical\": {\n"
+        "      \"enabled\": true,\n"
+        "      \"direction\": \"LR\",\n"
+        "      \"sortMethod\": \"directed\"\n"
+        "    }\n"
+        "  },\n"
+        "  \"edges\": {\n"
+        "    \"arrows\": \"to\"\n"
+        "  }\n"
+        "}"
     )
 
     return net.generate_html()
-
