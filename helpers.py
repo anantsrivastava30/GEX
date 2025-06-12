@@ -289,7 +289,7 @@ def get_futures_quotes(symbols=("ES=F", "NQ=F", "YM=F", "RTY=F")):
     return quotes
 
 
-def get_bid_to_cover(series_id="BTC10", api_key=None):
+def get_bid_to_cover(series_id="LTIIT", api_key=None):
     """Return the latest bid-to-cover ratio from the FRED API."""
     url = "https://api.stlouisfed.org/fred/series/observations"
     params = {
