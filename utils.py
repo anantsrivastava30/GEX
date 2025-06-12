@@ -585,7 +585,18 @@ def plot_binomial_tree_pyvis(df):
     steps = int(df["step"].max())
 
     G = nx.DiGraph()
-    for row in df.itertuples(index=False):
+        "var options = {\n"
+        "  \"layout\": {\n"
+        "    \"hierarchical\": {\n"
+        "      \"enabled\": true,\n"
+        "      \"direction\": \"LR\",\n"
+        "      \"sortMethod\": \"directed\"\n"
+        "    }\n"
+        "  },\n"
+        "  \"edges\": {\n"
+        "    \"arrows\": \"to\"\n"
+        "  }\n"
+        "}"
         node_id = f"{row.step}_{row.node}"
         label = f"{row.price:.2f}\n{row.option:.2f}"
         title = (
