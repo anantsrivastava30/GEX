@@ -457,18 +457,37 @@ def _render_model_discovery_table(models: Sequence[Dict[str, object]]) -> str:
         .model-discovery-card {
             margin-top: 0.85rem;
             border-radius: 18px;
-            padding: 1rem 1.25rem 0.6rem;
+            padding: 1rem 1.25rem 0.75rem;
             background: rgba(15, 23, 42, 0.6);
             border: 1px solid rgba(148, 163, 184, 0.22);
             box-shadow: 0 20px 42px rgba(2, 6, 23, 0.42);
         }
 
+        .model-discovery-card__table {
+            max-height: 320px;
+            overflow-y: auto;
+            margin: 0 -0.5rem;
+            padding: 0 0.5rem;
+        }
+
+        .model-discovery-card__table::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .model-discovery-card__table::-webkit-scrollbar-thumb {
+            background: rgba(148, 163, 184, 0.35);
+            border-radius: 999px;
+        }
+
         .model-discovery-card table {
             width: 100%;
             border-collapse: collapse;
+            min-width: 100%;
         }
 
         .model-discovery-card thead th {
+            position: sticky;
+            top: 0;
             text-transform: uppercase;
             font-size: 0.72rem;
             letter-spacing: 0.08em;
@@ -476,6 +495,8 @@ def _render_model_discovery_table(models: Sequence[Dict[str, object]]) -> str:
             padding: 0.65rem 0.75rem;
             text-align: left;
             border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+            background: rgba(15, 23, 42, 0.96);
+            backdrop-filter: blur(6px);
         }
 
         .model-discovery-card tbody td {
@@ -487,6 +508,10 @@ def _render_model_discovery_table(models: Sequence[Dict[str, object]]) -> str:
 
         .model-discovery-card tbody tr:last-child td {
             border-bottom: none;
+        }
+
+        .model-discovery-card__table::-webkit-scrollbar-track {
+            background: transparent;
         }
 
         .model-discovery-card .model-rank {
@@ -549,6 +574,12 @@ def _render_model_discovery_table(models: Sequence[Dict[str, object]]) -> str:
 
             .model-discovery-card thead {
                 display: none;
+            }
+
+            .model-discovery-card__table {
+                max-height: none;
+                margin: 0;
+                padding: 0;
             }
 
             .model-discovery-card tbody td {
@@ -614,19 +645,21 @@ def _render_model_discovery_table(models: Sequence[Dict[str, object]]) -> str:
     table_html = textwrap.dedent(
         """
         <div class="model-discovery-card">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Rank</th>
-                        <th>Model</th>
-                        <th>Score</th>
-                        <th>Highlights</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {rows}
-                </tbody>
-            </table>
+            <div class="model-discovery-card__table">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Rank</th>
+                            <th>Model</th>
+                            <th>Score</th>
+                            <th>Highlights</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows}
+                    </tbody>
+                </table>
+            </div>
         </div>
         """
     ).format(rows=rows_markup)
