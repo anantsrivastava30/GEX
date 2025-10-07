@@ -7,6 +7,7 @@ from db import save_analysis, get_total_token_usage
 import yaml
 import os
 import textwrap
+from html import escape
 from typing import Optional, Dict, List, Tuple, Sequence
 
 
@@ -448,6 +449,191 @@ def _build_ai_form_key(label: str, ticker: str, exp: Optional[Sequence[str]]) ->
     return f"{label}_{ticker}_{exp_fragment}" if exp_fragment else f"{label}_{ticker}"
 
 
+def _render_model_discovery_table(models: Sequence[Dict[str, object]]) -> str:
+    """Return HTML for a stylised model discovery table."""
+
+    table_style = """
+    <style>
+        .model-discovery-card {
+            margin-top: 0.85rem;
+            border-radius: 18px;
+            padding: 1rem 1.25rem 0.6rem;
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            box-shadow: 0 20px 42px rgba(2, 6, 23, 0.42);
+        }
+
+        .model-discovery-card table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .model-discovery-card thead th {
+            text-transform: uppercase;
+            font-size: 0.72rem;
+            letter-spacing: 0.08em;
+            color: #a5b4fc;
+            padding: 0.65rem 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+        }
+
+        .model-discovery-card tbody td {
+            padding: 0.85rem 0.75rem;
+            font-size: 0.92rem;
+            color: #e2e8f0;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+        }
+
+        .model-discovery-card tbody tr:last-child td {
+            border-bottom: none;
+        }
+
+        .model-discovery-card .model-rank {
+            width: 3.25rem;
+            font-weight: 600;
+            color: #94a3b8;
+        }
+
+        .model-discovery-card .model-id {
+            font-family: "JetBrains Mono", "Fira Code", "SFMono-Regular", monospace;
+            font-size: 0.95rem;
+            font-weight: 600;
+        }
+
+        .model-discovery-card .model-score {
+            font-weight: 600;
+            color: #38bdf8;
+        }
+
+        .model-discovery-card .model-strengths {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+        }
+
+        .model-discovery-card .model-strength {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.2rem 0.55rem;
+            border-radius: 999px;
+            background: rgba(59, 130, 246, 0.18);
+            border: 1px solid rgba(96, 165, 250, 0.35);
+            font-size: 0.75rem;
+            color: #bfdbfe;
+            white-space: nowrap;
+        }
+
+        .model-discovery-card tr.model-row--top td {
+            position: relative;
+            background: linear-gradient(135deg, rgba(56, 189, 248, 0.18), rgba(14, 165, 233, 0.12));
+            border-bottom-color: rgba(56, 189, 248, 0.26);
+        }
+
+        .model-discovery-card tr.model-row--top td:first-child {
+            border-top-left-radius: 12px;
+        }
+
+        .model-discovery-card tr.model-row--top td:last-child {
+            border-top-right-radius: 12px;
+        }
+
+        @media (max-width: 768px) {
+            .model-discovery-card table,
+            .model-discovery-card tbody,
+            .model-discovery-card tr,
+            .model-discovery-card td,
+            .model-discovery-card thead {
+                display: block;
+            }
+
+            .model-discovery-card thead {
+                display: none;
+            }
+
+            .model-discovery-card tbody td {
+                border-bottom: none;
+                padding: 0.45rem 0;
+            }
+
+            .model-discovery-card tbody tr {
+                padding: 0.65rem 0;
+                border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+            }
+
+            .model-discovery-card .model-strengths {
+                margin-top: 0.4rem;
+            }
+        }
+    </style>
+    """
+
+    row_template = textwrap.dedent(
+        """
+        <tr class="{row_class}">
+            <td class="model-rank">#{rank:02d}</td>
+            <td class="model-id">{model_id}</td>
+            <td class="model-score">{score}</td>
+            <td>
+                <div class="model-strengths">{strengths}</div>
+            </td>
+        </tr>
+        """
+    )
+
+    rows_html: List[str] = []
+    for index, entry in enumerate(models, start=1):
+        model_id = escape(str(entry.get("id", "")))
+        raw_score = entry.get("score", "")
+        if isinstance(raw_score, (int, float)):
+            score = f"{raw_score:.1f}"
+        else:
+            score = escape(str(raw_score))
+
+        reasons = entry.get("reasons") or []
+        badges = "".join(
+            f'<span class="model-strength">{escape(str(reason))}</span>'
+            for reason in reasons
+        )
+
+        row_class = "model-row model-row--top" if index == 1 else "model-row"
+        if not badges:
+            badges = '<span class="model-strength">General purpose</span>'
+
+        rows_html.append(
+            row_template.format(
+                row_class=row_class,
+                rank=index,
+                model_id=model_id,
+                score=score,
+                strengths=badges,
+            )
+        )
+
+    rows_markup = "".join(rows_html)
+    table_html = textwrap.dedent(
+        """
+        <div class="model-discovery-card">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Rank</th>
+                        <th>Model</th>
+                        <th>Score</th>
+                        <th>Highlights</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows}
+                </tbody>
+            </table>
+        </div>
+        """
+    ).format(rows=rows_markup)
+
+    return textwrap.dedent(table_style) + table_html
+
+
 def render_model_selection(ticker: str, exp, creds: Optional[Dict[str, Optional[str]]] = None):
     """Render model discovery and selection UI, returning creds and chosen model."""
 
@@ -466,19 +652,7 @@ def render_model_selection(ticker: str, exp, creds: Optional[Dict[str, Optional[
         )
 
     if models:
-        display_rows = [
-            {
-                "Model": entry["id"],
-                "Score": f"{entry['score']:.1f}",
-                "Strengths": ", ".join(entry["reasons"]),
-            }
-            for entry in models
-        ]
-        st.dataframe(
-            pd.DataFrame(display_rows),
-            use_container_width=True,
-            hide_index=True,
-        )
+        st.markdown(_render_model_discovery_table(models), unsafe_allow_html=True)
     else:
         st.info(
             "Using fallback model suggestions because no suitable models were returned."
