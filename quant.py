@@ -3,7 +3,7 @@ import tiktoken
 from helpers import get_market_snapshot, augment_payload_with_extras
 import streamlit as st
 import pandas as pd
-from db import save_analysis
+from db import save_analysis, get_total_token_usage
 import yaml
 import os
 import textwrap
