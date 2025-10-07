@@ -5,7 +5,7 @@ import plotly.express as px
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from html import escape, unescape
-from textwrap import shorten
+from textwrap import shorten, dedent
 from helpers import (
     get_expirations,
     get_option_chain,
@@ -190,19 +190,23 @@ def inject_global_styles():
 
 
 def metric_card(title: str, value: str, *, delta: str | None = None, footnote: str | None = None):
-    delta_html = f"<div class=\"metric-delta\">{delta}</div>" if delta else ""
-    foot_html = f"<div class=\"metric-footnote\">{footnote}</div>" if footnote else ""
-    st.markdown(
-        f"""
-        <div class="metric-card">
-            <h3>{title}</h3>
-            <p>{value}</p>
-            {delta_html}
-            {foot_html}
-        </div>
-        """,
-        unsafe_allow_html=True,
+    delta_html = (
+        f'<div class="metric-delta">{escape(delta)}</div>' if delta else ""
     )
+    foot_html = (
+        f'<div class="metric-footnote">{escape(footnote)}</div>' if footnote else ""
+    )
+    card_html = dedent(
+        f"""\
+<div class="metric-card">
+  <h3>{escape(title)}</h3>
+  <p>{escape(value)}</p>
+  {delta_html}
+  {foot_html}
+</div>
+"""
+    )
+    st.markdown(card_html, unsafe_allow_html=True)
 
 
 def chunked(items, size):
