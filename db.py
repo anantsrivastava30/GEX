@@ -13,7 +13,7 @@ import logging
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import streamlit as st
 from supabase import create_client
@@ -98,6 +98,50 @@ def _save_sqlite(data: Dict[str, Any]) -> None:
     con.close()
 
 
+def _parse_token_value(value: Any) -> int:
+    """Best-effort conversion of a stored token count into an integer."""
+
+    if value in (None, "", "None"):
+        return 0
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _sum_sqlite_tokens() -> int:
+    init_db()
+    con = sqlite3.connect(DB_FILE)
+    total = 0
+    try:
+        for (value,) in con.execute("SELECT token_count FROM ai_analysis"):
+            total += _parse_token_value(value)
+    finally:
+        con.close()
+    return total
+
+
+def _sum_supabase_tokens() -> Optional[int]:
+    if _supabase_client is None:
+        return None
+    try:
+        resp = _supabase_client.table("ai_analysis").select("token_count").execute()
+    except Exception as exc:  # pragma: no cover - defensive logging
+        logger.warning(
+            "Failed to fetch token counts from Supabase; falling back to SQLite",
+            exc_info=exc,
+        )
+        return None
+
+    if not resp.data:
+        return 0
+
+    total = 0
+    for row in resp.data:
+        total += _parse_token_value(row.get("token_count"))
+    return total
+
+
 def _load_sqlite(limit: int) -> List[Dict[str, Any]]:
     init_db()
     con = sqlite3.connect(DB_FILE)
@@ -113,6 +157,16 @@ def _load_sqlite(limit: int) -> List[Dict[str, Any]]:
     ).fetchall()
     con.close()
     return [dict(row) for row in rows]
+
+
+def get_total_token_usage() -> int:
+    """Return the aggregate number of tokens recorded across analyses."""
+
+    supabase_total = _sum_supabase_tokens()
+    if supabase_total is not None:
+        return supabase_total
+
+    return _sum_sqlite_tokens()
 
 
 def save_analysis(ticker: str, expirations: Any, payload: Any, response: Any, token_count: Any) -> None:

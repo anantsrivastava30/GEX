@@ -340,24 +340,31 @@ with calender_tab:
 # --- Tab 6: AI Analysis ---
 if enable_ai and ai_tab:
     with ai_tab:
-        PIN = st.secrets["AI_PIN"]  # e.g. "1234"
         st.header("🤖 AI Analysis")
-        st.write("Use the button below to query the OpenAI API for trade insights based on the charts and news.")
+        st.write(
+            "Prepare the AI request to review the data packet, estimated token usage, and confirm before sending."
+        )
         if "want_ai" not in st.session_state:
             st.session_state.want_ai = False
-        
-        if st.button("Run AI Analysis"):
+
+        if st.button("Prepare AI Analysis"):
             st.session_state.want_ai = True
-        
+
         if st.session_state.want_ai:
-            user_pin = st.text_input("Enter 4-digit PIN to confirm", type="password")
-            if user_pin:
-                if user_pin == PIN:
-                    st.success("PIN accepted — running AI…")
-                    openai_query(df, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset, ticker, selected_exps)
-                    st.session_state.want_ai = False
-                else:
-                    st.error("❌ Incorrect PIN, try again.")
+            openai_query(
+                df,
+                iv_skew_df,
+                vol_ratio,
+                oi_ratio,
+                articles,
+                spot,
+                offset,
+                ticker,
+                selected_exps,
+            )
+
+        if st.session_state.want_ai and st.button("Cancel AI Preparation"):
+            st.session_state.want_ai = False
 
         st.markdown("---")
         st.header("📚 Past AI Analyses")
