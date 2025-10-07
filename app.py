@@ -27,7 +27,7 @@ from utils import (
     generate_binomial_tree,
     plot_binomial_tree,
 )
-from quant import openai_query
+from quant import openai_query, render_model_selection
 from db import init_db, load_analyses
 
 
@@ -329,26 +329,64 @@ def _ensure_position_columns(df: pd.DataFrame) -> pd.DataFrame:
         work_df["volume"] = work_df["volume"].fillna(0)
 
     # Derive exposures when the upstream payload does not pre-compute them
-    gamma_series = work_df.get("gamma", pd.Series(0, index=work_df.index)).fillna(0)
-    delta_series = work_df.get("delta", pd.Series(0, index=work_df.index)).fillna(0)
-
-    if "GammaExposure" not in work_df.columns:
-        work_df["GammaExposure"] = (
-            gamma_series * work_df["open_interest"] * work_df["contract_size"]
-        )
+    gamma_raw = work_df.get("gamma")
+    if gamma_raw is None:
+        gamma_raw = pd.Series(0.0, index=work_df.index)
+        gamma_available = False
     else:
-        work_df["GammaExposure"] = work_df["GammaExposure"].fillna(0)
+        gamma_raw = gamma_raw.fillna(0.0)
+        gamma_available = not gamma_raw.eq(0).all()
 
-    if "DeltaExposure" not in work_df.columns:
-        work_df["DeltaExposure"] = (
-            delta_series * work_df["open_interest"] * work_df["contract_size"]
-        )
+    delta_raw = work_df.get("delta")
+    if delta_raw is None:
+        delta_raw = pd.Series(0.0, index=work_df.index)
+        delta_available = False
     else:
-        work_df["DeltaExposure"] = work_df["DeltaExposure"].fillna(0)
+        delta_raw = delta_raw.fillna(0.0)
+        delta_available = not delta_raw.eq(0).all()
+
+    open_interest = work_df["open_interest"].astype(float)
+    contract_size = work_df["contract_size"].astype(float)
+
+    gamma_exposure = gamma_raw * open_interest * contract_size
+    delta_exposure = delta_raw * open_interest * contract_size
 
     if "option_type" in work_df.columns:
         put_mask = work_df["option_type"] == "put"
-        work_df.loc[put_mask, ["GammaExposure", "DeltaExposure"]] *= -1
+        if put_mask.any():
+            gamma_exposure.loc[put_mask] *= -1
+
+    existing_gamma = work_df.get("GammaExposure")
+    if existing_gamma is None:
+        work_df["GammaExposure"] = gamma_exposure
+    else:
+        existing_gamma = existing_gamma.fillna(0.0)
+        needs_gamma_fix = False
+        if gamma_available:
+            if (gamma_exposure < 0).any() and not (existing_gamma < 0).any():
+                needs_gamma_fix = True
+            elif (gamma_exposure > 0).any() and not (existing_gamma > 0).any():
+                needs_gamma_fix = True
+        if needs_gamma_fix:
+            work_df["GammaExposure"] = gamma_exposure
+        else:
+            work_df["GammaExposure"] = existing_gamma
+
+    existing_delta = work_df.get("DeltaExposure")
+    if existing_delta is None:
+        work_df["DeltaExposure"] = delta_exposure
+    else:
+        existing_delta = existing_delta.fillna(0.0)
+        needs_delta_fix = False
+        if delta_available:
+            if (delta_exposure < 0).any() and not (existing_delta < 0).any():
+                needs_delta_fix = True
+            if (delta_exposure > 0).any() and not (existing_delta > 0).any():
+                needs_delta_fix = True
+        if needs_delta_fix:
+            work_df["DeltaExposure"] = delta_exposure
+        else:
+            work_df["DeltaExposure"] = existing_delta
 
     return work_df
 
@@ -450,7 +488,12 @@ def prepare_strike_metric(
     return grouped[["Strike", "Value", "RawValue"]], value_label, label, theme
 
 
-def prepare_expiration_metric(df_raw, view_mode, option_focus="both"):
+def prepare_expiration_metric(
+    df_raw,
+    view_mode,
+    option_focus="both",
+    signed_view=False,
+):
     df = _ensure_position_columns(df_raw)
     df["DTE"] = df.get("DTE", 0).fillna(0).astype(int)
     df["expiration_label"] = df.get("expiration_label", "").astype(str)
@@ -485,24 +528,31 @@ def prepare_expiration_metric(df_raw, view_mode, option_focus="both"):
         work_df[value_col] = 0.0
 
     if value_col in {"GammaExposure", "DeltaExposure"}:
-        work_df["abs_value"] = work_df[value_col].abs() / 1e6
-        work_df["raw_value"] = work_df[value_col] / 1e6
-        value_label = f"{label} (|$M|)"
+        work_df["base_value"] = work_df[value_col] / 1e6
+        work_df["display_value"] = (
+            work_df["base_value"] if signed_view else work_df["base_value"].abs()
+        )
+        value_label = f"{label} ($M)" if signed_view else f"{label} (|$M|)"
     else:
-        work_df["abs_value"] = work_df[value_col]
-        work_df["raw_value"] = work_df[value_col]
+        work_df["base_value"] = work_df[value_col]
+        work_df["display_value"] = work_df["base_value"]
         value_label = label
 
     group_cols = ["expiration_date", "expiration_label", "DTE", "expiration_display"]
     grouped = (
         work_df.groupby(group_cols)
-        .agg(Value=("abs_value", "sum"), RawValue=("raw_value", "sum"))
+        .agg(Value=("display_value", "sum"), RawValue=("base_value", "sum"))
         .reset_index()
     )
 
     if grouped.empty:
         empty = grouped.rename(columns={"expiration_display": "Expiration"})
-        return empty[[col for col in ["Expiration", "Value"] if col in empty.columns]], value_label, label, color_scale
+        return (
+            empty[[col for col in ["Expiration", "Value"] if col in empty.columns]],
+            value_label,
+            label,
+            theme,
+        )
 
     chart_df = grouped.sort_values("expiration_date").rename(
         columns={"expiration_display": "Expiration"}
@@ -1045,10 +1095,12 @@ with tab2:
                         value_fmt = ".2f" if chart_metric in {"Gamma Exposure", "Delta Exposure"} else ",.0f"
                         signed_fmt = "+,.2f" if chart_metric in {"Gamma Exposure", "Delta Exposure"} else "+,.0f"
                         if lens_mode == "Strike lens":
+                            signed_view = chart_metric in {"Gamma Exposure", "Delta Exposure"}
                             chart_df, value_label, label, theme = prepare_strike_metric(
                                 df,
                                 chart_metric,
                                 option_focus,
+                                signed_view=signed_view,
                             )
                             if chart_df.empty:
                                 st.warning("No data available for this view.")
@@ -1091,14 +1143,21 @@ with tab2:
                                         font=dict(color="#e2e8f0"),
                                     ),
                                 )
-                                fig.update_xaxes(title=value_label, tickfont=dict(color="#e2e8f0"))
+                                fig.update_xaxes(
+                                    title=value_label,
+                                    tickfont=dict(color="#e2e8f0"),
+                                    zeroline=True,
+                                    zerolinecolor="#94a3b8",
+                                )
                                 fig.update_yaxes(tickfont=dict(size=14, color="#e2e8f0"))
                                 st.plotly_chart(fig, use_container_width=True)
                         else:
+                            signed_view = chart_metric in {"Gamma Exposure", "Delta Exposure"}
                             chart_df, value_label, label, theme = prepare_expiration_metric(
                                 df,
                                 chart_metric,
                                 option_focus,
+                                signed_view=signed_view,
                             )
                             if chart_df.empty:
                                 st.warning("No data available for this view.")
@@ -1134,7 +1193,12 @@ with tab2:
                                     showlegend=False,
                                 )
                                 fig.update_xaxes(tickfont=dict(color="#e2e8f0"))
-                                fig.update_yaxes(title=value_label, tickfont=dict(color="#e2e8f0"))
+                                fig.update_yaxes(
+                                    title=value_label,
+                                    tickfont=dict(color="#e2e8f0"),
+                                    zeroline=True,
+                                    zerolinecolor="#94a3b8",
+                                )
                                 st.plotly_chart(fig, use_container_width=True)
 
                         st.markdown("</div>", unsafe_allow_html=True)
@@ -1481,26 +1545,28 @@ if enable_ai and ai_tab:
         if "want_ai" not in st.session_state:
             st.session_state.want_ai = False
 
+        openai_creds, selected_model = render_model_selection(ticker, selected_exps)
+
         if st.button("Prepare AI Analysis"):
             st.session_state.want_ai = True
 
         if st.session_state.want_ai:
-            openai_query(
-                df,
-                iv_skew_df,
-                vol_ratio,
-                oi_ratio,
-                articles,
-                spot,
-                offset,
-                ticker,
-                selected_exps,
-            )
-
-        if st.session_state.want_ai and st.button("Cancel AI Preparation"):
-            st.session_state.want_ai = False
-            st.session_state.pop("ai_model_confirmed", None)
-            st.session_state.pop("ai_selected_model", None)
+            if st.button("Cancel AI Preparation", key="cancel_ai_preparation"):
+                st.session_state.want_ai = False
+            else:
+                openai_query(
+                    df,
+                    iv_skew_df,
+                    vol_ratio,
+                    oi_ratio,
+                    articles,
+                    spot,
+                    offset,
+                    ticker,
+                    selected_exps,
+                    selected_model,
+                    openai_creds,
+                )
 
         st.markdown("---")
         st.header("📚 Past AI Analyses")

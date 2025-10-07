@@ -7,7 +7,8 @@ from db import save_analysis, get_total_token_usage
 import yaml
 import os
 import textwrap
-from typing import Optional, Dict, List, Tuple
+from html import escape
+from typing import Optional, Dict, List, Tuple, Sequence
 
 
 # Load configuration from YAML file
@@ -443,17 +444,234 @@ def call_openai_api(data_packet, creds, model_name: str):
         return None
 
 # Refactored openai_query function
-def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset, ticker, exp):
-    openai_creds = resolve_openai_credentials()
+def _build_ai_form_key(label: str, ticker: str, exp: Optional[Sequence[str]]) -> str:
+    exp_fragment = "-".join(exp) if isinstance(exp, (list, tuple)) else (str(exp) if exp else "")
+    return f"{label}_{ticker}_{exp_fragment}" if exp_fragment else f"{label}_{ticker}"
 
-    api_key = openai_creds.get("api_key")
+
+def _render_model_discovery_table(models: Sequence[Dict[str, object]]) -> str:
+    """Return HTML for a stylised model discovery table."""
+
+    table_style = """
+    <style>
+        .model-discovery-card {
+            margin-top: 0.85rem;
+            border-radius: 18px;
+            padding: 1rem 1.25rem 0.75rem;
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            box-shadow: 0 20px 42px rgba(2, 6, 23, 0.42);
+        }
+
+        .model-discovery-card__table {
+            max-height: 320px;
+            overflow-y: auto;
+            margin: 0 -0.5rem;
+            padding: 0 0.5rem;
+        }
+
+        .model-discovery-card__table::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .model-discovery-card__table::-webkit-scrollbar-thumb {
+            background: rgba(148, 163, 184, 0.35);
+            border-radius: 999px;
+        }
+
+        .model-discovery-card table {
+            width: 100%;
+            border-collapse: collapse;
+            min-width: 100%;
+        }
+
+        .model-discovery-card thead th {
+            position: sticky;
+            top: 0;
+            text-transform: uppercase;
+            font-size: 0.72rem;
+            letter-spacing: 0.08em;
+            color: #a5b4fc;
+            padding: 0.65rem 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+            background: rgba(15, 23, 42, 0.96);
+            backdrop-filter: blur(6px);
+        }
+
+        .model-discovery-card tbody td {
+            padding: 0.85rem 0.75rem;
+            font-size: 0.92rem;
+            color: #e2e8f0;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+        }
+
+        .model-discovery-card tbody tr:last-child td {
+            border-bottom: none;
+        }
+
+        .model-discovery-card__table::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .model-discovery-card .model-rank {
+            width: 3.25rem;
+            font-weight: 600;
+            color: #94a3b8;
+        }
+
+        .model-discovery-card .model-id {
+            font-family: "JetBrains Mono", "Fira Code", "SFMono-Regular", monospace;
+            font-size: 0.95rem;
+            font-weight: 600;
+        }
+
+        .model-discovery-card .model-score {
+            font-weight: 600;
+            color: #38bdf8;
+        }
+
+        .model-discovery-card .model-strengths {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+        }
+
+        .model-discovery-card .model-strength {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.2rem 0.55rem;
+            border-radius: 999px;
+            background: rgba(59, 130, 246, 0.18);
+            border: 1px solid rgba(96, 165, 250, 0.35);
+            font-size: 0.75rem;
+            color: #bfdbfe;
+            white-space: nowrap;
+        }
+
+        .model-discovery-card tr.model-row--top td {
+            position: relative;
+            background: linear-gradient(135deg, rgba(56, 189, 248, 0.18), rgba(14, 165, 233, 0.12));
+            border-bottom-color: rgba(56, 189, 248, 0.26);
+        }
+
+        .model-discovery-card tr.model-row--top td:first-child {
+            border-top-left-radius: 12px;
+        }
+
+        .model-discovery-card tr.model-row--top td:last-child {
+            border-top-right-radius: 12px;
+        }
+
+        @media (max-width: 768px) {
+            .model-discovery-card table,
+            .model-discovery-card tbody,
+            .model-discovery-card tr,
+            .model-discovery-card td,
+            .model-discovery-card thead {
+                display: block;
+            }
+
+            .model-discovery-card thead {
+                display: none;
+            }
+
+            .model-discovery-card__table {
+                max-height: none;
+                margin: 0;
+                padding: 0;
+            }
+
+            .model-discovery-card tbody td {
+                border-bottom: none;
+                padding: 0.45rem 0;
+            }
+
+            .model-discovery-card tbody tr {
+                padding: 0.65rem 0;
+                border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+            }
+
+            .model-discovery-card .model-strengths {
+                margin-top: 0.4rem;
+            }
+        }
+    </style>
+    """
+
+    row_template = (
+        "<tr class=\"{row_class}\">\n"
+        "  <td class=\"model-rank\">#{rank:02d}</td>\n"
+        "  <td class=\"model-id\">{model_id}</td>\n"
+        "  <td class=\"model-score\">{score}</td>\n"
+        "  <td>\n"
+        "    <div class=\"model-strengths\">{strengths}</div>\n"
+        "  </td>\n"
+        "</tr>"
+    )
+
+    rows_html: List[str] = []
+    for index, entry in enumerate(models, start=1):
+        model_id = escape(str(entry.get("id", "")))
+        raw_score = entry.get("score", "")
+        if isinstance(raw_score, (int, float)):
+            score = f"{raw_score:.1f}"
+        else:
+            score = escape(str(raw_score))
+
+        reasons = entry.get("reasons") or []
+        badges = "".join(
+            f'<span class="model-strength">{escape(str(reason))}</span>'
+            for reason in reasons
+        )
+
+        row_class = "model-row model-row--top" if index == 1 else "model-row"
+        if not badges:
+            badges = '<span class="model-strength">General purpose</span>'
+
+        rows_html.append(
+            row_template.format(
+                row_class=row_class,
+                rank=index,
+                model_id=model_id,
+                score=score,
+                strengths=badges,
+            )
+        )
+
+    rows_markup = "\n".join(rows_html)
+    rows_section = f"{rows_markup}\n" if rows_markup else ""
+    table_html = (
+        "<div class=\"model-discovery-card\">\n"
+        "<div class=\"model-discovery-card__table\">\n"
+        "<table>\n"
+        "<thead>\n"
+        "<tr>\n"
+        "<th>Rank</th>\n"
+        "<th>Model</th>\n"
+        "<th>Score</th>\n"
+        "<th>Highlights</th>\n"
+        "</tr>\n"
+        "</thead>\n"
+        "<tbody>\n"
+        f"{rows_section}"
+        "</tbody>\n"
+        "</table>\n"
+        "</div>\n"
+        "</div>"
+    )
+
+    return textwrap.dedent(table_style) + table_html
+
+
+def render_model_selection(ticker: str, exp, creds: Optional[Dict[str, Optional[str]]] = None):
+    """Render model discovery and selection UI, returning creds and chosen model."""
+
+    openai_creds = creds or resolve_openai_credentials()
+    api_key = openai_creds.get("api_key") if isinstance(openai_creds, dict) else None
     if not api_key:
         st.error("OpenAI API key is not configured.")
-        return
-
-    def _build_form_key(label: str) -> str:
-        exp_fragment = "-".join(exp) if isinstance(exp, list) else str(exp)
-        return f"{label}_{ticker}_{exp_fragment}" if exp_fragment else f"{label}_{ticker}"
+        return openai_creds, None
 
     st.subheader("Model Discovery")
     models, discovery_error = discover_financial_models(openai_creds)
@@ -464,29 +682,13 @@ def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset
         )
 
     if models:
-        display_rows = [
-            {
-                "Model": entry["id"],
-                "Score": f"{entry['score']:.1f}",
-                "Strengths": ", ".join(entry["reasons"]),
-            }
-            for entry in models
-        ]
-        st.dataframe(
-            pd.DataFrame(display_rows),
-            use_container_width=True,
-            hide_index=True,
-        )
+        st.markdown(_render_model_discovery_table(models), unsafe_allow_html=True)
     else:
         st.info(
             "Using fallback model suggestions because no suitable models were returned."
         )
 
-    candidate_ids = [entry["id"] for entry in models]
-    default_model = st.session_state.get(
-        "ai_selected_model",
-        CONFIG.get("openai", {}).get("model", "gpt-4o"),
-    )
+    candidate_ids = [entry["id"] for entry in models] if models else []
     fallback_pool = [
         CONFIG.get("openai", {}).get("model", "gpt-4o"),
         "gpt-4o-mini",
@@ -494,7 +696,6 @@ def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset
         "o4-mini",
     ]
     options = candidate_ids or fallback_pool
-    # De-duplicate while preserving order.
     seen = set()
     unique_options = []
     for model_id in options:
@@ -504,42 +705,55 @@ def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset
 
     if not unique_options:
         st.error("No OpenAI models are available to select.")
-        return
+        return openai_creds, None
 
-    try:
-        default_index = unique_options.index(default_model)
-    except ValueError:
-        default_index = 0
+    default_model = st.session_state.get(
+        "ai_selected_model",
+        CONFIG.get("openai", {}).get("model", unique_options[0]),
+    )
+    if default_model not in unique_options:
+        default_model = unique_options[0]
 
-    selection_form_key = _build_form_key("ai_model_select")
-    with st.form(selection_form_key):
-        chosen_model = st.selectbox(
-            "Select an OpenAI model for the financial analysis",
-            unique_options,
-            index=default_index,
-        )
-        confirm_model = st.form_submit_button("Use this model")
+    selection_key = _build_ai_form_key("ai_model_select", ticker, exp)
+    if selection_key not in st.session_state:
+        st.session_state[selection_key] = default_model
 
-    if confirm_model:
-        st.session_state["ai_selected_model"] = chosen_model
-        st.session_state["ai_model_confirmed"] = True
-        st.success(f"Model `{chosen_model}` selected. Continue below to review the payload.")
-
-    if not st.session_state.get("ai_model_confirmed"):
-        st.info("Confirm the model selection above to generate the AI payload preview.")
-        return
-
-    selected_model = st.session_state.get("ai_selected_model", unique_options[default_index])
-
+    chosen_model = st.selectbox(
+        "Select an OpenAI model for the financial analysis",
+        unique_options,
+        key=selection_key,
+    )
+    st.session_state["ai_selected_model"] = chosen_model
     st.caption(
         "Models are ranked heuristically based on reasoning strength, finance-focused naming, and cost tier."
     )
-    st.markdown(f"**Using model:** `{selected_model}`")
 
-    reset_key = _build_form_key("ai_model_reset")
-    if st.button("Choose a different model", key=reset_key):
-        st.session_state["ai_model_confirmed"] = False
+    return openai_creds, chosen_model
+
+
+def openai_query(
+    df_net,
+    iv_skew_df,
+    vol_ratio,
+    oi_ratio,
+    articles,
+    spot,
+    offset,
+    ticker,
+    exp,
+    selected_model,
+    openai_creds,
+):
+    api_key = openai_creds.get("api_key") if isinstance(openai_creds, dict) else None
+    if not api_key:
+        st.error("OpenAI API key is not configured.")
         return
+
+    if not selected_model:
+        st.error("Select an OpenAI model before preparing the analysis.")
+        return
+
+    st.markdown(f"**Using model:** `{selected_model}`")
 
     if not df_net.empty:
         df_net = df_net[(df_net['strike'] >= spot-offset) & (df_net['strike'] <= spot+offset)]
@@ -585,7 +799,7 @@ def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset
 
     st.info("Review the prepared data packet and estimated usage before proceeding.")
 
-    form_key = _build_form_key("ai_confirmation")
+    form_key = _build_ai_form_key("ai_confirmation", ticker, exp)
     with st.form(form_key):
         proceed = st.checkbox("I have reviewed the packet and wish to proceed with the OpenAI request.")
         pin_entry = st.text_input("Enter security PIN", type="password")
