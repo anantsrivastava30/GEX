@@ -234,12 +234,71 @@ def _display_expiration_label(label: str, dte: int) -> str:
     return f"{label} · {dte} DTE"
 
 
+def _ensure_position_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Guarantee exposure, OI, and volume columns exist before chart prep."""
+
+    work_df = df.copy()
+
+    # Normalise option type for consistent sign handling
+    if "option_type" in work_df.columns:
+        work_df["option_type"] = work_df["option_type"].astype(str).str.lower()
+
+    # Contract size defaults to 100 when not supplied
+    if "contract_size" not in work_df.columns:
+        work_df["contract_size"] = 100
+    else:
+        work_df["contract_size"] = (
+            work_df["contract_size"].fillna(100).replace(0, 100)
+        )
+
+    # Ensure open interest/volume exist for aggregation views
+    if "open_interest" not in work_df.columns:
+        alt_open_interest = work_df.get("openInterest")
+        if alt_open_interest is not None:
+            work_df["open_interest"] = alt_open_interest.fillna(0)
+        else:
+            work_df["open_interest"] = 0.0
+    else:
+        work_df["open_interest"] = work_df["open_interest"].fillna(0)
+
+    if "volume" not in work_df.columns:
+        alt_volume = work_df.get("trade_volume")
+        if alt_volume is not None:
+            work_df["volume"] = alt_volume.fillna(0)
+        else:
+            work_df["volume"] = 0.0
+    else:
+        work_df["volume"] = work_df["volume"].fillna(0)
+
+    # Derive exposures when the upstream payload does not pre-compute them
+    gamma_series = work_df.get("gamma", pd.Series(0, index=work_df.index)).fillna(0)
+    delta_series = work_df.get("delta", pd.Series(0, index=work_df.index)).fillna(0)
+
+    if "GammaExposure" not in work_df.columns:
+        work_df["GammaExposure"] = (
+            gamma_series * work_df["open_interest"] * work_df["contract_size"]
+        )
+    else:
+        work_df["GammaExposure"] = work_df["GammaExposure"].fillna(0)
+
+    if "DeltaExposure" not in work_df.columns:
+        work_df["DeltaExposure"] = (
+            delta_series * work_df["open_interest"] * work_df["contract_size"]
+        )
+    else:
+        work_df["DeltaExposure"] = work_df["DeltaExposure"].fillna(0)
+
+    if "option_type" in work_df.columns:
+        put_mask = work_df["option_type"] == "put"
+        work_df.loc[put_mask, ["GammaExposure", "DeltaExposure"]] *= -1
+
+    return work_df
+
+
 def prepare_strike_metric(df_raw, view_mode, option_focus="both"):
-    df = df_raw.copy()
-    if "option_type" in df.columns:
-        df["option_type"] = df["option_type"].astype(str).str.lower()
-    df["DTE"] = df["DTE"].fillna(0).astype(int)
-    df["expiration_label"] = df["expiration_label"].astype(str)
+    df = _ensure_position_columns(df_raw)
+    df["DTE"] = df.get("DTE", 0).fillna(0).astype(int)
+    df["expiration_label"] = df.get("expiration_label", "").astype(str)
     df["expiration_display"] = df.apply(
         lambda row: _display_expiration_label(row["expiration_label"], row["DTE"]), axis=1
     )
@@ -264,6 +323,9 @@ def prepare_strike_metric(df_raw, view_mode, option_focus="both"):
         work_df = work_df[work_df["option_type"] == focus]
     elif focus == "both" and "option_type" in work_df.columns:
         work_df = work_df[work_df["option_type"].isin(["call", "put"])]
+
+    if value_col not in work_df.columns:
+        work_df[value_col] = 0.0
 
     if value_col in {"GammaExposure", "DeltaExposure"}:
         work_df["abs_value"] = work_df[value_col].abs() / 1e6
@@ -297,11 +359,9 @@ def prepare_strike_metric(df_raw, view_mode, option_focus="both"):
 
 
 def prepare_expiration_metric(df_raw, view_mode, option_focus="both"):
-    df = df_raw.copy()
-    if "option_type" in df.columns:
-        df["option_type"] = df["option_type"].astype(str).str.lower()
-    df["DTE"] = df["DTE"].fillna(0).astype(int)
-    df["expiration_label"] = df["expiration_label"].astype(str)
+    df = _ensure_position_columns(df_raw)
+    df["DTE"] = df.get("DTE", 0).fillna(0).astype(int)
+    df["expiration_label"] = df.get("expiration_label", "").astype(str)
     df["expiration_display"] = df.apply(
         lambda row: _display_expiration_label(row["expiration_label"], row["DTE"]), axis=1
     )
@@ -326,6 +386,9 @@ def prepare_expiration_metric(df_raw, view_mode, option_focus="both"):
         work_df = work_df[work_df["option_type"] == focus]
     elif focus == "both" and "option_type" in work_df.columns:
         work_df = work_df[work_df["option_type"].isin(["call", "put"])]
+
+    if value_col not in work_df.columns:
+        work_df[value_col] = 0.0
 
     if value_col in {"GammaExposure", "DeltaExposure"}:
         work_df["abs_value"] = work_df[value_col].abs() / 1e6
