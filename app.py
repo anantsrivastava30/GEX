@@ -27,7 +27,7 @@ from utils import (
     generate_binomial_tree,
     plot_binomial_tree,
 )
-from quant import openai_query
+from quant import openai_query, render_model_selection
 from db import init_db, load_analyses
 
 
@@ -1481,26 +1481,28 @@ if enable_ai and ai_tab:
         if "want_ai" not in st.session_state:
             st.session_state.want_ai = False
 
+        openai_creds, selected_model = render_model_selection(ticker, selected_exps)
+
         if st.button("Prepare AI Analysis"):
             st.session_state.want_ai = True
 
         if st.session_state.want_ai:
-            openai_query(
-                df,
-                iv_skew_df,
-                vol_ratio,
-                oi_ratio,
-                articles,
-                spot,
-                offset,
-                ticker,
-                selected_exps,
-            )
-
-        if st.session_state.want_ai and st.button("Cancel AI Preparation"):
-            st.session_state.want_ai = False
-            st.session_state.pop("ai_model_confirmed", None)
-            st.session_state.pop("ai_selected_model", None)
+            if st.button("Cancel AI Preparation", key="cancel_ai_preparation"):
+                st.session_state.want_ai = False
+            else:
+                openai_query(
+                    df,
+                    iv_skew_df,
+                    vol_ratio,
+                    oi_ratio,
+                    articles,
+                    spot,
+                    offset,
+                    ticker,
+                    selected_exps,
+                    selected_model,
+                    openai_creds,
+                )
 
         st.markdown("---")
         st.header("📚 Past AI Analyses")

@@ -7,7 +7,7 @@ from db import save_analysis, get_total_token_usage
 import yaml
 import os
 import textwrap
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List, Tuple, Sequence
 
 
 # Load configuration from YAML file
@@ -443,17 +443,19 @@ def call_openai_api(data_packet, creds, model_name: str):
         return None
 
 # Refactored openai_query function
-def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset, ticker, exp):
-    openai_creds = resolve_openai_credentials()
+def _build_ai_form_key(label: str, ticker: str, exp: Optional[Sequence[str]]) -> str:
+    exp_fragment = "-".join(exp) if isinstance(exp, (list, tuple)) else (str(exp) if exp else "")
+    return f"{label}_{ticker}_{exp_fragment}" if exp_fragment else f"{label}_{ticker}"
 
-    api_key = openai_creds.get("api_key")
+
+def render_model_selection(ticker: str, exp, creds: Optional[Dict[str, Optional[str]]] = None):
+    """Render model discovery and selection UI, returning creds and chosen model."""
+
+    openai_creds = creds or resolve_openai_credentials()
+    api_key = openai_creds.get("api_key") if isinstance(openai_creds, dict) else None
     if not api_key:
         st.error("OpenAI API key is not configured.")
-        return
-
-    def _build_form_key(label: str) -> str:
-        exp_fragment = "-".join(exp) if isinstance(exp, list) else str(exp)
-        return f"{label}_{ticker}_{exp_fragment}" if exp_fragment else f"{label}_{ticker}"
+        return openai_creds, None
 
     st.subheader("Model Discovery")
     models, discovery_error = discover_financial_models(openai_creds)
@@ -482,11 +484,7 @@ def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset
             "Using fallback model suggestions because no suitable models were returned."
         )
 
-    candidate_ids = [entry["id"] for entry in models]
-    default_model = st.session_state.get(
-        "ai_selected_model",
-        CONFIG.get("openai", {}).get("model", "gpt-4o"),
-    )
+    candidate_ids = [entry["id"] for entry in models] if models else []
     fallback_pool = [
         CONFIG.get("openai", {}).get("model", "gpt-4o"),
         "gpt-4o-mini",
@@ -494,7 +492,6 @@ def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset
         "o4-mini",
     ]
     options = candidate_ids or fallback_pool
-    # De-duplicate while preserving order.
     seen = set()
     unique_options = []
     for model_id in options:
@@ -504,42 +501,55 @@ def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset
 
     if not unique_options:
         st.error("No OpenAI models are available to select.")
-        return
+        return openai_creds, None
 
-    try:
-        default_index = unique_options.index(default_model)
-    except ValueError:
-        default_index = 0
+    default_model = st.session_state.get(
+        "ai_selected_model",
+        CONFIG.get("openai", {}).get("model", unique_options[0]),
+    )
+    if default_model not in unique_options:
+        default_model = unique_options[0]
 
-    selection_form_key = _build_form_key("ai_model_select")
-    with st.form(selection_form_key):
-        chosen_model = st.selectbox(
-            "Select an OpenAI model for the financial analysis",
-            unique_options,
-            index=default_index,
-        )
-        confirm_model = st.form_submit_button("Use this model")
+    selection_key = _build_ai_form_key("ai_model_select", ticker, exp)
+    if selection_key not in st.session_state:
+        st.session_state[selection_key] = default_model
 
-    if confirm_model:
-        st.session_state["ai_selected_model"] = chosen_model
-        st.session_state["ai_model_confirmed"] = True
-        st.success(f"Model `{chosen_model}` selected. Continue below to review the payload.")
-
-    if not st.session_state.get("ai_model_confirmed"):
-        st.info("Confirm the model selection above to generate the AI payload preview.")
-        return
-
-    selected_model = st.session_state.get("ai_selected_model", unique_options[default_index])
-
+    chosen_model = st.selectbox(
+        "Select an OpenAI model for the financial analysis",
+        unique_options,
+        key=selection_key,
+    )
+    st.session_state["ai_selected_model"] = chosen_model
     st.caption(
         "Models are ranked heuristically based on reasoning strength, finance-focused naming, and cost tier."
     )
-    st.markdown(f"**Using model:** `{selected_model}`")
 
-    reset_key = _build_form_key("ai_model_reset")
-    if st.button("Choose a different model", key=reset_key):
-        st.session_state["ai_model_confirmed"] = False
+    return openai_creds, chosen_model
+
+
+def openai_query(
+    df_net,
+    iv_skew_df,
+    vol_ratio,
+    oi_ratio,
+    articles,
+    spot,
+    offset,
+    ticker,
+    exp,
+    selected_model,
+    openai_creds,
+):
+    api_key = openai_creds.get("api_key") if isinstance(openai_creds, dict) else None
+    if not api_key:
+        st.error("OpenAI API key is not configured.")
         return
+
+    if not selected_model:
+        st.error("Select an OpenAI model before preparing the analysis.")
+        return
+
+    st.markdown(f"**Using model:** `{selected_model}`")
 
     if not df_net.empty:
         df_net = df_net[(df_net['strike'] >= spot-offset) & (df_net['strike'] <= spot+offset)]
@@ -585,7 +595,7 @@ def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset
 
     st.info("Review the prepared data packet and estimated usage before proceeding.")
 
-    form_key = _build_form_key("ai_confirmation")
+    form_key = _build_ai_form_key("ai_confirmation", ticker, exp)
     with st.form(form_key):
         proceed = st.checkbox("I have reviewed the packet and wish to proceed with the OpenAI request.")
         pin_entry = st.text_input("Enter security PIN", type="password")
