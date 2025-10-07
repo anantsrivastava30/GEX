@@ -1,7 +1,5 @@
-import requests
 from openai import OpenAI
 import tiktoken
-from datetime import datetime, timedelta
 from helpers import get_market_snapshot, augment_payload_with_extras
 import streamlit as st
 import pandas as pd
@@ -9,6 +7,7 @@ from db import save_analysis, get_total_token_usage
 import yaml
 import os
 import textwrap
+from typing import Optional, Dict, List, Tuple
 
 
 # Load configuration from YAML file
@@ -17,6 +16,143 @@ with open(os.path.join(os.path.dirname(__file__), "config.yaml"), "r") as f:
 
 
 # New helper functions for modularized markdown building
+
+
+def _resolve_secret(*names):
+    for name in names:
+        try:
+            value = st.secrets[name]
+        except Exception:
+            value = None
+        if value:
+            return value
+    return None
+
+
+def resolve_openai_credentials() -> Dict[str, Optional[str]]:
+    """Return OpenAI credentials from secrets/environment with normalisation."""
+
+    api_key = _resolve_secret("OPENAI_API_KEY", "openai_api_key", "OPENAI_KEY")
+    if not api_key:
+        api_key = os.getenv("OPENAI_API_KEY")
+    api_key = api_key.strip() if isinstance(api_key, str) else None
+
+    organization = _resolve_secret("OPENAI_ORG", "OPENAI_ORGANIZATION")
+    if not organization:
+        organization = os.getenv("OPENAI_ORG") or os.getenv("OPENAI_ORGANIZATION")
+    organization = organization.strip() if isinstance(organization, str) else None
+
+    project = _resolve_secret("OPENAI_PROJECT", "OPENAI_DEFAULT_PROJECT")
+    if not project:
+        project = os.getenv("OPENAI_PROJECT") or os.getenv("OPENAI_DEFAULT_PROJECT")
+    project = project.strip() if isinstance(project, str) else None
+
+    return {
+        "api_key": api_key,
+        "organization": organization,
+        "project": project,
+    }
+
+
+def _is_model_excluded(model_id: str) -> bool:
+    """Return True when the model clearly does not support text advice."""
+
+    excluded_keywords = [
+        "embedding",
+        "audio",
+        "image",
+        "vision",
+        "whisper",
+        "tts",
+        "realtime",
+        "omni-moderation",
+        "moderation",
+    ]
+    lowered = model_id.lower()
+    return any(keyword in lowered for keyword in excluded_keywords)
+
+
+def _score_model(model_id: str) -> Tuple[float, List[str]]:
+    """Assign a heuristic score and justification for a model identifier."""
+
+    lowered = model_id.lower()
+    score = 0.0
+    reasons: List[str] = []
+
+    quality_rules = [
+        ("gpt-4.1", 6, "Latest GPT-4.1 reasoning tier"),
+        ("gpt-4o", 5, "GPT-4o balanced reasoning and cost"),
+        ("o4", 4, "o4 reasoning family"),
+        ("o3", 3, "o3 reasoning tuned for analysis"),
+        ("o1", 2, "o1 reasoning model"),
+        ("gpt-4", 2, "GPT-4 generation"),
+        ("gpt-3.5", 1, "GPT-3.5 generation"),
+    ]
+    for token, weight, reason in quality_rules:
+        if token in lowered:
+            score += weight
+            reasons.append(reason)
+
+    finance_rules = [
+        ("finance", 3, "Finance-tuned variant"),
+        ("market", 2, "Market or trading focused naming"),
+        ("analysis", 1, "Optimised for analytical tasks"),
+        ("research", 1, "Research oriented variant"),
+    ]
+    for token, weight, reason in finance_rules:
+        if token in lowered:
+            score += weight
+            reasons.append(reason)
+
+    if "mini" in lowered:
+        score -= 1
+        reasons.append("Cost-efficient mini tier")
+
+    if not reasons:
+        reasons.append("General purpose reasoning model")
+
+    return max(score, 0.0), reasons
+
+
+def discover_financial_models(creds: Dict[str, Optional[str]]) -> Tuple[List[Dict[str, object]], Optional[str]]:
+    """Return OpenAI models ranked for financial analysis tasks."""
+
+    api_key = creds.get("api_key") if isinstance(creds, dict) else None
+    if not api_key:
+        return [], "Missing API key"
+
+    client_kwargs = {"api_key": api_key}
+    organization = creds.get("organization") if isinstance(creds, dict) else None
+    project = creds.get("project") if isinstance(creds, dict) else None
+    if organization:
+        client_kwargs["organization"] = organization
+    if project:
+        client_kwargs["project"] = project
+
+    try:
+        client = OpenAI(**client_kwargs)
+        response = client.models.list()
+    except Exception as exc:
+        return [], str(exc)
+
+    models: List[Dict[str, object]] = []
+    for item in getattr(response, "data", []):
+        model_id = getattr(item, "id", None)
+        if not model_id:
+            continue
+        if _is_model_excluded(model_id):
+            continue
+        score, reasons = _score_model(model_id)
+        models.append(
+            {
+                "id": model_id,
+                "score": score,
+                "reasons": reasons,
+            }
+        )
+
+    models.sort(key=lambda entry: (entry["score"], entry["id"]), reverse=True)
+    return models, None
 
 def build_header(payload):
     m = []
@@ -202,8 +338,7 @@ def create_data_packet(ticker, overview_summary, pos_summary, iv_summary, ratios
     return {"messages": [system_msg, user_msg]}
 
 # Helper function to estimate token count
-def estimate_token_count(data_packet):
-    model_name = CONFIG.get("openai", {}).get("model", "gpt-4o")
+def estimate_token_count(data_packet, model_name):
     tokens = None
     try:
         enc = tiktoken.encoding_for_model(model_name)
@@ -212,7 +347,7 @@ def estimate_token_count(data_packet):
 
     try:
         tokens = sum(len(enc.encode(m["content"])) for m in data_packet["messages"])
-        st.write(f"Estimated prompt tokens: **{tokens}**")
+        st.write(f"Estimated prompt tokens for `{model_name}`: **{tokens}**")
     except Exception as e:
         print(f"Token estimation error: {e}")
         tokens = None
@@ -220,86 +355,6 @@ def estimate_token_count(data_packet):
     return tokens
 
 
-MODEL_PRICING_PER_MTOKENS = {
-    "gpt-4o": {"input": 5.0, "output": 15.0},
-    "gpt-4o-2024-05-13": {"input": 5.0, "output": 15.0},
-    "gpt-4o-mini": {"input": 0.6, "output": 2.4},
-    "gpt-4.1": {"input": 10.0, "output": 30.0},
-    "gpt-4.1-mini": {"input": 1.5, "output": 6.0},
-}
-
-
-def _normalise_model_key(model_name):
-    return (model_name or "").lower()
-
-
-def get_model_pricing(model_name):
-    key = _normalise_model_key(model_name)
-    if key in MODEL_PRICING_PER_MTOKENS:
-        return MODEL_PRICING_PER_MTOKENS[key]
-    return MODEL_PRICING_PER_MTOKENS.get("gpt-4o")
-
-
-def _get_credit_configuration():
-    openai_cfg = CONFIG.get("openai", {})
-    token_credit = openai_cfg.get("token_credit")
-    credit_usd = openai_cfg.get("credit_usd")
-
-    try:
-        secrets = st.secrets
-        token_credit = secrets.get("OPENAI_TOKEN_CREDIT", token_credit)
-        credit_usd = secrets.get("OPENAI_CREDIT_USD", credit_usd)
-    except Exception:
-        pass
-
-    return {"token_credit": token_credit, "credit_usd": credit_usd}
-
-
-def display_token_budget(tokens_estimated):
-    if tokens_estimated is None:
-        return
-
-    credit_cfg = _get_credit_configuration()
-    token_credit = credit_cfg.get("token_credit")
-    credit_usd = credit_cfg.get("credit_usd")
-
-    if token_credit is None and credit_usd is None:
-        return
-
-    try:
-        total_tokens_used = get_total_token_usage()
-    except Exception as exc:
-        print(f"Token usage aggregation error: {exc}")
-        return
-
-    model_name = CONFIG.get("openai", {}).get("model", "gpt-4o")
-    pricing = get_model_pricing(model_name)
-    projected_usage = total_tokens_used + tokens_estimated
-
-    if token_credit is not None:
-        try:
-            credit_value = float(token_credit)
-        except (TypeError, ValueError):
-            return
-        tokens_remaining = max(credit_value - projected_usage, 0)
-        st.write(
-            f"Estimated tokens remaining before credit exhaustion: **{tokens_remaining:,.0f}**"
-        )
-        return
-
-    if credit_usd is not None and pricing:
-        try:
-            credit_value = float(credit_usd)
-        except (TypeError, ValueError):
-            return
-        usd_spent = (projected_usage / 1_000_000) * pricing["input"]
-        usd_remaining = max(credit_value - usd_spent, 0.0)
-        tokens_per_usd = 1_000_000 / pricing["input"] if pricing["input"] else 0
-        if tokens_per_usd:
-            tokens_remaining = usd_remaining * tokens_per_usd
-            st.write(
-                f"Estimated tokens remaining before credit exhaustion: **{tokens_remaining:,.0f}** (~${usd_remaining:,.2f} remaining)."
-            )
 
 # Helper function to call OpenAI API and return response analysis
 def dummy_response_decorator(func):
@@ -362,12 +417,24 @@ def dummy_response_decorator(func):
     return wrapper
 
 # @dummy_response_decorator
-def call_openai_api(data_packet, api_key):
-    client = OpenAI(api_key=api_key)
-    st.write("model used :", CONFIG.get("openai", {}).get("model", "gpt-4o"))
+def call_openai_api(data_packet, creds, model_name: str):
+    api_key = creds.get("api_key") if isinstance(creds, dict) else None
+    if not api_key:
+        raise ValueError("OpenAI API key is missing; cannot send request.")
+
+    client_kwargs = {"api_key": api_key}
+    organization = creds.get("organization") if isinstance(creds, dict) else None
+    project = creds.get("project") if isinstance(creds, dict) else None
+    if organization:
+        client_kwargs["organization"] = organization
+    if project:
+        client_kwargs["project"] = project
+
+    client = OpenAI(**client_kwargs)
+    st.write("Model used:", model_name)
     try:
         completion = client.chat.completions.create(
-            model=CONFIG.get("openai", {}).get("model", "gpt-4o"),
+            model=model_name,
             messages=data_packet["messages"],
         )
         return completion.choices[0].message.content
@@ -377,7 +444,102 @@ def call_openai_api(data_packet, api_key):
 
 # Refactored openai_query function
 def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset, ticker, exp):
-    api_key = st.secrets.get("OPENAI_API_KEY")
+    openai_creds = resolve_openai_credentials()
+
+    api_key = openai_creds.get("api_key")
+    if not api_key:
+        st.error("OpenAI API key is not configured.")
+        return
+
+    def _build_form_key(label: str) -> str:
+        exp_fragment = "-".join(exp) if isinstance(exp, list) else str(exp)
+        return f"{label}_{ticker}_{exp_fragment}" if exp_fragment else f"{label}_{ticker}"
+
+    st.subheader("Model Discovery")
+    models, discovery_error = discover_financial_models(openai_creds)
+    if discovery_error:
+        st.warning(
+            "Unable to enumerate OpenAI models automatically — falling back to configured defaults.\n"
+            f"Details: {discovery_error}"
+        )
+
+    if models:
+        display_rows = [
+            {
+                "Model": entry["id"],
+                "Score": f"{entry['score']:.1f}",
+                "Strengths": ", ".join(entry["reasons"]),
+            }
+            for entry in models
+        ]
+        st.dataframe(
+            pd.DataFrame(display_rows),
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.info(
+            "Using fallback model suggestions because no suitable models were returned."
+        )
+
+    candidate_ids = [entry["id"] for entry in models]
+    default_model = st.session_state.get(
+        "ai_selected_model",
+        CONFIG.get("openai", {}).get("model", "gpt-4o"),
+    )
+    fallback_pool = [
+        CONFIG.get("openai", {}).get("model", "gpt-4o"),
+        "gpt-4o-mini",
+        "gpt-4.1",
+        "o4-mini",
+    ]
+    options = candidate_ids or fallback_pool
+    # De-duplicate while preserving order.
+    seen = set()
+    unique_options = []
+    for model_id in options:
+        if model_id and model_id not in seen:
+            seen.add(model_id)
+            unique_options.append(model_id)
+
+    if not unique_options:
+        st.error("No OpenAI models are available to select.")
+        return
+
+    try:
+        default_index = unique_options.index(default_model)
+    except ValueError:
+        default_index = 0
+
+    selection_form_key = _build_form_key("ai_model_select")
+    with st.form(selection_form_key):
+        chosen_model = st.selectbox(
+            "Select an OpenAI model for the financial analysis",
+            unique_options,
+            index=default_index,
+        )
+        confirm_model = st.form_submit_button("Use this model")
+
+    if confirm_model:
+        st.session_state["ai_selected_model"] = chosen_model
+        st.session_state["ai_model_confirmed"] = True
+        st.success(f"Model `{chosen_model}` selected. Continue below to review the payload.")
+
+    if not st.session_state.get("ai_model_confirmed"):
+        st.info("Confirm the model selection above to generate the AI payload preview.")
+        return
+
+    selected_model = st.session_state.get("ai_selected_model", unique_options[default_index])
+
+    st.caption(
+        "Models are ranked heuristically based on reasoning strength, finance-focused naming, and cost tier."
+    )
+    st.markdown(f"**Using model:** `{selected_model}`")
+
+    reset_key = _build_form_key("ai_model_reset")
+    if st.button("Choose a different model", key=reset_key):
+        st.session_state["ai_model_confirmed"] = False
+        return
 
     if not df_net.empty:
         df_net = df_net[(df_net['strike'] >= spot-offset) & (df_net['strike'] <= spot+offset)]
@@ -407,22 +569,61 @@ def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset
     )
     snap_summary = payload_to_markdown(snapshot)
     
-    data_packet = create_data_packet(ticker, overview_summary, pos_summary, iv_summary, ratios_summary, news_summary, snap_summary)
+    data_packet = create_data_packet(
+        ticker,
+        overview_summary,
+        pos_summary,
+        iv_summary,
+        ratios_summary,
+        news_summary,
+        snap_summary,
+    )
     st.subheader("Data Packet JSON")
     st.json(data_packet)
 
-    tokens = estimate_token_count(data_packet)
-    display_token_budget(tokens)
+    tokens = estimate_token_count(data_packet, selected_model)
 
-    analysis = call_openai_api(data_packet, api_key)
+    st.info("Review the prepared data packet and estimated usage before proceeding.")
+
+    form_key = _build_form_key("ai_confirmation")
+    with st.form(form_key):
+        proceed = st.checkbox("I have reviewed the packet and wish to proceed with the OpenAI request.")
+        pin_entry = st.text_input("Enter security PIN", type="password")
+        submitted = st.form_submit_button("Send to OpenAI")
+
+    if not submitted:
+        st.info("Submit the confirmation form to continue or adjust the inputs above.")
+        return
+
+    if not proceed:
+        st.warning("Confirmation required before the request can be sent.")
+        return
+
+    pin_expected = st.secrets.get("AI_PIN")
+    if not pin_expected:
+        st.error("AI_PIN secret is not configured. Set it in Streamlit secrets to continue.")
+        return
+
+    if pin_entry != str(pin_expected):
+        st.error("❌ Incorrect PIN, try again.")
+        return
+
+    st.markdown(f"**Selected model:** `{selected_model}`")
+
+    st.success("PIN accepted — running AI…")
+    try:
+        analysis = call_openai_api(data_packet, openai_creds, selected_model)
+    except ValueError as exc:
+        st.error(str(exc))
+        return
     if analysis:
         st.markdown(f"### AI Trade Analysis\n{analysis}")
         save_analysis(
-            ticker       = ticker,
-            expirations  = exp,  # replaced selected_exps with exp
-            payload      = snapshot,
-            response     = analysis,  # replaced response variable with analysis
-            token_count = tokens or 0
+            ticker=ticker,
+            expirations=exp,  # replaced selected_exps with exp
+            payload=snapshot,
+            response=analysis,  # replaced response variable with analysis
+            token_count=tokens or 0,
         )
         st.success("✅ Analysis saved.")
-    # ...existing error handling...
+        st.session_state.want_ai = False
