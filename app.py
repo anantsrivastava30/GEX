@@ -1,9 +1,11 @@
+import re
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import datetime
 from zoneinfo import ZoneInfo
-import requests
+from html import escape, unescape
+from textwrap import shorten
 from helpers import (
     get_expirations,
     get_option_chain,
@@ -15,7 +17,8 @@ from helpers import (
     get_liquidity_metrics,
     get_futures_quotes,
     get_bid_to_cover,
-    get_bond_yield_info
+    get_bond_yield_info,
+    get_vix_info,
 )
 from utils import (
     plot_put_call_ratios,
@@ -27,22 +30,41 @@ from utils import (
     plot_binomial_tree,
 )
 from quant import openai_query
-from db import init_db, save_analysis, load_analyses
-
-from db import init_db
+from db import init_db, load_analyses
 
 
 def inject_global_styles():
     st.markdown(
         """
         <style>
-            .stApp {
-                background: radial-gradient(circle at 20% 20%, #1e293b 0%, #0f172a 40%, #020617 100%);
+            html, body, [data-testid="stAppViewContainer"] {
+                background: radial-gradient(circle at 20% 20%, #1e293b 0%, #0f172a 40%, #020617 100%) !important;
                 color: #e2e8f0;
             }
 
+            .stApp {
+                background: transparent;
+                color: #e2e8f0;
+            }
+
+            [data-testid="stDecoration"], [data-testid="stToolbar"] {
+                background: transparent !important;
+            }
+
+            [data-testid="stHeader"] {
+                background: linear-gradient(135deg, rgba(15, 23, 42, 0.85), rgba(30, 64, 175, 0.75));
+                border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+                box-shadow: 0 10px 30px rgba(2, 6, 23, 0.45);
+                backdrop-filter: blur(16px);
+            }
+
+            [data-testid="stSidebar"] {
+                background: rgba(15, 23, 42, 0.72) !important;
+                backdrop-filter: blur(20px);
+            }
+
             .main .block-container {
-                padding-top: 2.5rem;
+                padding-top: 1.5rem;
                 padding-bottom: 2.5rem;
                 max-width: 1400px;
             }
@@ -68,7 +90,7 @@ def inject_global_styles():
             }
 
             .metric-card {
-                background: rgba(15, 23, 42, 0.55);
+                background: rgba(15, 23, 42, 0.6);
                 border-radius: 18px;
                 padding: 1.2rem 1.5rem;
                 border: 1px solid rgba(148, 163, 184, 0.18);
@@ -100,7 +122,7 @@ def inject_global_styles():
             .metric-footnote {
                 font-size: 0.75rem;
                 color: #cbd5f5;
-                opacity: 0.8;
+                opacity: 0.85;
                 margin: 0;
             }
 
@@ -115,6 +137,31 @@ def inject_global_styles():
             .soft-card h4 {
                 color: #cbd5f5;
                 margin-bottom: 0.5rem;
+            }
+
+            .article-card {
+                background: rgba(15, 23, 42, 0.6);
+                border-radius: 16px;
+                padding: 1.1rem 1.2rem;
+                border: 1px solid rgba(148, 163, 184, 0.18);
+                box-shadow: 0 15px 32px rgba(2, 6, 23, 0.32);
+                height: 100%;
+            }
+
+            .article-card h5 {
+                font-size: 1.05rem;
+                color: #f8fafc;
+                margin-bottom: 0.5rem;
+            }
+
+            .article-card p {
+                font-size: 0.85rem;
+                color: #cbd5f5;
+                line-height: 1.5;
+            }
+
+            .article-card a {
+                color: #38bdf8;
             }
 
             .stExpander {
@@ -132,6 +179,10 @@ def inject_global_styles():
             .stExpander .streamlit-expanderContent {
                 background: rgba(2, 6, 23, 0.3);
             }
+
+            .stTable, .stDataFrame {
+                background: transparent !important;
+            }
         </style>
         """,
         unsafe_allow_html=True,
@@ -139,8 +190,8 @@ def inject_global_styles():
 
 
 def metric_card(title: str, value: str, *, delta: str | None = None, footnote: str | None = None):
-    delta_html = f"<div class='metric-delta'>{delta}</div>" if delta else ""
-    foot_html = f"<p class='metric-footnote'>{footnote}</p>" if footnote else ""
+    delta_html = f"<div class=\"metric-delta\">{delta}</div>" if delta else ""
+    foot_html = f"<div class=\"metric-footnote\">{footnote}</div>" if footnote else ""
     st.markdown(
         f"""
         <div class="metric-card">
@@ -152,6 +203,18 @@ def metric_card(title: str, value: str, *, delta: str | None = None, footnote: s
         """,
         unsafe_allow_html=True,
     )
+
+
+def chunked(items, size):
+    for idx in range(0, len(items), size):
+        yield items[idx : idx + size]
+
+
+def format_blurb(text: str, *, limit: int = 200) -> str:
+    if not text:
+        return ""
+    cleaned = unescape(re.sub(r"<.*?>", "", text)).replace("\n", " ").strip()
+    return shorten(cleaned, width=limit, placeholder="…")
 
 
 def prepare_strike_metric(df_raw, df_net, view_mode, option_focus="both"):
@@ -218,6 +281,8 @@ def prepare_strike_metric(df_raw, df_net, view_mode, option_focus="both"):
 
 
 init_db()
+
+articles: list[dict] = []
 
 # ---------------- Streamlit Config ----------------
 st.set_page_config(layout="wide", page_title="Options Analytics Dashboard")
@@ -534,6 +599,7 @@ with tab2:
 with binom_tab:
     st.header("🧮 Binomial Tree")
     if ticker and expirations and spot is not None:
+        st.caption("Calibrate pricing trees with live rates, implied vols, and configurable step sizes.")
         exp = st.selectbox("Expiration", expirations)
         token = st.secrets.get("TRADIER_TOKEN")
         try:
@@ -542,97 +608,225 @@ with binom_tab:
             st.error("Failed to fetch options chain")
             chain = []
 
-        strikes = sorted({float(opt.get("strike", 0)) for opt in chain})
+        strikes = sorted({float(opt.get("strike", 0)) for opt in chain if opt.get("strike")})
         default_strike = min(strikes, key=lambda x: abs(x - spot)) if strikes else spot
-        strike = st.number_input("Strike", value=float(default_strike))
-        opt_side = st.selectbox("Option Type", ["call", "put"])
-        steps = st.slider("Steps", 1, 25, 5)
 
-        rf = get_bond_yield_info("^TNX")["spot"] / 100
-        iv = None
+        days_to_exp_default = max(
+            1,
+            (
+                datetime.strptime(exp, "%Y-%m-%d").date()
+                - datetime.utcnow().date()
+            ).days,
+        )
+
+        rf_info = get_bond_yield_info("^TNX")
+        base_rf = (rf_info.get("spot") or 0) / 100
+
+        iv_market = None
         for opt in chain:
-            if float(opt.get("strike", 0)) == strike and opt.get("option_type") == opt_side:
-                iv = opt.get("greeks", {}).get("iv") or opt.get("greeks", {}).get("mid_iv")
-                if iv:
-                    iv = float(iv)
+            if float(opt.get("strike", 0)) == float(default_strike) and opt.get("option_type") == "call":
+                iv_market = opt.get("greeks", {}).get("iv") or opt.get("greeks", {}).get("mid_iv")
+                if iv_market:
                     break
-        if iv is None:
-            iv = 0.2
+        if iv_market:
+            iv_market = float(iv_market)
+        else:
+            iv_market = 0.2
 
-        T = (
-            datetime.strptime(exp, "%Y-%m-%d").date() - datetime.utcnow().date()
-        ).days / 365
+        with st.form("binomial_tree_form"):
+            left, right = st.columns((2, 1))
+            with left:
+                strike = st.number_input(
+                    "Strike",
+                    value=float(default_strike),
+                    format="%.2f",
+                    help="Node payoffs will be evaluated against this strike.",
+                )
+                opt_side = st.selectbox("Option Type", ["call", "put"], help="Choose which payoff to project.")
+                steps = st.slider(
+                    "Steps",
+                    min_value=2,
+                    max_value=50,
+                    value=8,
+                    help="Increase steps for a smoother tree at the cost of computation.",
+                )
+            with right:
+                days_to_exp = st.number_input(
+                    "Days to expiration",
+                    min_value=1,
+                    value=int(days_to_exp_default),
+                    help="Override if you want to stress a custom horizon.",
+                )
+                rf_input = st.number_input(
+                    "Risk-free rate (%)",
+                    value=float(base_rf * 100 if base_rf else 4.50),
+                    step=0.05,
+                    format="%.2f",
+                )
+                iv_input = st.number_input(
+                    "Volatility (IV %)",
+                    value=float(iv_market * 100),
+                    step=0.5,
+                    format="%.2f",
+                )
 
-        if st.button("Build Tree"):
-            tree_df = generate_binomial_tree(spot, strike, T, rf, iv, steps, opt_side)
-            fig = plot_binomial_tree(tree_df)
-            st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(tree_df)
+            build_tree = st.form_submit_button("Build tree", use_container_width=True)
+
+        if build_tree:
+            T = days_to_exp / 365
+            if T <= 0:
+                st.error("Days to expiration must be at least 1 to build the tree.")
+            else:
+                tree_df = generate_binomial_tree(
+                    spot,
+                    float(strike),
+                    T,
+                    float(rf_input) / 100,
+                    float(iv_input) / 100,
+                    int(steps),
+                    opt_side,
+                )
+                fig = plot_binomial_tree(tree_df)
+                st.plotly_chart(fig, use_container_width=True)
+                st.dataframe(tree_df, use_container_width=True)
+                st.caption(
+                    "Use higher step counts for smoother convergence toward Black-Scholes theoretical values."
+                )
     else:
         st.info("Enter ticker and expiration to build a tree.")
 
 # --- Tab 3: Market Sentiment ---
 with sentiment_tab:
     st.header("🌅 Market Sentiment & Futures")
-    futs = get_futures_quotes()
+    st.caption("Cross-asset gauges to frame the macro backdrop and liquidity tone.")
+
+    futs = get_futures_quotes(("ES=F", "NQ=F", "YM=F", "RTY=F", "CL=F", "GC=F"))
+    highlight_meta = {
+        "ES=F": "S&P 500 futures",
+        "NQ=F": "Nasdaq 100 futures",
+        "CL=F": "WTI crude",
+    }
     if futs:
-        df_fut = pd.DataFrame([
-            {"Symbol": k, "Last": v["last"], "Change %": v["change_pct"]}
-            for k, v in futs.items()
-        ])
-        st.table(df_fut)
+        top_cols = st.columns(len(highlight_meta))
+        for (symbol, note), col in zip(highlight_meta.items(), top_cols):
+            data = futs.get(symbol)
+            if not data or data.get("last") is None:
+                continue
+            change = data.get("change_pct")
+            delta = f"{change:+.2f}% vs open" if change is not None else None
+            label = symbol.split("=")[0]
+            with col:
+                metric_card(
+                    label,
+                    f"{data['last']:.2f}",
+                    delta=delta,
+                    footnote=note,
+                )
+
+        st.markdown("<div class='soft-card'>", unsafe_allow_html=True)
+        st.markdown("**Global futures board**")
+        df_fut = pd.DataFrame(
+            [
+                {
+                    "Contract": symbol.replace("=F", ""),
+                    "Last": payload.get("last"),
+                    "Change %": payload.get("change_pct"),
+                }
+                for symbol, payload in futs.items()
+            ]
+        ).sort_values("Contract")
+        st.dataframe(df_fut, use_container_width=True, hide_index=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    try:
+        ten = get_bond_yield_info("^TNX")
+    except Exception:
+        ten = {"spot": float("nan"), "1d_return": 0.0}
+    try:
+        vix = get_vix_info()
+    except Exception:
+        vix = {"spot": float("nan"), "1d_return": 0.0, "5d_return": 0.0}
     b2c = get_bid_to_cover(api_key=st.secrets.get("FRED_API_KEY"))
-    if b2c.get("value") is not None:
-        st.metric("10Y Auction Bid-to-Cover", f"{b2c['value']:.2f}")
-        st.caption(
-            "Strong bid-to-cover typically means solid demand and can help stabilize yields."
+
+    metric_cols = st.columns(3)
+    with metric_cols[0]:
+        metric_card(
+            "10Y Treasury Yield",
+            f"{ten['spot']:.2f}%",
+            delta=f"{ten['1d_return']:+.2f}% 1d",
+            footnote="Benchmark rate for discounting equity cash flows",
         )
-    else:
-        st.write("Bid-to-cover ratio unavailable.")
-    ten = get_bond_yield_info("^TNX")
-    st.metric(
-        "10Y Treasury Yield",
-        f"{ten['spot']:.2f}%",
-        delta=f"{ten['1d_return']:.2f}% 1d",
-    )
-    st.caption(
-        "Rising yields often signal expectations of higher inflation or interest rates, while falling yields suggest the opposite."
-    )
+    with metric_cols[1]:
+        metric_card(
+            "VIX Volatility Index",
+            f"{vix['spot']:.2f}",
+            delta=f"{vix['1d_return']:+.2f}% 1d",
+            footnote=f"5d: {vix['5d_return']:+.2f}%",
+        )
+    with metric_cols[2]:
+        if b2c.get("value") is not None:
+            metric_card(
+                "10Y Auction Bid-to-Cover",
+                f"{b2c['value']:.2f}",
+                footnote=">2.5 typically signals strong demand",
+            )
+        else:
+            metric_card("10Y Auction Bid-to-Cover", "N/A", footnote="FRED data unavailable")
 
 # --- Tab 5: Market News ---
 with news_tab:
     st.header("📰 Market & Sentiment News")
+    st.caption("Condensed macro, volatility and flow stories curated from your watchlists.")
+    articles = []
     try:
         articles = fetch_and_filter_rss(limit_per_feed=30)
-        if not articles:
-            st.write("No recent articles matching your topics.")
-        else:
-            for art in articles[:100]:               
-                st.markdown(
-                    f"**[{art['title']}]({art['link']})**  \n"
-                    f"<small>{art['source']} — {art['date']}</small>",
-                    unsafe_allow_html=True
-                )
-        fetch_economic_calendar()
     except Exception as e:
         st.error(f"Error fetching news: {e}")
 
+    if articles:
+        for row in chunked(articles[:12], 3):
+            cols = st.columns(len(row))
+            for col, art in zip(cols, row):
+                if not art:
+                    continue
+                summary = format_blurb(art.get("summary") or art.get("description") or "")
+                title = escape(art.get("title", ""))
+                source = escape(art.get("source", ""))
+                date = escape(art.get("date", ""))
+                link = art.get("link", "")
+                col.markdown(
+                    f"""
+                    <div class="article-card">
+                        <h5><a href="{link}" target="_blank">{title}</a></h5>
+                        <p>{summary}</p>
+                        <div class="metric-footnote">{source} · {date}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+        st.caption("Headlines filtered for options, volatility, and macro catalysts.")
+    else:
+        st.info("No recent articles matching your filters just yet.")
+
 with calender_tab:
     st.header("📅 Economic Calendar")
+    st.caption("Upcoming high-impact releases to complement the news stream.")
+    st.markdown("<div class='soft-card'>", unsafe_allow_html=True)
     st.components.v1.html(
         """
         <iframe src="https://sslecal2.investing.com?columns=exc_flags,exc_currency,exc_importance,exc_actual,exc_forecast,exc_previous&importance=2,3&features=datepicker,timezone,filters&countries=5&calType=week&timeZone=8&lang=1"
-         width="800" height="1000" frameborder="0" allowtransparency="true" marginwidth="0" marginheight="0"></iframe>
+         style="width:100%;min-height:850px;border:0;" allowtransparency="true"></iframe>
         <div class="poweredBy" style="font-family: Arial, Helvetica, sans-serif;">
-          <span style="font-size: 11px;color: #333333;text-decoration: none;">
-            Real Time Economic Calendar provided by 
-            <a href="https://www.investing.com/" rel="nofollow" target="_blank" style="font-size: 11px;color: #06529D; font-weight: bold;" class="underline_link">Investing.com</a>.
+          <span style="font-size: 11px;color: #cbd5f5;text-decoration: none;">
+            Real Time Economic Calendar provided by
+            <a href="https://www.investing.com/" rel="nofollow" target="_blank" style="font-size: 11px;color: #38bdf8; font-weight: bold;" class="underline_link">Investing.com</a>.
           </span>
         </div>
         """,
-        height=520,  # Match iframe + a little for the attribution
+        height=900,
         scrolling=True,
     )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # --- Tab 6: AI Analysis ---
 if enable_ai and ai_tab:
