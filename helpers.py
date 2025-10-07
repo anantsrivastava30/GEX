@@ -83,11 +83,42 @@ def load_options_data(ticker, expirations, token):
         df = pd.concat([df, greeks_df], axis=1)
     df['expiration_date'] = pd.to_datetime(df['expiration_date'])
     df['DTE'] = (df['expiration_date'] - datetime.now()).dt.days
-    # Compute exposures
-    df['GammaExposure'] = df.gamma * df.open_interest * df.contract_size
-    df['DeltaExposure'] = df.delta * df.open_interest * df.contract_size
-    # Mirror exposures for puts
-    df.loc[df.option_type == 'put', ['GammaExposure', 'DeltaExposure']] *= -1
+
+    contract_size = df.get('contract_size')
+    if contract_size is None:
+        contract_size = pd.Series(100, index=df.index)
+    elif not isinstance(contract_size, pd.Series):
+        contract_size = pd.Series(contract_size, index=df.index)
+    contract_size = contract_size.fillna(100).replace(0, 100)
+
+    open_interest = df.get('open_interest')
+    if open_interest is None:
+        open_interest = pd.Series(0, index=df.index)
+    elif not isinstance(open_interest, pd.Series):
+        open_interest = pd.Series(open_interest, index=df.index)
+    open_interest = open_interest.fillna(0)
+
+    gamma_series = df.get('gamma')
+    if gamma_series is None:
+        gamma_series = pd.Series(0.0, index=df.index)
+    else:
+        gamma_series = gamma_series.fillna(0.0)
+
+    delta_series = df.get('delta')
+    if delta_series is None:
+        delta_series = pd.Series(0.0, index=df.index)
+    else:
+        delta_series = delta_series.fillna(0.0)
+
+    df['GammaExposure'] = gamma_series * open_interest * contract_size
+    df['DeltaExposure'] = delta_series * open_interest * contract_size
+
+    if 'option_type' in df.columns:
+        df['option_type'] = df['option_type'].astype(str).str.lower()
+        put_mask = df['option_type'] == 'put'
+        if put_mask.any():
+            df.loc[put_mask, 'GammaExposure'] *= -1
+
     df['strike'] = df['strike'].astype(float)
     return df
 

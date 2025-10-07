@@ -329,26 +329,64 @@ def _ensure_position_columns(df: pd.DataFrame) -> pd.DataFrame:
         work_df["volume"] = work_df["volume"].fillna(0)
 
     # Derive exposures when the upstream payload does not pre-compute them
-    gamma_series = work_df.get("gamma", pd.Series(0, index=work_df.index)).fillna(0)
-    delta_series = work_df.get("delta", pd.Series(0, index=work_df.index)).fillna(0)
-
-    if "GammaExposure" not in work_df.columns:
-        work_df["GammaExposure"] = (
-            gamma_series * work_df["open_interest"] * work_df["contract_size"]
-        )
+    gamma_raw = work_df.get("gamma")
+    if gamma_raw is None:
+        gamma_raw = pd.Series(0.0, index=work_df.index)
+        gamma_available = False
     else:
-        work_df["GammaExposure"] = work_df["GammaExposure"].fillna(0)
+        gamma_raw = gamma_raw.fillna(0.0)
+        gamma_available = not gamma_raw.eq(0).all()
 
-    if "DeltaExposure" not in work_df.columns:
-        work_df["DeltaExposure"] = (
-            delta_series * work_df["open_interest"] * work_df["contract_size"]
-        )
+    delta_raw = work_df.get("delta")
+    if delta_raw is None:
+        delta_raw = pd.Series(0.0, index=work_df.index)
+        delta_available = False
     else:
-        work_df["DeltaExposure"] = work_df["DeltaExposure"].fillna(0)
+        delta_raw = delta_raw.fillna(0.0)
+        delta_available = not delta_raw.eq(0).all()
+
+    open_interest = work_df["open_interest"].astype(float)
+    contract_size = work_df["contract_size"].astype(float)
+
+    gamma_exposure = gamma_raw * open_interest * contract_size
+    delta_exposure = delta_raw * open_interest * contract_size
 
     if "option_type" in work_df.columns:
         put_mask = work_df["option_type"] == "put"
-        work_df.loc[put_mask, ["GammaExposure", "DeltaExposure"]] *= -1
+        if put_mask.any():
+            gamma_exposure.loc[put_mask] *= -1
+
+    existing_gamma = work_df.get("GammaExposure")
+    if existing_gamma is None:
+        work_df["GammaExposure"] = gamma_exposure
+    else:
+        existing_gamma = existing_gamma.fillna(0.0)
+        needs_gamma_fix = False
+        if gamma_available:
+            if (gamma_exposure < 0).any() and not (existing_gamma < 0).any():
+                needs_gamma_fix = True
+            elif (gamma_exposure > 0).any() and not (existing_gamma > 0).any():
+                needs_gamma_fix = True
+        if needs_gamma_fix:
+            work_df["GammaExposure"] = gamma_exposure
+        else:
+            work_df["GammaExposure"] = existing_gamma
+
+    existing_delta = work_df.get("DeltaExposure")
+    if existing_delta is None:
+        work_df["DeltaExposure"] = delta_exposure
+    else:
+        existing_delta = existing_delta.fillna(0.0)
+        needs_delta_fix = False
+        if delta_available:
+            if (delta_exposure < 0).any() and not (existing_delta < 0).any():
+                needs_delta_fix = True
+            if (delta_exposure > 0).any() and not (existing_delta > 0).any():
+                needs_delta_fix = True
+        if needs_delta_fix:
+            work_df["DeltaExposure"] = delta_exposure
+        else:
+            work_df["DeltaExposure"] = existing_delta
 
     return work_df
 
