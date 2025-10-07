@@ -599,17 +599,15 @@ def _render_model_discovery_table(models: Sequence[Dict[str, object]]) -> str:
     </style>
     """
 
-    row_template = textwrap.dedent(
-        """
-        <tr class="{row_class}">
-            <td class="model-rank">#{rank:02d}</td>
-            <td class="model-id">{model_id}</td>
-            <td class="model-score">{score}</td>
-            <td>
-                <div class="model-strengths">{strengths}</div>
-            </td>
-        </tr>
-        """
+    row_template = (
+        "<tr class=\"{row_class}\">\n"
+        "  <td class=\"model-rank\">#{rank:02d}</td>\n"
+        "  <td class=\"model-id\">{model_id}</td>\n"
+        "  <td class=\"model-score\">{score}</td>\n"
+        "  <td>\n"
+        "    <div class=\"model-strengths\">{strengths}</div>\n"
+        "  </td>\n"
+        "</tr>"
     )
 
     rows_html: List[str] = []
@@ -641,28 +639,27 @@ def _render_model_discovery_table(models: Sequence[Dict[str, object]]) -> str:
             )
         )
 
-    rows_markup = "".join(rows_html)
-    table_html = textwrap.dedent(
-        """
-        <div class="model-discovery-card">
-            <div class="model-discovery-card__table">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Rank</th>
-                            <th>Model</th>
-                            <th>Score</th>
-                            <th>Highlights</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {rows}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        """
-    ).format(rows=rows_markup)
+    rows_markup = "\n".join(rows_html)
+    rows_section = f"{rows_markup}\n" if rows_markup else ""
+    table_html = (
+        "<div class=\"model-discovery-card\">\n"
+        "<div class=\"model-discovery-card__table\">\n"
+        "<table>\n"
+        "<thead>\n"
+        "<tr>\n"
+        "<th>Rank</th>\n"
+        "<th>Model</th>\n"
+        "<th>Score</th>\n"
+        "<th>Highlights</th>\n"
+        "</tr>\n"
+        "</thead>\n"
+        "<tbody>\n"
+        f"{rows_section}"
+        "</tbody>\n"
+        "</table>\n"
+        "</div>\n"
+        "</div>"
+    )
 
     return textwrap.dedent(table_style) + table_html
 
