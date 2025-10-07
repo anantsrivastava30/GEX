@@ -24,8 +24,6 @@ from utils import (
     plot_put_call_ratios,
     plot_volume_spikes_stacked,
     interpret_net_gex,
-    plot_exposure,
-    plot_price_and_delta_projection,
     generate_binomial_tree,
     plot_binomial_tree,
 )
@@ -240,6 +238,14 @@ def prepare_strike_metric(df_raw, df_net, view_mode, option_focus="both"):
     df["gamma_exposure"] = (
         df["gamma"] * df["open_interest"] * df["contract_size"]
     )
+    if "delta" not in df.columns:
+        df["delta"] = 0.0
+    df["delta"] = df["delta"].fillna(0.0)
+    df["delta_exposure"] = (
+        df["delta"] * df["open_interest"] * df["contract_size"]
+    )
+    if "option_type" in df.columns:
+        df["option_type"] = df["option_type"].astype(str)
 
     view_mode = view_mode.lower()
     option_focus = option_focus.lower()
@@ -250,6 +256,15 @@ def prepare_strike_metric(df_raw, df_net, view_mode, option_focus="both"):
         label = "Net Gamma Exposure"
         title = "Net Gamma Exposure"
         color_scale = px.colors.diverging.Tealrose
+    elif view_mode == "net delta exposure":
+        delta_df = (
+            df.groupby("strike")["delta_exposure"].sum().reset_index()
+        )
+        chart_df = delta_df.rename(columns={"delta_exposure": "Value", "strike": "Strike"})
+        chart_df["Metric"] = "Net Delta"
+        label = "Net Delta Exposure"
+        title = "Net Delta Exposure"
+        color_scale = px.colors.diverging.RdBu
     elif view_mode == "gamma exposure — calls":
         calls = (
             df[df["option_type"].str.lower() == "call"]
@@ -270,6 +285,26 @@ def prepare_strike_metric(df_raw, df_net, view_mode, option_focus="both"):
         label = "Gamma Exposure"
         title = "Put Gamma Exposure"
         color_scale = px.colors.sequential.Oranges
+    elif view_mode == "delta exposure — calls":
+        calls = (
+            df[df["option_type"].str.lower() == "call"]
+            .groupby("strike")["delta_exposure"].sum()
+            .reset_index()
+        )
+        chart_df = calls.rename(columns={"delta_exposure": "Value", "strike": "Strike"})
+        label = "Delta Exposure"
+        title = "Call Delta Exposure"
+        color_scale = px.colors.sequential.Blues
+    elif view_mode == "delta exposure — puts":
+        puts = (
+            df[df["option_type"].str.lower() == "put"]
+            .groupby("strike")["delta_exposure"].sum()
+            .reset_index()
+        )
+        chart_df = puts.rename(columns={"delta_exposure": "Value", "strike": "Strike"})
+        label = "Delta Exposure"
+        title = "Put Delta Exposure"
+        color_scale = px.colors.sequential.Oranges
     else:
         metric_col = "open_interest" if "open" in view_mode else "volume"
         if option_focus in {"calls", "puts"}:
@@ -281,6 +316,101 @@ def prepare_strike_metric(df_raw, df_net, view_mode, option_focus="both"):
         color_scale = px.colors.sequential.Teal
 
     chart_df = chart_df.sort_values("Strike")
+    return chart_df, label, title, color_scale
+
+
+def prepare_expiration_metric(df_raw, view_mode, option_focus="both"):
+    df = df_raw.copy()
+    if "expiration_date" not in df.columns:
+        return pd.DataFrame(columns=["Expiration", "Value"]), "Value", "", px.colors.sequential.Blues
+
+    df["expiration_date"] = pd.to_datetime(df["expiration_date"], errors="coerce")
+    df = df.dropna(subset=["expiration_date"])
+    if df.empty:
+        return pd.DataFrame(columns=["Expiration", "Value"]), "Value", "", px.colors.sequential.Blues
+
+    df["expiration_label"] = df["expiration_date"].dt.strftime("%b %d (%a)")
+    if "GammaExposure" not in df.columns:
+        df["GammaExposure"] = 0.0
+    df["GammaExposure"] = df["GammaExposure"].fillna(0.0)
+    if "DeltaExposure" not in df.columns:
+        df["DeltaExposure"] = 0.0
+    df["DeltaExposure"] = df["DeltaExposure"].fillna(0.0)
+    if "open_interest" not in df.columns:
+        df["open_interest"] = 0
+    df["open_interest"] = df["open_interest"].fillna(0)
+    if "volume" not in df.columns:
+        df["volume"] = 0
+    df["volume"] = df["volume"].fillna(0)
+    if "option_type" in df.columns:
+        df["option_type"] = df["option_type"].astype(str)
+
+    view_mode = view_mode.lower()
+    option_focus = option_focus.lower()
+    group_keys = ["expiration_date", "expiration_label"]
+
+    if view_mode == "net gamma exposure":
+        grouped = df.groupby(group_keys)["GammaExposure"].sum().reset_index()
+        value_col = "GammaExposure"
+        label = "Net Gamma Exposure"
+        title = "Net Gamma by Expiration"
+        color_scale = px.colors.diverging.Tealrose
+    elif view_mode == "net delta exposure":
+        grouped = df.groupby(group_keys)["DeltaExposure"].sum().reset_index()
+        value_col = "DeltaExposure"
+        label = "Net Delta Exposure"
+        title = "Net Delta by Expiration"
+        color_scale = px.colors.diverging.RdBu
+    elif view_mode == "gamma exposure — calls":
+        calls = df[df["option_type"].str.lower() == "call"]
+        grouped = calls.groupby(group_keys)["GammaExposure"].sum().reset_index()
+        value_col = "GammaExposure"
+        label = "Gamma Exposure"
+        title = "Call Gamma by Expiration"
+        color_scale = px.colors.sequential.Blues
+    elif view_mode == "gamma exposure — puts":
+        puts = df[df["option_type"].str.lower() == "put"]
+        grouped = puts.groupby(group_keys)["GammaExposure"].sum().reset_index()
+        value_col = "GammaExposure"
+        label = "Gamma Exposure"
+        title = "Put Gamma by Expiration"
+        color_scale = px.colors.sequential.Oranges
+    elif view_mode == "delta exposure — calls":
+        calls = df[df["option_type"].str.lower() == "call"]
+        grouped = calls.groupby(group_keys)["DeltaExposure"].sum().reset_index()
+        value_col = "DeltaExposure"
+        label = "Delta Exposure"
+        title = "Call Delta by Expiration"
+        color_scale = px.colors.sequential.Blues
+    elif view_mode == "delta exposure — puts":
+        puts = df[df["option_type"].str.lower() == "put"]
+        grouped = puts.groupby(group_keys)["DeltaExposure"].sum().reset_index()
+        value_col = "DeltaExposure"
+        label = "Delta Exposure"
+        title = "Put Delta by Expiration"
+        color_scale = px.colors.sequential.Oranges
+    else:
+        metric_col = "open_interest" if "open" in view_mode else "volume"
+        work_df = df
+        if option_focus in {"calls", "puts"}:
+            selector = option_focus[:-1] if option_focus.endswith("s") else option_focus
+            work_df = work_df[work_df["option_type"].str.lower() == selector]
+        grouped = work_df.groupby(group_keys)[metric_col].sum().reset_index()
+        value_col = metric_col
+        label = metric_col.replace("_", " ").title()
+        title = f"{label} by Expiration"
+        color_scale = px.colors.sequential.Teal
+
+    if grouped.empty:
+        return pd.DataFrame(columns=["Expiration", "Value"]), label, title, color_scale
+
+    grouped = grouped.sort_values("expiration_date")
+    chart_df = grouped.rename(
+        columns={
+            "expiration_label": "Expiration",
+            value_col: "Value",
+        }
+    )[["Expiration", "Value"]]
     return chart_df, label, title, color_scale
 
 
@@ -583,18 +713,257 @@ with tab2:
         if df.empty:
             st.info("No options data available.")
         else:
-            # Filter strikes near spot and select nearest 5 DTE buckets
+            df = df.copy()
             df = df[(df.strike >= spot - offset) & (df.strike <= spot + offset)]
-            dte_buckets = sorted(df['DTE'].unique())[:5]
-            df = df[df['DTE'].isin(dte_buckets)]
+            if df.empty:
+                st.info("No contracts within the selected strike window.")
+            else:
+                df["DTE"] = df["DTE"].fillna(0).astype(int)
+                df["GammaExposure"] = df["GammaExposure"].fillna(0.0)
+                df["DeltaExposure"] = df["DeltaExposure"].fillna(0.0)
+                df["open_interest"] = df["open_interest"].fillna(0)
+                df["volume"] = df["volume"].fillna(0)
+                if "option_type" in df.columns:
+                    df["option_type"] = df["option_type"].astype(str)
 
-            # Plot Gamma Exposure
-            fig_gex2 = plot_exposure(df, 'GammaExposure', 'Gamma Exposure', ticker, offset, spot)
-            st.plotly_chart(fig_gex2, use_container_width=True)
+                dte_available = sorted(df["DTE"].unique())
+                if len(dte_available) > 5:
+                    focus_dte = dte_available[:5]
+                    df = df[df["DTE"].isin(focus_dte)]
 
-            # Plot Delta Exposure
-            fig_dex2 = plot_exposure(df, 'DeltaExposure', 'Delta Exposure', ticker, offset, spot)
-            st.plotly_chart(fig_dex2, use_container_width=True)
+                if df.empty:
+                    st.info("Nearest expirations did not return any contracts in range.")
+                else:
+                    df["expiration_label"] = df["expiration_date"].dt.strftime("%b %d (%a)")
+
+                    df_net = (
+                        df.groupby("strike")["GammaExposure"].sum().reset_index()
+                        .rename(columns={"GammaExposure": "GEX", "strike": "Strike"})
+                        .sort_values("Strike")
+                    )
+
+                    total_gamma = float(df_net["GEX"].sum()) if not df_net.empty else 0.0
+                    total_delta = float(df["DeltaExposure"].sum()) if not df.empty else 0.0
+                    if not df_net.empty:
+                        dominant_idx = df_net["GEX"].abs().idxmax()
+                        dominant_row = df_net.loc[dominant_idx]
+                        dominant_strike = float(dominant_row["Strike"])
+                        dominant_gamma = float(dominant_row["GEX"])
+                    else:
+                        dominant_strike = None
+                        dominant_gamma = 0.0
+
+                    exp_gamma = (
+                        df.groupby(["expiration_label", "DTE"])["GammaExposure"].sum().reset_index()
+                    )
+                    if not exp_gamma.empty:
+                        exp_gamma = exp_gamma.sort_values("DTE")
+                        top_exp_row = exp_gamma.loc[exp_gamma["GammaExposure"].abs().idxmax()]
+                        top_exp_label = top_exp_row["expiration_label"]
+                        top_exp_val = float(top_exp_row["GammaExposure"])
+                        top_exp_dte = int(top_exp_row["DTE"])
+                    else:
+                        top_exp_label = "N/A"
+                        top_exp_val = 0.0
+                        top_exp_dte = 0
+
+                    st.markdown("#### Positioning pulse")
+                    met1, met2, met3 = st.columns(3)
+                    with met1:
+                        metric_card(
+                            "Total Net Gamma",
+                            f"{total_gamma/1e6:+.2f}M",
+                            footnote="Across nearest expirations",
+                        )
+                    with met2:
+                        metric_card(
+                            "Total Net Delta",
+                            f"{total_delta/1e6:+.2f}M",
+                            footnote="Delta × OI × contract size",
+                        )
+                    with met3:
+                        if dominant_strike is not None:
+                            foot = f"{dominant_gamma/1e6:+.2f}M net gamma"
+                            metric_card(
+                                "Dominant Strike",
+                                f"{dominant_strike:.0f}",
+                                footnote=foot,
+                            )
+                        else:
+                            metric_card("Dominant Strike", "N/A", footnote="No strikes in view")
+
+                    st.markdown("---")
+
+                    chart_col, insight_col = st.columns([3, 2], gap="large")
+                    with chart_col:
+                        st.subheader("Positioning drilldown")
+                        lens_mode = st.radio(
+                            "Slice positioning by",
+                            options=["Strike lens", "Expiration lens"],
+                            horizontal=True,
+                        )
+                        view_options = [
+                            "Net Gamma Exposure",
+                            "Net Delta Exposure",
+                            "Gamma Exposure — Calls",
+                            "Gamma Exposure — Puts",
+                            "Delta Exposure — Calls",
+                            "Delta Exposure — Puts",
+                            "Open Interest",
+                            "Volume",
+                        ]
+                        chart_view = st.radio(
+                            "Focus metric",
+                            options=view_options,
+                            horizontal=True,
+                        )
+                        option_focus = "Both"
+                        if chart_view in {"Open Interest", "Volume"}:
+                            option_focus = st.radio(
+                                "Option focus",
+                                options=["Both", "Calls", "Puts"],
+                                horizontal=True,
+                                help="Toggle liquidity slices by option side",
+                            )
+
+                        if lens_mode == "Strike lens":
+                            chart_df, value_label, title_label, color_scale = prepare_strike_metric(
+                                df,
+                                df_net,
+                                chart_view,
+                                option_focus,
+                            )
+                            if chart_df.empty:
+                                st.warning("No data available for this view.")
+                            else:
+                                fig = px.bar(
+                                    chart_df,
+                                    x="Value",
+                                    y="Strike",
+                                    orientation="h",
+                                    color="Value",
+                                    color_continuous_scale=color_scale,
+                                    labels={"Value": value_label, "Strike": "Strike"},
+                                    height=620,
+                                    title=f"{title_label} across strikes\n(±{offset} around {spot:.1f})",
+                                )
+                                if chart_view.lower().startswith("net"):
+                                    fig.add_vline(x=0, line_dash="dash", line_color="#f1f5f9")
+                                fig.update_layout(
+                                    template="plotly_dark",
+                                    paper_bgcolor="rgba(0,0,0,0)",
+                                    plot_bgcolor="rgba(15,23,42,0.25)",
+                                    margin=dict(l=40, r=40, t=90, b=40),
+                                    coloraxis_showscale=chart_view not in {"Net Gamma Exposure", "Net Delta Exposure"},
+                                )
+                                fig.update_xaxes(title=value_label, tickfont=dict(color="#e2e8f0"))
+                                fig.update_yaxes(tickfont=dict(size=14, color="#e2e8f0"))
+                                st.plotly_chart(fig, use_container_width=True)
+                        else:
+                            chart_df, value_label, title_label, color_scale = prepare_expiration_metric(
+                                df,
+                                chart_view,
+                                option_focus,
+                            )
+                            if chart_df.empty:
+                                st.warning("No data available for this view.")
+                            else:
+                                fig = px.bar(
+                                    chart_df,
+                                    x="Expiration",
+                                    y="Value",
+                                    color="Value",
+                                    color_continuous_scale=color_scale,
+                                    labels={"Value": value_label, "Expiration": "Expiration"},
+                                    height=620,
+                                    title=f"{title_label} across expirations",
+                                )
+                                if chart_view.lower().startswith("net"):
+                                    fig.add_hline(y=0, line_dash="dash", line_color="#f1f5f9")
+                                fig.update_layout(
+                                    template="plotly_dark",
+                                    paper_bgcolor="rgba(0,0,0,0)",
+                                    plot_bgcolor="rgba(15,23,42,0.25)",
+                                    margin=dict(l=40, r=40, t=90, b=40),
+                                    coloraxis_showscale=chart_view not in {"Net Gamma Exposure", "Net Delta Exposure"},
+                                )
+                                fig.update_xaxes(tickfont=dict(color="#e2e8f0"))
+                                fig.update_yaxes(title=value_label, tickfont=dict(color="#e2e8f0"))
+                                st.plotly_chart(fig, use_container_width=True)
+
+                    with insight_col:
+                        st.subheader("Key positioning takeaways")
+                        gamma_by_side = (
+                            df.groupby(df["option_type"].str.lower())["GammaExposure"].sum()
+                            if "option_type" in df.columns
+                            else pd.Series(dtype=float)
+                        )
+                        call_gamma = float(gamma_by_side.get("call", 0.0))
+                        put_gamma = float(gamma_by_side.get("put", 0.0))
+                        dominant_side = "Calls" if abs(call_gamma) >= abs(put_gamma) else "Puts"
+                        exp_focus = (
+                            f"{top_exp_label} (~{top_exp_dte} DTE)"
+                            if top_exp_label != "N/A"
+                            else "No standout expiry"
+                        )
+                        bullets = []
+                        if dominant_strike is not None:
+                            bullets.append(
+                                f"- **Largest strike load:** {dominant_strike:.0f} carries {dominant_gamma/1e6:+.2f}M net gamma."
+                            )
+                        if exp_focus:
+                            bullets.append(
+                                f"- **Expiry focus:** {exp_focus} leads with {top_exp_val/1e6:+.2f}M gamma."
+                            )
+                        bullets.append(
+                            f"- **Gamma skew:** {dominant_side} house {call_gamma/1e6:+.2f}M vs {put_gamma/1e6:+.2f}M on the other side."
+                        )
+                        bullets.append(
+                            "- **Use the lens:** Flip between strike and expiry modes to spot where hedging pressure could pivot."
+                        )
+                        st.markdown("<div class='soft-card'>", unsafe_allow_html=True)
+                        st.markdown("\n".join(bullets))
+                        st.markdown("</div>", unsafe_allow_html=True)
+
+                        exp_summary = (
+                            df.groupby(["expiration_label", "DTE"])
+                            .agg(
+                                net_gamma=("GammaExposure", "sum"),
+                                net_delta=("DeltaExposure", "sum"),
+                                open_interest=("open_interest", "sum"),
+                                volume=("volume", "sum"),
+                            )
+                            .reset_index()
+                            .sort_values("DTE")
+                        )
+                        if not exp_summary.empty:
+                            display_df = exp_summary.copy()
+                            display_df["Net Gamma (M)"] = display_df["net_gamma"] / 1e6
+                            display_df["Net Delta (M)"] = display_df["net_delta"] / 1e6
+                            display_df["Open Interest"] = display_df["open_interest"].round().astype(int)
+                            display_df["Volume"] = display_df["volume"].round().astype(int)
+                            display_df = display_df[
+                                [
+                                    "expiration_label",
+                                    "DTE",
+                                    "Net Gamma (M)",
+                                    "Net Delta (M)",
+                                    "Open Interest",
+                                    "Volume",
+                                ]
+                            ].rename(
+                                columns={
+                                    "expiration_label": "Expiration",
+                                }
+                            )
+                            st.markdown("<div class='soft-card'>", unsafe_allow_html=True)
+                            st.markdown("**Expiration rundown**")
+                            st.dataframe(
+                                display_df,
+                                use_container_width=True,
+                                hide_index=True,
+                            )
+                            st.markdown("</div>", unsafe_allow_html=True)
 
     else:
         st.info("Select ticker and expirations to view positioning.")
