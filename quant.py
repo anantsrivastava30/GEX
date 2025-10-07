@@ -9,6 +9,7 @@ from db import save_analysis, get_total_token_usage
 import yaml
 import os
 import textwrap
+from typing import Optional, Dict
 
 
 # Load configuration from YAML file
@@ -17,6 +18,42 @@ with open(os.path.join(os.path.dirname(__file__), "config.yaml"), "r") as f:
 
 
 # New helper functions for modularized markdown building
+
+
+def _resolve_secret(*names):
+    for name in names:
+        try:
+            value = st.secrets[name]
+        except Exception:
+            value = None
+        if value:
+            return value
+    return None
+
+
+def resolve_openai_credentials() -> Dict[str, Optional[str]]:
+    """Return OpenAI credentials from secrets/environment with normalisation."""
+
+    api_key = _resolve_secret("OPENAI_API_KEY", "openai_api_key", "OPENAI_KEY")
+    if not api_key:
+        api_key = os.getenv("OPENAI_API_KEY")
+    api_key = api_key.strip() if isinstance(api_key, str) else None
+
+    organization = _resolve_secret("OPENAI_ORG", "OPENAI_ORGANIZATION")
+    if not organization:
+        organization = os.getenv("OPENAI_ORG") or os.getenv("OPENAI_ORGANIZATION")
+    organization = organization.strip() if isinstance(organization, str) else None
+
+    project = _resolve_secret("OPENAI_PROJECT", "OPENAI_DEFAULT_PROJECT")
+    if not project:
+        project = os.getenv("OPENAI_PROJECT") or os.getenv("OPENAI_DEFAULT_PROJECT")
+    project = project.strip() if isinstance(project, str) else None
+
+    return {
+        "api_key": api_key,
+        "organization": organization,
+        "project": project,
+    }
 
 def build_header(payload):
     m = []
@@ -240,14 +277,21 @@ def get_model_pricing(model_name):
     return MODEL_PRICING_PER_MTOKENS.get("gpt-4o")
 
 
-def fetch_openai_credit_balance(api_key: str):
+def fetch_openai_credit_balance(
+    api_key: str, organization: Optional[str] = None, project: Optional[str] = None
+):
     """Return the current OpenAI wallet credit information."""
 
-    if not api_key:
+    if not api_key or not api_key.strip():
         raise ValueError("An OpenAI API key is required to query credit balance.")
 
     url = "https://api.openai.com/v1/dashboard/billing/credit_grants"
-    headers = {"Authorization": f"Bearer {api_key}"}
+    headers = {"Authorization": f"Bearer {api_key.strip()}"}
+    if organization:
+        headers["OpenAI-Organization"] = organization
+    if project:
+        headers["OpenAI-Project"] = project
+
     response = requests.get(url, headers=headers, timeout=10)
     response.raise_for_status()
     payload = response.json() or {}
@@ -258,18 +302,34 @@ def fetch_openai_credit_balance(api_key: str):
     }
 
 
-def display_credit_information(tokens_estimated, api_key):
+def display_credit_information(tokens_estimated, creds):
     if tokens_estimated is None:
         return
 
+    api_key = creds.get("api_key") if isinstance(creds, dict) else None
     if not api_key:
         st.info("Configure OPENAI_API_KEY in secrets to display live credit balance.")
         return
 
     try:
-        credit = fetch_openai_credit_balance(api_key)
+        credit = fetch_openai_credit_balance(
+            api_key,
+            organization=creds.get("organization") if isinstance(creds, dict) else None,
+            project=creds.get("project") if isinstance(creds, dict) else None,
+        )
     except requests.HTTPError as exc:
-        st.error(f"Failed to fetch OpenAI credit balance: {exc}")
+        detail = None
+        if exc.response is not None:
+            try:
+                detail = exc.response.json().get("error", {}).get("message")
+            except Exception:
+                detail = exc.response.text
+        message = "Failed to fetch OpenAI credit balance"
+        if detail:
+            message += f": {detail}"
+        else:
+            message += "."
+        st.error(message)
         return
     except requests.RequestException as exc:
         st.error(f"Network error while contacting OpenAI billing API: {exc}")
@@ -384,8 +444,20 @@ def dummy_response_decorator(func):
     return wrapper
 
 # @dummy_response_decorator
-def call_openai_api(data_packet, api_key):
-    client = OpenAI(api_key=api_key)
+def call_openai_api(data_packet, creds):
+    api_key = creds.get("api_key") if isinstance(creds, dict) else None
+    if not api_key:
+        raise ValueError("OpenAI API key is missing; cannot send request.")
+
+    client_kwargs = {"api_key": api_key}
+    organization = creds.get("organization") if isinstance(creds, dict) else None
+    project = creds.get("project") if isinstance(creds, dict) else None
+    if organization:
+        client_kwargs["organization"] = organization
+    if project:
+        client_kwargs["project"] = project
+
+    client = OpenAI(**client_kwargs)
     st.write("model used :", CONFIG.get("openai", {}).get("model", "gpt-4o"))
     try:
         completion = client.chat.completions.create(
@@ -399,7 +471,7 @@ def call_openai_api(data_packet, api_key):
 
 # Refactored openai_query function
 def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset, ticker, exp):
-    api_key = st.secrets.get("OPENAI_API_KEY")
+    openai_creds = resolve_openai_credentials()
 
     if not df_net.empty:
         df_net = df_net[(df_net['strike'] >= spot-offset) & (df_net['strike'] <= spot+offset)]
@@ -442,7 +514,7 @@ def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset
     st.json(data_packet)
 
     tokens = estimate_token_count(data_packet)
-    display_credit_information(tokens, api_key)
+    display_credit_information(tokens, openai_creds)
 
     st.info("Review the prepared data packet and estimated usage before proceeding.")
 
@@ -473,12 +545,17 @@ def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset
         st.error("❌ Incorrect PIN, try again.")
         return
 
+    api_key = openai_creds.get("api_key")
     if not api_key:
         st.error("OpenAI API key is not configured.")
         return
 
     st.success("PIN accepted — running AI…")
-    analysis = call_openai_api(data_packet, api_key)
+    try:
+        analysis = call_openai_api(data_packet, openai_creds)
+    except ValueError as exc:
+        st.error(str(exc))
+        return
     if analysis:
         st.markdown(f"### AI Trade Analysis\n{analysis}")
         save_analysis(
