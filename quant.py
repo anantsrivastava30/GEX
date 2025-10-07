@@ -5,9 +5,10 @@ from datetime import datetime, timedelta
 from helpers import get_market_snapshot, augment_payload_with_extras
 import streamlit as st
 import pandas as pd
-from db import save_analysis
+from db import save_analysis, get_total_token_usage
 import yaml
 import os
+import textwrap
 
 
 # Load configuration from YAML file
@@ -167,39 +168,139 @@ def payload_to_markdown(payload, ticker=None, exp=None, offset=None):
 def create_data_packet(ticker, overview_summary, pos_summary, iv_summary, ratios_summary, news_summary, snap_summary):
     system_msg = {
         "role": "system",
-        "content": ("You are an experienced volatility trader. "
-                    "Analyse the option-dealer positioning charts")
+        "content": (
+            "You are an experienced volatility and macro strategist. "
+            "Combine dealer positioning, volatility structure, and broad market context "
+            "to craft actionable option trade ideas."
+        ),
     }
     user_msg = {
         "role": "user",
-        "content": (
-            f"Ticker : {ticker}\n"
-            f"Overview Metrics: {overview_summary}\n"
-            f"Positioning data gamma and delta exposure : \n{pos_summary}\n"
-            f"IV Skew: {iv_summary}\n"
-            f"Ratios: {ratios_summary}\n"
-            f"News Headlines: {news_summary}\n"
-            f"Snapshot Summary: {snap_summary}\n" 
-            "Please summarise expected dealer hedging behaviour\n" 
-            "I can only buy PUTS and CALLS, don't suggest anything else no straddles, stranges, verticles etc, only calls and puts\n"
-            "Suggest any concrete 0-DTE, weekly, and/or swing trade options strategy.\n"
-            "and with each strategy recommended give a trade confidence (1-100)\n"
-            "Figure out the max-pain and also suggest support and resistances."
-        )
+        "content": textwrap.dedent(
+            f"""
+            Ticker: {ticker}
+            Overview Metrics: {overview_summary}
+            Positioning data gamma and delta exposure:
+            {pos_summary}
+            IV Skew: {iv_summary}
+            Ratios: {ratios_summary}
+            News Headlines: {news_summary}
+            Snapshot Summary: {snap_summary}
+
+            Please:
+            - Summarise expected dealer hedging behaviour and current positioning drivers.
+            - Discuss the state of overall market health/regime before recommending trades.
+            - Only recommend structures where I buy calls or puts (no spreads, straddles, or other multi-leg trades).
+            - Deliver concrete ideas for three horizons: 1-2 weeks, 1-2 months, and 6-12 months (0.5-1 year).
+            - Explicitly link every idea to broader market health or macro positioning context.
+            - Reference data beyond the stated horizons when it materially improves risk context.
+            - Provide a trade confidence score (1-100) for each recommendation.
+            - Identify max-pain, key supports, and resistances.
+            """
+        ).strip(),
     }
     return {"messages": [system_msg, user_msg]}
 
 # Helper function to estimate token count
 def estimate_token_count(data_packet):
+    model_name = CONFIG.get("openai", {}).get("model", "gpt-4o")
+    tokens = None
     try:
-        enc = tiktoken.encoding_for_model("gpt-4o")
+        enc = tiktoken.encoding_for_model(model_name)
+    except Exception:
+        enc = tiktoken.get_encoding("cl100k_base")
+
+    try:
         tokens = sum(len(enc.encode(m["content"])) for m in data_packet["messages"])
-        st.write(f"Estimated total tokens: **{tokens}**")
+        st.write(f"Estimated prompt tokens: **{tokens}**")
     except Exception as e:
         print(f"Token estimation error: {e}")
-    
+        tokens = None
+
     return tokens
-    
+
+
+MODEL_PRICING_PER_MTOKENS = {
+    "gpt-4o": {"input": 5.0, "output": 15.0},
+    "gpt-4o-2024-05-13": {"input": 5.0, "output": 15.0},
+    "gpt-4o-mini": {"input": 0.6, "output": 2.4},
+    "gpt-4.1": {"input": 10.0, "output": 30.0},
+    "gpt-4.1-mini": {"input": 1.5, "output": 6.0},
+}
+
+
+def _normalise_model_key(model_name):
+    return (model_name or "").lower()
+
+
+def get_model_pricing(model_name):
+    key = _normalise_model_key(model_name)
+    if key in MODEL_PRICING_PER_MTOKENS:
+        return MODEL_PRICING_PER_MTOKENS[key]
+    return MODEL_PRICING_PER_MTOKENS.get("gpt-4o")
+
+
+def _get_credit_configuration():
+    openai_cfg = CONFIG.get("openai", {})
+    token_credit = openai_cfg.get("token_credit")
+    credit_usd = openai_cfg.get("credit_usd")
+
+    try:
+        secrets = st.secrets
+        token_credit = secrets.get("OPENAI_TOKEN_CREDIT", token_credit)
+        credit_usd = secrets.get("OPENAI_CREDIT_USD", credit_usd)
+    except Exception:
+        pass
+
+    return {"token_credit": token_credit, "credit_usd": credit_usd}
+
+
+def display_token_budget(tokens_estimated):
+    if tokens_estimated is None:
+        return
+
+    credit_cfg = _get_credit_configuration()
+    token_credit = credit_cfg.get("token_credit")
+    credit_usd = credit_cfg.get("credit_usd")
+
+    if token_credit is None and credit_usd is None:
+        return
+
+    try:
+        total_tokens_used = get_total_token_usage()
+    except Exception as exc:
+        print(f"Token usage aggregation error: {exc}")
+        return
+
+    model_name = CONFIG.get("openai", {}).get("model", "gpt-4o")
+    pricing = get_model_pricing(model_name)
+    projected_usage = total_tokens_used + tokens_estimated
+
+    if token_credit is not None:
+        try:
+            credit_value = float(token_credit)
+        except (TypeError, ValueError):
+            return
+        tokens_remaining = max(credit_value - projected_usage, 0)
+        st.write(
+            f"Estimated tokens remaining before credit exhaustion: **{tokens_remaining:,.0f}**"
+        )
+        return
+
+    if credit_usd is not None and pricing:
+        try:
+            credit_value = float(credit_usd)
+        except (TypeError, ValueError):
+            return
+        usd_spent = (projected_usage / 1_000_000) * pricing["input"]
+        usd_remaining = max(credit_value - usd_spent, 0.0)
+        tokens_per_usd = 1_000_000 / pricing["input"] if pricing["input"] else 0
+        if tokens_per_usd:
+            tokens_remaining = usd_remaining * tokens_per_usd
+            st.write(
+                f"Estimated tokens remaining before credit exhaustion: **{tokens_remaining:,.0f}** (~${usd_remaining:,.2f} remaining)."
+            )
+
 # Helper function to call OpenAI API and return response analysis
 def dummy_response_decorator(func):
     def wrapper(*args, **kwargs):
@@ -277,12 +378,6 @@ def call_openai_api(data_packet, api_key):
 # Refactored openai_query function
 def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset, ticker, exp):
     api_key = st.secrets.get("OPENAI_API_KEY")
-    
-    # Prepare prompt (customize as needed)
-    prompt = (
-        f"Analyze SPY option positioning and market news. "
-        f"Provide summary and suggest 0-DTE, weekly, and swing strategies."
-    )
 
     if not df_net.empty:
         df_net = df_net[(df_net['strike'] >= spot-offset) & (df_net['strike'] <= spot+offset)]
@@ -315,9 +410,10 @@ def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset
     data_packet = create_data_packet(ticker, overview_summary, pos_summary, iv_summary, ratios_summary, news_summary, snap_summary)
     st.subheader("Data Packet JSON")
     st.json(data_packet)
-    
+
     tokens = estimate_token_count(data_packet)
-    
+    display_token_budget(tokens)
+
     analysis = call_openai_api(data_packet, api_key)
     if analysis:
         st.markdown(f"### AI Trade Analysis\n{analysis}")
@@ -326,7 +422,7 @@ def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset
             expirations  = exp,  # replaced selected_exps with exp
             payload      = snapshot,
             response     = analysis,  # replaced response variable with analysis
-            token_count = tokens
+            token_count = tokens or 0
         )
         st.success("✅ Analysis saved.")
     # ...existing error handling...
