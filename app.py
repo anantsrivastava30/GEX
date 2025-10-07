@@ -218,10 +218,11 @@ def prepare_strike_metric(df_raw, df_net, view_mode, option_focus="both"):
 
 
 init_db()
-inject_global_styles()
 
 # ---------------- Streamlit Config ----------------
 st.set_page_config(layout="wide", page_title="Options Analytics Dashboard")
+
+inject_global_styles()
 st.title("📊 Options Analytics Dashboard")
 
 # --- Sidebar Inputs ---
