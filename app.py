@@ -450,7 +450,12 @@ def prepare_strike_metric(
     return grouped[["Strike", "Value", "RawValue"]], value_label, label, theme
 
 
-def prepare_expiration_metric(df_raw, view_mode, option_focus="both"):
+def prepare_expiration_metric(
+    df_raw,
+    view_mode,
+    option_focus="both",
+    signed_view=False,
+):
     df = _ensure_position_columns(df_raw)
     df["DTE"] = df.get("DTE", 0).fillna(0).astype(int)
     df["expiration_label"] = df.get("expiration_label", "").astype(str)
@@ -485,24 +490,31 @@ def prepare_expiration_metric(df_raw, view_mode, option_focus="both"):
         work_df[value_col] = 0.0
 
     if value_col in {"GammaExposure", "DeltaExposure"}:
-        work_df["abs_value"] = work_df[value_col].abs() / 1e6
-        work_df["raw_value"] = work_df[value_col] / 1e6
-        value_label = f"{label} (|$M|)"
+        work_df["base_value"] = work_df[value_col] / 1e6
+        work_df["display_value"] = (
+            work_df["base_value"] if signed_view else work_df["base_value"].abs()
+        )
+        value_label = f"{label} ($M)" if signed_view else f"{label} (|$M|)"
     else:
-        work_df["abs_value"] = work_df[value_col]
-        work_df["raw_value"] = work_df[value_col]
+        work_df["base_value"] = work_df[value_col]
+        work_df["display_value"] = work_df["base_value"]
         value_label = label
 
     group_cols = ["expiration_date", "expiration_label", "DTE", "expiration_display"]
     grouped = (
         work_df.groupby(group_cols)
-        .agg(Value=("abs_value", "sum"), RawValue=("raw_value", "sum"))
+        .agg(Value=("display_value", "sum"), RawValue=("base_value", "sum"))
         .reset_index()
     )
 
     if grouped.empty:
         empty = grouped.rename(columns={"expiration_display": "Expiration"})
-        return empty[[col for col in ["Expiration", "Value"] if col in empty.columns]], value_label, label, color_scale
+        return (
+            empty[[col for col in ["Expiration", "Value"] if col in empty.columns]],
+            value_label,
+            label,
+            theme,
+        )
 
     chart_df = grouped.sort_values("expiration_date").rename(
         columns={"expiration_display": "Expiration"}
@@ -1045,10 +1057,12 @@ with tab2:
                         value_fmt = ".2f" if chart_metric in {"Gamma Exposure", "Delta Exposure"} else ",.0f"
                         signed_fmt = "+,.2f" if chart_metric in {"Gamma Exposure", "Delta Exposure"} else "+,.0f"
                         if lens_mode == "Strike lens":
+                            signed_view = chart_metric in {"Gamma Exposure", "Delta Exposure"}
                             chart_df, value_label, label, theme = prepare_strike_metric(
                                 df,
                                 chart_metric,
                                 option_focus,
+                                signed_view=signed_view,
                             )
                             if chart_df.empty:
                                 st.warning("No data available for this view.")
@@ -1091,14 +1105,21 @@ with tab2:
                                         font=dict(color="#e2e8f0"),
                                     ),
                                 )
-                                fig.update_xaxes(title=value_label, tickfont=dict(color="#e2e8f0"))
+                                fig.update_xaxes(
+                                    title=value_label,
+                                    tickfont=dict(color="#e2e8f0"),
+                                    zeroline=True,
+                                    zerolinecolor="#94a3b8",
+                                )
                                 fig.update_yaxes(tickfont=dict(size=14, color="#e2e8f0"))
                                 st.plotly_chart(fig, use_container_width=True)
                         else:
+                            signed_view = chart_metric in {"Gamma Exposure", "Delta Exposure"}
                             chart_df, value_label, label, theme = prepare_expiration_metric(
                                 df,
                                 chart_metric,
                                 option_focus,
+                                signed_view=signed_view,
                             )
                             if chart_df.empty:
                                 st.warning("No data available for this view.")
@@ -1134,7 +1155,12 @@ with tab2:
                                     showlegend=False,
                                 )
                                 fig.update_xaxes(tickfont=dict(color="#e2e8f0"))
-                                fig.update_yaxes(title=value_label, tickfont=dict(color="#e2e8f0"))
+                                fig.update_yaxes(
+                                    title=value_label,
+                                    tickfont=dict(color="#e2e8f0"),
+                                    zeroline=True,
+                                    zerolinecolor="#94a3b8",
+                                )
                                 st.plotly_chart(fig, use_container_width=True)
 
                         st.markdown("</div>", unsafe_allow_html=True)
