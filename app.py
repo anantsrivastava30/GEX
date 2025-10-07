@@ -31,6 +31,30 @@ from quant import openai_query
 from db import init_db, load_analyses
 
 
+METRIC_COLOR_THEMES = {
+    "gamma exposure": {
+        "label": "Gamma Exposure",
+        "sequence": ["#38bdf8", "#0ea5e9", "#0284c7", "#7dd3fc", "#22d3ee", "#164e63"],
+        "single": "#38bdf8",
+    },
+    "delta exposure": {
+        "label": "Delta Exposure",
+        "sequence": ["#f97316", "#fb923c", "#facc15", "#f59e0b", "#fbbf24", "#c2410c"],
+        "single": "#f97316",
+    },
+    "open interest": {
+        "label": "Open Interest",
+        "sequence": ["#22c55e", "#16a34a", "#4ade80", "#86efac", "#15803d", "#065f46"],
+        "single": "#22c55e",
+    },
+    "volume": {
+        "label": "Volume",
+        "sequence": ["#a855f7", "#c084fc", "#d946ef", "#f472b6", "#7c3aed", "#4c1d95"],
+        "single": "#a855f7",
+    },
+}
+
+
 def inject_global_styles():
     st.markdown(
         """
@@ -295,7 +319,13 @@ def _ensure_position_columns(df: pd.DataFrame) -> pd.DataFrame:
     return work_df
 
 
-def prepare_strike_metric(df_raw, view_mode, option_focus="both"):
+def prepare_strike_metric(
+    df_raw,
+    view_mode,
+    option_focus="both",
+    breakout_expirations=True,
+    signed_view=False,
+):
     df = _ensure_position_columns(df_raw)
     df["DTE"] = df.get("DTE", 0).fillna(0).astype(int)
     df["expiration_label"] = df.get("expiration_label", "").astype(str)
@@ -307,16 +337,18 @@ def prepare_strike_metric(df_raw, view_mode, option_focus="both"):
     focus = _normalise_option_focus(option_focus)
 
     metric_map = {
-        "gamma exposure": ("GammaExposure", "Gamma Exposure", px.colors.sequential.Blues),
-        "delta exposure": ("DeltaExposure", "Delta Exposure", px.colors.sequential.Oranges),
-        "open interest": ("open_interest", "Open Interest", px.colors.sequential.Teal),
-        "volume": ("volume", "Volume", px.colors.sequential.Purples),
+        "gamma exposure": "GammaExposure",
+        "delta exposure": "DeltaExposure",
+        "open interest": "open_interest",
+        "volume": "volume",
     }
 
-    if metric_key not in metric_map:
+    if metric_key not in metric_map or metric_key not in METRIC_COLOR_THEMES:
         raise ValueError(f"Unsupported metric view: {view_mode}")
 
-    value_col, label, color_scale = metric_map[metric_key]
+    value_col = metric_map[metric_key]
+    theme = METRIC_COLOR_THEMES[metric_key]
+    label = theme["label"]
 
     work_df = df.copy()
     if focus != "both" and "option_type" in work_df.columns:
@@ -328,34 +360,60 @@ def prepare_strike_metric(df_raw, view_mode, option_focus="both"):
         work_df[value_col] = 0.0
 
     if value_col in {"GammaExposure", "DeltaExposure"}:
-        work_df["abs_value"] = work_df[value_col].abs() / 1e6
-        work_df["raw_value"] = work_df[value_col] / 1e6
-        value_label = f"{label} (|$M|)"
+        work_df["base_value"] = work_df[value_col] / 1e6
+        work_df["display_value"] = (
+            work_df["base_value"] if signed_view else work_df["base_value"].abs()
+        )
+        value_label = f"{label} ($M)" if signed_view else f"{label} (|$M|)"
     else:
-        work_df["abs_value"] = work_df[value_col]
-        work_df["raw_value"] = work_df[value_col]
+        work_df["base_value"] = work_df[value_col]
+        work_df["display_value"] = work_df["base_value"]
         value_label = label
 
-    group_cols = ["strike", "expiration_label", "DTE", "expiration_display"]
-    grouped = (
-        work_df.groupby(group_cols)
-        .agg(Value=("abs_value", "sum"), RawValue=("raw_value", "sum"))
-        .reset_index()
-    )
-
-    if grouped.empty:
-        return grouped.rename(columns={"strike": "Strike"})[["Strike", "Value"]], value_label, label, color_scale
-
-    grouped = (
-        grouped.rename(
-            columns={
-                "strike": "Strike",
-                "expiration_display": "Expiration",
-            }
+    if breakout_expirations:
+        group_cols = ["strike", "expiration_label", "DTE", "expiration_display"]
+        grouped = (
+            work_df.groupby(group_cols)
+            .agg(Value=("display_value", "sum"), RawValue=("base_value", "sum"))
+            .reset_index()
         )
-        .sort_values(["DTE", "Strike"])
+
+        if grouped.empty:
+            empty = grouped.rename(columns={"strike": "Strike"})
+            return empty[["Strike", "Value"]], value_label, label, theme
+
+        grouped = (
+            grouped.rename(
+                columns={
+                    "strike": "Strike",
+                    "expiration_display": "Expiration",
+                }
+            )
+            .sort_values(["DTE", "Strike"])
+        )
+        return (
+            grouped[["Strike", "Expiration", "DTE", "expiration_label", "Value", "RawValue"]],
+            value_label,
+            label,
+            theme,
+        )
+
+    grouped = (
+        work_df.groupby("strike")
+        .agg(
+            RawValue=("base_value", "sum"),
+            Magnitude=("display_value", "sum"),
+        )
+        .reset_index()
+        .rename(columns={"strike": "Strike"})
     )
-    return grouped[["Strike", "Expiration", "DTE", "expiration_label", "Value", "RawValue"]], value_label, label, color_scale
+
+    if signed_view:
+        grouped["Value"] = grouped["RawValue"]
+    else:
+        grouped["Value"] = grouped["Magnitude"]
+
+    return grouped[["Strike", "Value", "RawValue"]], value_label, label, theme
 
 
 def prepare_expiration_metric(df_raw, view_mode, option_focus="both"):
@@ -370,16 +428,18 @@ def prepare_expiration_metric(df_raw, view_mode, option_focus="both"):
     focus = _normalise_option_focus(option_focus)
 
     metric_map = {
-        "gamma exposure": ("GammaExposure", "Gamma Exposure", px.colors.sequential.Blues),
-        "delta exposure": ("DeltaExposure", "Delta Exposure", px.colors.sequential.Oranges),
-        "open interest": ("open_interest", "Open Interest", px.colors.sequential.Teal),
-        "volume": ("volume", "Volume", px.colors.sequential.Purples),
+        "gamma exposure": "GammaExposure",
+        "delta exposure": "DeltaExposure",
+        "open interest": "open_interest",
+        "volume": "volume",
     }
 
-    if metric_key not in metric_map:
+    if metric_key not in metric_map or metric_key not in METRIC_COLOR_THEMES:
         raise ValueError(f"Unsupported metric view: {view_mode}")
 
-    value_col, label, color_scale = metric_map[metric_key]
+    value_col = metric_map[metric_key]
+    theme = METRIC_COLOR_THEMES[metric_key]
+    label = theme["label"]
 
     work_df = df.copy()
     if focus != "both" and "option_type" in work_df.columns:
@@ -414,7 +474,7 @@ def prepare_expiration_metric(df_raw, view_mode, option_focus="both"):
         columns={"expiration_display": "Expiration"}
     )[["Expiration", "Value", "RawValue", "DTE", "expiration_label"]]
 
-    return chart_df, value_label, label, color_scale
+    return chart_df, value_label, label, theme
 
 
 init_db()
@@ -559,37 +619,33 @@ with tab1:
                 options=["Combined", "Calls", "Puts"],
                 horizontal=True,
             )
-            chart_df, value_label, label, color_scale = prepare_strike_metric(
+            chart_df, value_label, label, theme = prepare_strike_metric(
                 df0,
                 chart_metric,
                 option_focus,
+                breakout_expirations=False,
+                signed_view=True,
             )
 
             if chart_df.empty:
                 st.warning("No data available for this view.")
             else:
-                value_fmt = ".2f" if chart_metric in {"Gamma Exposure", "Delta Exposure"} else ",.0f"
-                signed_fmt = "+,.2f" if chart_metric in {"Gamma Exposure", "Delta Exposure"} else "+,.0f"
-                custom = chart_df[["Expiration", "DTE", "RawValue"]].values
+                exposures = {"Gamma Exposure", "Delta Exposure"}
+                value_fmt = "+,.2f" if chart_metric in exposures else ",.0f"
                 fig_gex = px.bar(
                     chart_df,
                     x="Value",
                     y="Strike",
                     orientation="h",
-                    color="Expiration",
                     labels={"Value": value_label, "Strike": "Strike"},
                     height=620,
-                    color_discrete_sequence=color_scale,
                     title=f"{label} (Exp {exp0})\n(±{offset} strikes around {spot:.1f})",
                 )
                 fig_gex.update_traces(
-                    customdata=custom,
+                    marker_color=theme["single"],
                     hovertemplate=(
                         "<b>Strike %{y}</b><br>"
-                        + "Value %{x:" + value_fmt + "}"
-                        + "<br>Expiration %{customdata[0]}"
-                        + "<br>DTE %{customdata[1]}"
-                        + "<br>Signed %{customdata[2]:" + signed_fmt + "}"
+                        + ("Value %{x:" + value_fmt + "}M" if chart_metric in exposures else "Value %{x:" + value_fmt + "}")
                         + "<extra></extra>"
                     ),
                 )
@@ -598,9 +654,12 @@ with tab1:
                     paper_bgcolor="rgba(0,0,0,0)",
                     plot_bgcolor="rgba(15,23,42,0.25)",
                     margin=dict(l=40, r=40, t=90, b=40),
-                    legend_title_text="Expiration · DTE",
                 )
-                fig_gex.update_xaxes(title=value_label, tickfont=dict(color="#e2e8f0"))
+                xaxis_kwargs = dict(title=value_label, tickfont=dict(color="#e2e8f0"))
+                if chart_metric in exposures:
+                    xaxis_kwargs["tickformat"] = "+,.2f"
+                    fig_gex.add_vline(x=0, line_dash="dash", line_color="#64748b")
+                fig_gex.update_xaxes(**xaxis_kwargs)
                 fig_gex.update_yaxes(tickfont=dict(size=14, color="#e2e8f0"))
                 st.plotly_chart(fig_gex, use_container_width=True)
                 st.caption("Flip between exposure, OI, and volume to see how hedging and liquidity align.")
@@ -627,39 +686,136 @@ with tab1:
 
         st.markdown("---")
 
-        calls = df0[df0.option_type == "call"][['strike', 'mid_iv']].rename(columns={'mid_iv': 'iv_call'})
-        puts = df0[df0.option_type == "put"][['strike', 'mid_iv']].rename(columns={'mid_iv': 'iv_put'})
+        calls = (
+            df0[df0.option_type == "call"][['strike', 'mid_iv']]
+            .rename(columns={'mid_iv': 'iv_call'})
+        )
+        puts = (
+            df0[df0.option_type == "put"][['strike', 'mid_iv']]
+            .rename(columns={'mid_iv': 'iv_put'})
+        )
         iv_skew_df = pd.merge(calls, puts, on='strike')
         iv_skew_df['IV Skew'] = iv_skew_df['iv_put'] - iv_skew_df['iv_call']
-        fig_skew = px.line(
-            iv_skew_df,
-            x='strike', y='IV Skew',
-            markers=True,
-            title=f"IV Skew (Put IV - Call IV)\n(±{offset} around {spot:.1f})",
-            labels={'strike': 'Strike', 'IV Skew': 'IV Skew'},
-            template="plotly_dark",
-            height=520
-        )
-        fig_skew.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(15,23,42,0.25)",
-            margin=dict(l=40, r=40, t=80, b=40)
-        )
-        fig_skew.update_yaxes(tickfont=dict(size=14, color="#e2e8f0"))
-        fig_skew.update_xaxes(tickfont=dict(color="#e2e8f0"))
-        fig_skew.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
-        st.plotly_chart(fig_skew, use_container_width=True)
-        st.markdown("<div class='soft-card'>", unsafe_allow_html=True)
-        st.markdown(
-            """
-            **IV skew interpretation:**
-            - Positive skew means puts are richer than calls, signalling demand for downside insurance or dealer short gamma.
-            - Negative skew shows calls pricing above puts, often after squeeze dynamics or call overwriting flows.
-            - Watch how the slope shifts with spot — a steepening skew into lower strikes hints at intensifying crash hedging.
-            - Overlay with volume/OI spikes to confirm whether skew moves are driven by fresh trades or mark-to-market moves.
-            """
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
+        iv_skew_df = iv_skew_df.sort_values('strike').reset_index(drop=True)
+
+        st.markdown("#### IV skew lens")
+        if iv_skew_df.empty:
+            st.info("Skew requires overlapping call and put strikes within the selected range.")
+            with st.expander("How to interpret skew", expanded=True):
+                st.markdown(
+                    dedent(
+                        """
+                        - **Positive skew** means puts are richer than calls, signalling demand for downside insurance or dealer short gamma.
+                        - **Negative skew** shows calls pricing above puts, often after squeeze dynamics or call overwriting flows.
+                        - Track how the slope shifts with spot — a steepening skew into lower strikes hints at intensifying crash hedging.
+                        - Overlay with volume/OI spikes to confirm whether skew moves are driven by fresh trades or mark-to-market moves.
+                        """
+                    )
+                )
+            with st.expander("More skew diagnostics"):
+                st.markdown(
+                    dedent(
+                        """
+                        - Compare skew changes with the dealer gamma flip zones to gauge how hedging pressure may evolve.
+                        - Watch ATM skew versus realized volatility to spot overpriced crash protection.
+                        - Use the strike slider to inspect how skew reprices as spot migrates intraday.
+                        """
+                    )
+                )
+        else:
+            chart_col, meta_col = st.columns([3, 2], gap="large")
+            with chart_col:
+                fig_skew = px.line(
+                    iv_skew_df,
+                    x='strike',
+                    y='IV Skew',
+                    markers=True,
+                    title=f"Put minus Call IV\n(±{offset} around {spot:.1f})",
+                    labels={'strike': 'Strike', 'IV Skew': 'IV Skew'},
+                    template="plotly_dark",
+                    height=360,
+                )
+                fig_skew.update_traces(
+                    line_color="#38bdf8",
+                    line_width=3,
+                    marker=dict(size=7, color="#c084fc", line=dict(color="#0f172a", width=0.6)),
+                    hovertemplate="Strike %{x:.0f}<br>Skew %{y:+.2%}<extra></extra>",
+                )
+                fig_skew.update_layout(
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(15,23,42,0.25)",
+                    margin=dict(l=30, r=20, t=80, b=40),
+                )
+                fig_skew.update_yaxes(
+                    title="IV Skew",
+                    tickfont=dict(size=13, color="#e2e8f0"),
+                    tickformat="+.1%",
+                    zeroline=False,
+                    gridcolor="rgba(148,163,184,0.18)",
+                )
+                fig_skew.update_xaxes(
+                    title="Strike",
+                    tickfont=dict(color="#e2e8f0"),
+                    gridcolor="rgba(148,163,184,0.12)",
+                )
+                fig_skew.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
+                st.plotly_chart(fig_skew, use_container_width=True)
+
+            with meta_col:
+                atm_idx = (iv_skew_df['strike'] - spot).abs().idxmin()
+                atm_row = iv_skew_df.loc[atm_idx]
+                peak_row = iv_skew_df.loc[iv_skew_df['IV Skew'].idxmax()]
+                trough_row = iv_skew_df.loc[iv_skew_df['IV Skew'].idxmin()]
+
+                top_metrics = st.columns(2)
+                with top_metrics[0]:
+                    metric_card(
+                        "ATM Skew",
+                        f"{atm_row['IV Skew']*100:+.2f}%",
+                        footnote=f"Strike {atm_row['strike']:.0f}",
+                    )
+                with top_metrics[1]:
+                    metric_card(
+                        "ATM Put IV",
+                        f"{atm_row['iv_put']*100:.2f}%",
+                        footnote=f"Call IV {atm_row['iv_call']*100:.2f}%",
+                    )
+
+                bottom_metrics = st.columns(2)
+                with bottom_metrics[0]:
+                    metric_card(
+                        "Peak Skew",
+                        f"{peak_row['IV Skew']*100:+.2f}%",
+                        footnote=f"Strike {peak_row['strike']:.0f}",
+                    )
+                with bottom_metrics[1]:
+                    metric_card(
+                        "Trough Skew",
+                        f"{trough_row['IV Skew']*100:+.2f}%",
+                        footnote=f"Strike {trough_row['strike']:.0f}",
+                    )
+
+                with st.expander("How to interpret skew", expanded=True):
+                    st.markdown(
+                        dedent(
+                            """
+                            - **Positive skew** means puts are richer than calls, signalling demand for downside insurance or dealer short gamma.
+                            - **Negative skew** shows calls pricing above puts, often after squeeze dynamics or call overwriting flows.
+                            - Track how the slope shifts with spot — a steepening skew into lower strikes hints at intensifying crash hedging.
+                            - Overlay with volume/OI spikes to confirm whether skew moves are driven by fresh trades or mark-to-market moves.
+                            """
+                        )
+                    )
+                with st.expander("More skew diagnostics"):
+                    st.markdown(
+                        dedent(
+                            """
+                            - Compare skew changes with the dealer gamma flip zones to gauge how hedging pressure may evolve.
+                            - Watch ATM skew versus realized volatility to spot overpriced crash protection.
+                            - Use the strike slider to inspect how skew reprices as spot migrates intraday.
+                            """
+                        )
+                    )
 
         vol_ratio, oi_ratio = compute_put_call_ratios(df0)
         st.markdown("#### Flow diagnostics")
@@ -847,7 +1003,7 @@ with tab2:
                         value_fmt = ".2f" if chart_metric in {"Gamma Exposure", "Delta Exposure"} else ",.0f"
                         signed_fmt = "+,.2f" if chart_metric in {"Gamma Exposure", "Delta Exposure"} else "+,.0f"
                         if lens_mode == "Strike lens":
-                            chart_df, value_label, label, color_scale = prepare_strike_metric(
+                            chart_df, value_label, label, theme = prepare_strike_metric(
                                 df,
                                 chart_metric,
                                 option_focus,
@@ -864,10 +1020,12 @@ with tab2:
                                     color="Expiration",
                                     labels={"Value": value_label, "Strike": "Strike"},
                                     height=650,
-                                    color_discrete_sequence=color_scale,
+                                    color_discrete_sequence=theme["sequence"],
                                     title=f"{label} across strikes\n(±{offset} around {spot:.1f})",
                                 )
                                 fig.update_traces(
+                                    marker_line_width=0.4,
+                                    marker_line_color="rgba(15,23,42,0.8)",
                                     customdata=custom,
                                     hovertemplate=(
                                         "<b>Strike %{y}</b><br>"
@@ -884,12 +1042,18 @@ with tab2:
                                     plot_bgcolor="rgba(15,23,42,0.25)",
                                     margin=dict(l=40, r=40, t=90, b=40),
                                     legend_title_text="Expiration · DTE",
+                                    legend=dict(
+                                        bgcolor="rgba(15,23,42,0.7)",
+                                        bordercolor="rgba(148, 163, 184, 0.4)",
+                                        borderwidth=1,
+                                        font=dict(color="#e2e8f0"),
+                                    ),
                                 )
                                 fig.update_xaxes(title=value_label, tickfont=dict(color="#e2e8f0"))
                                 fig.update_yaxes(tickfont=dict(size=14, color="#e2e8f0"))
                                 st.plotly_chart(fig, use_container_width=True)
                         else:
-                            chart_df, value_label, label, color_scale = prepare_expiration_metric(
+                            chart_df, value_label, label, theme = prepare_expiration_metric(
                                 df,
                                 chart_metric,
                                 option_focus,
@@ -905,10 +1069,12 @@ with tab2:
                                     color="Expiration",
                                     labels={"Value": value_label, "Expiration": "Expiration"},
                                     height=650,
-                                    color_discrete_sequence=color_scale,
+                                    color_discrete_sequence=theme["sequence"],
                                     title=f"{label} across expirations",
                                 )
                                 fig.update_traces(
+                                    marker_line_width=0.4,
+                                    marker_line_color="rgba(15,23,42,0.8)",
                                     customdata=custom,
                                     hovertemplate=(
                                         "<b>%{x}</b><br>"
