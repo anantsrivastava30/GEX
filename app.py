@@ -30,7 +30,195 @@ from quant import openai_query
 from db import init_db, save_analysis, load_analyses
 
 from db import init_db
+
+
+def inject_global_styles():
+    st.markdown(
+        """
+        <style>
+            .stApp {
+                background: radial-gradient(circle at 20% 20%, #1e293b 0%, #0f172a 40%, #020617 100%);
+                color: #e2e8f0;
+            }
+
+            .main .block-container {
+                padding-top: 2.5rem;
+                padding-bottom: 2.5rem;
+                max-width: 1400px;
+            }
+
+            .stTabs [role="tablist"] button {
+                border-radius: 12px;
+                background: rgba(15, 23, 42, 0.45);
+                border: 0;
+                color: #cbd5f5;
+                padding: 0.75rem 1.3rem;
+                margin-right: 0.65rem;
+                transition: all 0.2s ease-in-out;
+            }
+
+            .stTabs [role="tablist"] button:hover {
+                filter: brightness(1.15);
+            }
+
+            .stTabs [role="tablist"] button[aria-selected="true"] {
+                background: linear-gradient(135deg, #6366f1, #0ea5e9);
+                color: #ffffff;
+                box-shadow: 0 12px 30px rgba(14, 165, 233, 0.25);
+            }
+
+            .metric-card {
+                background: rgba(15, 23, 42, 0.55);
+                border-radius: 18px;
+                padding: 1.2rem 1.5rem;
+                border: 1px solid rgba(148, 163, 184, 0.18);
+                box-shadow: 0 18px 38px rgba(2, 6, 23, 0.35);
+                height: 100%;
+            }
+
+            .metric-card h3 {
+                font-size: 0.9rem;
+                text-transform: uppercase;
+                letter-spacing: 0.08em;
+                color: #94a3b8;
+                margin-bottom: 0.4rem;
+            }
+
+            .metric-card p {
+                font-size: 1.65rem;
+                font-weight: 700;
+                color: #f8fafc;
+                margin-bottom: 0.3rem;
+            }
+
+            .metric-delta {
+                font-size: 0.9rem;
+                color: #38bdf8;
+                margin-bottom: 0.25rem;
+            }
+
+            .metric-footnote {
+                font-size: 0.75rem;
+                color: #cbd5f5;
+                opacity: 0.8;
+                margin: 0;
+            }
+
+            .soft-card {
+                background: rgba(15, 23, 42, 0.58);
+                border-radius: 18px;
+                padding: 1.5rem;
+                border: 1px solid rgba(148, 163, 184, 0.18);
+                box-shadow: 0 18px 38px rgba(2, 6, 23, 0.35);
+            }
+
+            .soft-card h4 {
+                color: #cbd5f5;
+                margin-bottom: 0.5rem;
+            }
+
+            .stExpander {
+                background: rgba(15, 23, 42, 0.55);
+                border-radius: 14px;
+                border: 1px solid rgba(148, 163, 184, 0.18);
+                overflow: hidden;
+            }
+
+            .stExpander > div:first-child {
+                background: rgba(30, 41, 59, 0.55);
+                color: #f8fafc;
+            }
+
+            .stExpander .streamlit-expanderContent {
+                background: rgba(2, 6, 23, 0.3);
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def metric_card(title: str, value: str, *, delta: str | None = None, footnote: str | None = None):
+    delta_html = f"<div class='metric-delta'>{delta}</div>" if delta else ""
+    foot_html = f"<p class='metric-footnote'>{footnote}</p>" if footnote else ""
+    st.markdown(
+        f"""
+        <div class="metric-card">
+            <h3>{title}</h3>
+            <p>{value}</p>
+            {delta_html}
+            {foot_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def prepare_strike_metric(df_raw, df_net, view_mode, option_focus="both"):
+    df = df_raw.copy()
+    if "contract_size" not in df.columns:
+        df["contract_size"] = 100
+    df["contract_size"] = df["contract_size"].fillna(100)
+    if "open_interest" not in df.columns:
+        df["open_interest"] = 0
+    else:
+        df["open_interest"] = df["open_interest"].fillna(0)
+    if "volume" not in df.columns:
+        df["volume"] = 0
+    else:
+        df["volume"] = df["volume"].fillna(0)
+    if "gamma" not in df.columns:
+        df["gamma"] = 0.0
+    df["gamma"] = df["gamma"].fillna(0.0)
+    df["gamma_exposure"] = (
+        df["gamma"] * df["open_interest"] * df["contract_size"]
+    )
+
+    view_mode = view_mode.lower()
+    option_focus = option_focus.lower()
+
+    if view_mode == "net gamma exposure":
+        chart_df = df_net.rename(columns={"GEX": "Value"}).copy()
+        chart_df["Metric"] = "Net Gamma"
+        label = "Net Gamma Exposure"
+        title = "Net Gamma Exposure"
+        color_scale = px.colors.diverging.Tealrose
+    elif view_mode == "gamma exposure — calls":
+        calls = (
+            df[df["option_type"].str.lower() == "call"]
+            .groupby("strike")["gamma_exposure"].sum()
+            .reset_index()
+        )
+        chart_df = calls.rename(columns={"gamma_exposure": "Value", "strike": "Strike"})
+        label = "Gamma Exposure"
+        title = "Call Gamma Exposure"
+        color_scale = px.colors.sequential.Blues
+    elif view_mode == "gamma exposure — puts":
+        puts = (
+            df[df["option_type"].str.lower() == "put"]
+            .groupby("strike")["gamma_exposure"].sum()
+            .reset_index()
+        )
+        chart_df = puts.rename(columns={"gamma_exposure": "Value", "strike": "Strike"})
+        label = "Gamma Exposure"
+        title = "Put Gamma Exposure"
+        color_scale = px.colors.sequential.Oranges
+    else:
+        metric_col = "open_interest" if "open" in view_mode else "volume"
+        if option_focus in {"calls", "puts"}:
+            df = df[df["option_type"].str.lower() == option_focus[:-1] if option_focus.endswith("s") else option_focus]
+        grouped = df.groupby("strike")[metric_col].sum().reset_index()
+        chart_df = grouped.rename(columns={metric_col: "Value", "strike": "Strike"})
+        label = metric_col.replace("_", " ").title()
+        title = label
+        color_scale = px.colors.sequential.Teal
+
+    chart_df = chart_df.sort_values("Strike")
+    return chart_df, label, title, color_scale
+
+
 init_db()
+inject_global_styles()
 
 # ---------------- Streamlit Config ----------------
 st.set_page_config(layout="wide", page_title="Options Analytics Dashboard")
@@ -101,6 +289,7 @@ with tab1:
         except Exception:
             st.error(f"Failed to fetch options for {exp0}")
             st.stop()
+
         df0 = pd.DataFrame(chain0)
         if "greeks" in df0.columns:
             greeks_df0 = pd.json_normalize(df0.pop("greeks"))
@@ -108,26 +297,124 @@ with tab1:
         df0 = df0[(df0.strike >= spot - offset) & (df0.strike <= spot + offset)]
 
         df_net = (
-            pd.DataFrame([{ 
-                "Strike": opt["strike"],
-                "GEX": opt.get("gamma", 0) * opt.get("open_interest", 0) * opt.get("contract_size", 100)
-            } for opt in df0.to_dict('records')])
+            pd.DataFrame([
+                {
+                    "Strike": opt["strike"],
+                    "GEX": opt.get("gamma", 0) * opt.get("open_interest", 0) * opt.get("contract_size", 100),
+                }
+                for opt in df0.to_dict("records")
+            ])
             .groupby("Strike").sum().reset_index().sort_values("Strike")
         )
-        fig_gex = px.bar(
-            df_net,
-            x="GEX", y="Strike",
-            orientation="h",
-            title=f"Net Gamma Exposure (Exp {exp0})\n(Showing ±{offset} around {spot:.1f})",
-            labels={"GEX": "Net GEX", "Strike": "Strike"},
-            template="seaborn",
-            height=600
-        )
-        fig_gex.update_yaxes(tickfont=dict(size=16))
-        fig_gex.add_vline(x=0, line_dash="dash", line_color="black")
-        st.plotly_chart(fig_gex, use_container_width=True)
-        with st.expander("🔍 More details…", expanded=False):
-            st.markdown("\n\n".join(interpret_net_gex(df_net, spot)))
+
+        if df_net.empty:
+            st.info("No gamma exposure data returned for the selected settings.")
+            st.stop()
+
+        total_oi = df0.get("open_interest", pd.Series(dtype=float)).sum()
+        magnet_row = df_net.loc[df_net["GEX"].idxmax()]
+        magnet_strike = magnet_row["Strike"]
+        magnet_val = magnet_row["GEX"]
+        gamma_flip_mask = df_net["GEX"].shift().mul(df_net["GEX"]).lt(0)
+        gamma_flips = df_net.loc[gamma_flip_mask, "Strike"].round(1).tolist()
+        gamma_flip_text = ", ".join(map(str, gamma_flips)) if gamma_flips else "No flip in range"
+
+        snapshot_container = st.container()
+        snapshot_container.markdown("#### Market snapshot")
+        c1, c2, c3 = snapshot_container.columns(3)
+        with c1:
+            delta = f"{spot - magnet_strike:+.2f} vs peak GEX"
+            metric_card("Spot Price", f"${spot:.2f}", delta=delta, footnote=f"{ticker} | Exp {exp0}")
+        with c2:
+            metric_card(
+                "Peak Net GEX",
+                f"{magnet_val/1e6:.2f}M",
+                footnote=f"Anchors near strike {magnet_strike:.0f}",
+            )
+        with c3:
+            metric_card("Gamma Flip Zones", gamma_flip_text, footnote="Where dealer hedging flips sign")
+
+        st.markdown("---")
+
+        chart_col, insight_col = st.columns([3, 2], gap="large")
+        with chart_col:
+            st.subheader("Dealer positioning lens")
+            view_options = [
+                "Net Gamma Exposure",
+                "Gamma Exposure — Calls",
+                "Gamma Exposure — Puts",
+                "Open Interest",
+                "Volume",
+            ]
+            chart_view = st.radio(
+                "Visualize strike dynamics",
+                options=view_options,
+                horizontal=True,
+            )
+            option_focus = "Both"
+            if chart_view in {"Open Interest", "Volume"}:
+                option_focus = st.radio(
+                    "Option focus",
+                    options=["Both", "Calls", "Puts"],
+                    horizontal=True,
+                    help="Toggle to isolate liquidity by option side",
+                )
+            chart_df, value_label, title_label, color_scale = prepare_strike_metric(
+                df0,
+                df_net,
+                chart_view,
+                option_focus,
+            )
+
+            if chart_df.empty:
+                st.warning("No data available for this view.")
+            else:
+                fig_gex = px.bar(
+                    chart_df,
+                    x="Value",
+                    y="Strike",
+                    orientation="h",
+                    color="Value",
+                    color_continuous_scale=color_scale,
+                    labels={"Value": value_label, "Strike": "Strike"},
+                    height=620,
+                    title=f"{title_label} (Exp {exp0})\n(±{offset} strikes around {spot:.1f})",
+                )
+                if chart_view == "Net Gamma Exposure":
+                    fig_gex.add_vline(x=0, line_dash="dash", line_color="#f1f5f9")
+                fig_gex.update_layout(
+                    template="plotly_dark",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(15,23,42,0.25)",
+                    margin=dict(l=40, r=40, t=90, b=40),
+                    coloraxis_showscale=chart_view != "Net Gamma Exposure",
+                )
+                fig_gex.update_xaxes(title=value_label, tickfont=dict(color="#e2e8f0"))
+                fig_gex.update_yaxes(tickfont=dict(size=14, color="#e2e8f0"))
+                st.plotly_chart(fig_gex, use_container_width=True)
+                st.caption("Flip between GEX, OI and volume to understand how positioning, liquidity and flow align.")
+
+        with insight_col:
+            st.subheader("What the lens is highlighting")
+            with st.container():
+                st.markdown("<div class='soft-card'>", unsafe_allow_html=True)
+                st.markdown(
+                    """
+                    - **Net Gamma** indicates how aggressively dealers need to hedge. Positive values usually dampen price swings.
+                    - **Gamma Exposure splits** (calls vs puts) surface directional imbalances in dealer positioning.
+                    - **Open Interest & Volume views** spotlight where traders concentrate liquidity and fresh flow.
+                    """
+                )
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            with st.container():
+                st.markdown("<div class='soft-card'>", unsafe_allow_html=True)
+                st.markdown("**Automated read-through**")
+                insights = "\n".join(f"- {line}" for line in interpret_net_gex(df_net, spot))
+                st.markdown(insights)
+                st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown("---")
 
         calls = df0[df0.option_type == "call"][['strike', 'mid_iv']].rename(columns={'mid_iv': 'iv_call'})
         puts = df0[df0.option_type == "put"][['strike', 'mid_iv']].rename(columns={'mid_iv': 'iv_put'})
@@ -139,75 +426,84 @@ with tab1:
             markers=True,
             title=f"IV Skew (Put IV - Call IV)\n(±{offset} around {spot:.1f})",
             labels={'strike': 'Strike', 'IV Skew': 'IV Skew'},
-            template="seaborn",
-            height=600
+            template="plotly_dark",
+            height=520
         )
-        fig_skew.update_yaxes(tickfont=dict(size=16))
-        fig_skew.add_hline(y=0, line_dash="dash", line_color="black")
+        fig_skew.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(15,23,42,0.25)",
+            margin=dict(l=40, r=40, t=80, b=40)
+        )
+        fig_skew.update_yaxes(tickfont=dict(size=14, color="#e2e8f0"))
+        fig_skew.update_xaxes(tickfont=dict(color="#e2e8f0"))
+        fig_skew.add_hline(y=0, line_dash="dash", line_color="#94a3b8")
         st.plotly_chart(fig_skew, use_container_width=True)
-        st.markdown("""
-        **Interpretation:**
-        - **Net GEX** shows dealer hedging pressure by strike (positive = dealers bought deltas).
-        - **IV Skew > 0** means puts richer than calls: bearish tail premium.
-        - **Put/Call Volume & OI Ratios** > 1 indicate more bearish flow.
-        - **Unusual Volume/OI Spikes** highlight strikes with outsized trading interest.
-        - **When daily volume / open interest** jumps above its 90th percentile, it signals unusual flow—often institutions entering or exiting positions.
-        """)
-        with st.expander("🔍 More details…", expanded=False):
-            st.markdown("""
-            - The term "bearish tail risk premium" refers to the additional compensation 
-              investors demand for holding assets that are more likely to experience extreme negative returns (i.e., "left tail" events) during bearish market conditions or a downturn.
-            - A negative skew means calls are richer → bullish bias or "callers" fear.”
-              - **Bullish bias** reflects an optimistic outlook, anticipating rising asset prices and market gains
-            """)
-        st.markdown("---")
 
         vol_ratio, oi_ratio = compute_put_call_ratios(df0)
-        col1, col2 = st.columns([1, 2])
+        st.markdown("#### Flow diagnostics")
+        diag_cols = st.columns(3)
+        with diag_cols[0]:
+            metric_card("Put/Call Volume", f"{vol_ratio:.2f}", footnote=">1 suggests defensive flow")
+        with diag_cols[1]:
+            metric_card("Put/Call Open Interest", f"{oi_ratio:.2f}", footnote=">1 = more downside hedges outstanding")
+        with diag_cols[2]:
+            metric_card("Total OI", f"{int(total_oi):,}", footnote="Contracts within selected strikes")
+
         fig = plot_put_call_ratios(vol_ratio, oi_ratio)
-        with col1:
-            st.metric("Put/Call Volume Ratio", f"{vol_ratio:.2f}")
-            st.metric("Put/Call OI Ratio", f"{oi_ratio:.2f}")
-        with col2:
-            st.plotly_chart(fig, use_container_width=True)
+        fig.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(15,23,42,0.25)",
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
         try:
             liq = get_liquidity_metrics(ticker, tradier_token)
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Trading Volume", f"{liq['volume']:,}")
+            st.markdown("#### Liquidity snapshot")
+            lc1, lc2, lc3 = st.columns(3)
+            with lc1:
+                metric_card("Trading Volume", f"{liq['volume']:,}")
             if liq.get("bid_ask_spread_pct") is not None:
-                delta = None
                 hist = liq.get("avg_spread_pct")
-                if hist is not None:
+                delta = None
+                if hist is not None and hist:
                     delta = f"{(liq['bid_ask_spread_pct']/hist-1)*100:+.1f}% vs avg"
-                c2.metric(
-                    "Bid-Ask Spread (%)",
-                    f"{liq['bid_ask_spread_pct']*100:.2f}",
-                    delta=delta
-                )
+                with lc2:
+                    metric_card(
+                        "Bid-Ask Spread",
+                        f"{liq['bid_ask_spread_pct']*100:.2f}%",
+                        delta=delta,
+                        footnote="Tighter spreads = easier executions",
+                    )
             else:
-                c2.write("N/A")
+                with lc2:
+                    metric_card("Bid-Ask Spread", "N/A")
             if liq.get("order_book_depth") is not None:
-                c3.metric("Order Book Depth", f"{liq['order_book_depth']:,}")
+                with lc3:
+                    metric_card("Order Book Depth", f"{liq['order_book_depth']:,}")
             else:
-                c3.write("N/A")
-            st.caption(
-                "Lower volume, wider spreads and shallow depth typically signal **low liquidity**."
-            )
+                with lc3:
+                    metric_card("Order Book Depth", "N/A")
+            st.caption("Lower volume, wider spreads and shallow depth typically signal **low liquidity**.")
         except Exception as e:
             st.warning(f"Liquidity metrics unavailable: {e}")
 
         spikes_df = compute_unusual_spikes(df0)
-        st.write(spikes_df)
-        fig = plot_volume_spikes_stacked(spikes_df, offset=offset, spot=spot)
-        st.plotly_chart(fig, use_container_width=True)
+        st.markdown("#### Unusual flow radar")
+        st.dataframe(spikes_df, use_container_width=True, hide_index=True)
+        fig_spikes = plot_volume_spikes_stacked(spikes_df, offset=offset, spot=spot)
+        fig_spikes.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(15,23,42,0.25)",
+        )
+        st.plotly_chart(fig_spikes, use_container_width=True)
 
-        # Price and dealers detla hedge and projection
-        # fig = plot_price_and_delta_projection(ticker, exp0, tradier_token, offset=offset)
-        # st.plotly_chart(fig, use_container_width=True)
+        st.caption(
+            "Volume/OI spikes paired with gamma positioning help confirm whether fresh flow is following or fighting dealer hedging."
+        )
     else:
         st.info("Select ticker, expirations, and ensure spot price loaded.")
-
 # --- Tab 2: Options Positioning ---
 with tab2:
     st.header("🎯 Options Positioning")
