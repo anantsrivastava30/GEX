@@ -161,6 +161,40 @@ def inject_global_styles():
                 margin-bottom: 0.5rem;
             }
 
+            .hero-chart {
+                position: relative;
+                border-radius: 22px;
+                padding: 1.75rem 1.6rem 1.4rem;
+                background: linear-gradient(135deg, rgba(30, 64, 175, 0.35), rgba(8, 145, 178, 0.18));
+                border: 1px solid rgba(125, 211, 252, 0.28);
+                box-shadow: 0 28px 55px rgba(13, 148, 136, 0.28);
+                overflow: hidden;
+            }
+
+            .hero-chart::after {
+                content: "";
+                position: absolute;
+                inset: 0;
+                pointer-events: none;
+                border-radius: 22px;
+                background: radial-gradient(circle at 85% 20%, rgba(56, 189, 248, 0.22), transparent 55%);
+            }
+
+            .hero-chart__title {
+                position: relative;
+                font-size: 1.35rem;
+                font-weight: 700;
+                margin-bottom: 0.35rem;
+                color: #f8fafc;
+            }
+
+            .hero-chart__caption {
+                position: relative;
+                color: rgba(226, 232, 240, 0.82);
+                font-size: 0.9rem;
+                margin-bottom: 1rem;
+            }
+
             .article-card {
                 background: rgba(15, 23, 42, 0.6);
                 border-radius: 16px;
@@ -980,9 +1014,17 @@ with tab2:
 
                     st.markdown("---")
 
-                    chart_col, insight_col = st.columns([3, 2], gap="large")
+                    chart_col, insight_col = st.columns([5, 2], gap="large")
                     with chart_col:
-                        st.subheader("Positioning drilldown")
+                        st.markdown("<div class='hero-chart'>", unsafe_allow_html=True)
+                        st.markdown(
+                            "<h3 class='hero-chart__title'>📈 Positioning drilldown</h3>",
+                            unsafe_allow_html=True,
+                        )
+                        st.markdown(
+                            "<p class='hero-chart__caption'>Explore how dealer positioning stacks across strikes or expirations with side-specific views.</p>",
+                            unsafe_allow_html=True,
+                        )
                         lens_mode = st.radio(
                             "Slice positioning by",
                             options=["Strike lens", "Expiration lens"],
@@ -1019,7 +1061,7 @@ with tab2:
                                     orientation="h",
                                     color="Expiration",
                                     labels={"Value": value_label, "Strike": "Strike"},
-                                    height=650,
+                                    height=700,
                                     color_discrete_sequence=theme["sequence"],
                                     title=f"{label} across strikes\n(±{offset} around {spot:.1f})",
                                 )
@@ -1068,7 +1110,7 @@ with tab2:
                                     y="Value",
                                     color="Expiration",
                                     labels={"Value": value_label, "Expiration": "Expiration"},
-                                    height=650,
+                                    height=700,
                                     color_discrete_sequence=theme["sequence"],
                                     title=f"{label} across expirations",
                                 )
@@ -1094,6 +1136,8 @@ with tab2:
                                 fig.update_xaxes(tickfont=dict(color="#e2e8f0"))
                                 fig.update_yaxes(title=value_label, tickfont=dict(color="#e2e8f0"))
                                 st.plotly_chart(fig, use_container_width=True)
+
+                        st.markdown("</div>", unsafe_allow_html=True)
 
                     with insight_col:
                         st.subheader("Key positioning takeaways")
