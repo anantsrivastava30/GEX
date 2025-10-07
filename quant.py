@@ -7,7 +7,7 @@ from db import save_analysis
 import yaml
 import os
 import textwrap
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Tuple
 
 
 # Load configuration from YAML file
@@ -52,6 +52,107 @@ def resolve_openai_credentials() -> Dict[str, Optional[str]]:
         "organization": organization,
         "project": project,
     }
+
+
+def _is_model_excluded(model_id: str) -> bool:
+    """Return True when the model clearly does not support text advice."""
+
+    excluded_keywords = [
+        "embedding",
+        "audio",
+        "image",
+        "vision",
+        "whisper",
+        "tts",
+        "realtime",
+        "omni-moderation",
+        "moderation",
+    ]
+    lowered = model_id.lower()
+    return any(keyword in lowered for keyword in excluded_keywords)
+
+
+def _score_model(model_id: str) -> Tuple[float, List[str]]:
+    """Assign a heuristic score and justification for a model identifier."""
+
+    lowered = model_id.lower()
+    score = 0.0
+    reasons: List[str] = []
+
+    quality_rules = [
+        ("gpt-4.1", 6, "Latest GPT-4.1 reasoning tier"),
+        ("gpt-4o", 5, "GPT-4o balanced reasoning and cost"),
+        ("o4", 4, "o4 reasoning family"),
+        ("o3", 3, "o3 reasoning tuned for analysis"),
+        ("o1", 2, "o1 reasoning model"),
+        ("gpt-4", 2, "GPT-4 generation"),
+        ("gpt-3.5", 1, "GPT-3.5 generation"),
+    ]
+    for token, weight, reason in quality_rules:
+        if token in lowered:
+            score += weight
+            reasons.append(reason)
+
+    finance_rules = [
+        ("finance", 3, "Finance-tuned variant"),
+        ("market", 2, "Market or trading focused naming"),
+        ("analysis", 1, "Optimised for analytical tasks"),
+        ("research", 1, "Research oriented variant"),
+    ]
+    for token, weight, reason in finance_rules:
+        if token in lowered:
+            score += weight
+            reasons.append(reason)
+
+    if "mini" in lowered:
+        score -= 1
+        reasons.append("Cost-efficient mini tier")
+
+    if not reasons:
+        reasons.append("General purpose reasoning model")
+
+    return max(score, 0.0), reasons
+
+
+def discover_financial_models(creds: Dict[str, Optional[str]]) -> Tuple[List[Dict[str, object]], Optional[str]]:
+    """Return OpenAI models ranked for financial analysis tasks."""
+
+    api_key = creds.get("api_key") if isinstance(creds, dict) else None
+    if not api_key:
+        return [], "Missing API key"
+
+    client_kwargs = {"api_key": api_key}
+    organization = creds.get("organization") if isinstance(creds, dict) else None
+    project = creds.get("project") if isinstance(creds, dict) else None
+    if organization:
+        client_kwargs["organization"] = organization
+    if project:
+        client_kwargs["project"] = project
+
+    try:
+        client = OpenAI(**client_kwargs)
+        response = client.models.list()
+    except Exception as exc:
+        return [], str(exc)
+
+    models: List[Dict[str, object]] = []
+    for item in getattr(response, "data", []):
+        model_id = getattr(item, "id", None)
+        if not model_id:
+            continue
+        if _is_model_excluded(model_id):
+            continue
+        score, reasons = _score_model(model_id)
+        models.append(
+            {
+                "id": model_id,
+                "score": score,
+                "reasons": reasons,
+            }
+        )
+
+    models.sort(key=lambda entry: (entry["score"], entry["id"]), reverse=True)
+    return models, None
 
 def build_header(payload):
     m = []
@@ -237,8 +338,7 @@ def create_data_packet(ticker, overview_summary, pos_summary, iv_summary, ratios
     return {"messages": [system_msg, user_msg]}
 
 # Helper function to estimate token count
-def estimate_token_count(data_packet):
-    model_name = CONFIG.get("openai", {}).get("model", "gpt-4o")
+def estimate_token_count(data_packet, model_name):
     tokens = None
     try:
         enc = tiktoken.encoding_for_model(model_name)
@@ -247,7 +347,7 @@ def estimate_token_count(data_packet):
 
     try:
         tokens = sum(len(enc.encode(m["content"])) for m in data_packet["messages"])
-        st.write(f"Estimated prompt tokens: **{tokens}**")
+        st.write(f"Estimated prompt tokens for `{model_name}`: **{tokens}**")
     except Exception as e:
         print(f"Token estimation error: {e}")
         tokens = None
@@ -317,7 +417,7 @@ def dummy_response_decorator(func):
     return wrapper
 
 # @dummy_response_decorator
-def call_openai_api(data_packet, creds):
+def call_openai_api(data_packet, creds, model_name: str):
     api_key = creds.get("api_key") if isinstance(creds, dict) else None
     if not api_key:
         raise ValueError("OpenAI API key is missing; cannot send request.")
@@ -331,10 +431,10 @@ def call_openai_api(data_packet, creds):
         client_kwargs["project"] = project
 
     client = OpenAI(**client_kwargs)
-    st.write("model used :", CONFIG.get("openai", {}).get("model", "gpt-4o"))
+    st.write("Model used:", model_name)
     try:
         completion = client.chat.completions.create(
-            model=CONFIG.get("openai", {}).get("model", "gpt-4o"),
+            model=model_name,
             messages=data_packet["messages"],
         )
         return completion.choices[0].message.content
@@ -345,6 +445,75 @@ def call_openai_api(data_packet, creds):
 # Refactored openai_query function
 def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset, ticker, exp):
     openai_creds = resolve_openai_credentials()
+
+    api_key = openai_creds.get("api_key")
+    if not api_key:
+        st.error("OpenAI API key is not configured.")
+        return
+
+    st.subheader("Model Discovery")
+    models, discovery_error = discover_financial_models(openai_creds)
+    if discovery_error:
+        st.warning(
+            "Unable to enumerate OpenAI models automatically — falling back to configured defaults.\n"
+            f"Details: {discovery_error}"
+        )
+
+    if models:
+        display_rows = [
+            {
+                "Model": entry["id"],
+                "Score": f"{entry['score']:.1f}",
+                "Strengths": ", ".join(entry["reasons"]),
+            }
+            for entry in models
+        ]
+        st.dataframe(
+            pd.DataFrame(display_rows),
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.info(
+            "Using fallback model suggestions because no suitable models were returned."
+        )
+
+    candidate_ids = [entry["id"] for entry in models]
+    default_model = st.session_state.get(
+        "ai_selected_model",
+        CONFIG.get("openai", {}).get("model", "gpt-4o"),
+    )
+    fallback_pool = [
+        CONFIG.get("openai", {}).get("model", "gpt-4o"),
+        "gpt-4o-mini",
+        "gpt-4.1",
+        "o4-mini",
+    ]
+    options = candidate_ids or fallback_pool
+    # De-duplicate while preserving order.
+    seen = set()
+    unique_options = []
+    for model_id in options:
+        if model_id and model_id not in seen:
+            seen.add(model_id)
+            unique_options.append(model_id)
+
+    if not unique_options:
+        st.error("No OpenAI models are available to select.")
+        return
+
+    try:
+        default_index = unique_options.index(default_model)
+    except ValueError:
+        default_index = 0
+
+    selected_model = st.selectbox(
+        "Select an OpenAI model for the financial analysis", unique_options, index=default_index
+    )
+    st.session_state["ai_selected_model"] = selected_model
+    st.caption(
+        "Models are ranked heuristically based on reasoning strength, finance-focused naming, and cost tier."
+    )
 
     if not df_net.empty:
         df_net = df_net[(df_net['strike'] >= spot-offset) & (df_net['strike'] <= spot+offset)]
@@ -386,7 +555,7 @@ def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset
     st.subheader("Data Packet JSON")
     st.json(data_packet)
 
-    tokens = estimate_token_count(data_packet)
+    tokens = estimate_token_count(data_packet, selected_model)
 
     st.info("Review the prepared data packet and estimated usage before proceeding.")
 
@@ -417,14 +586,11 @@ def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset
         st.error("❌ Incorrect PIN, try again.")
         return
 
-    api_key = openai_creds.get("api_key")
-    if not api_key:
-        st.error("OpenAI API key is not configured.")
-        return
+    st.markdown(f"**Selected model:** `{selected_model}`")
 
     st.success("PIN accepted — running AI…")
     try:
-        analysis = call_openai_api(data_packet, openai_creds)
+        analysis = call_openai_api(data_packet, openai_creds, selected_model)
     except ValueError as exc:
         st.error(str(exc))
         return
