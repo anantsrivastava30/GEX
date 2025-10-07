@@ -277,6 +277,122 @@ def get_model_pricing(model_name):
     return MODEL_PRICING_PER_MTOKENS.get("gpt-4o")
 
 
+class OpenAICreditError(RuntimeError):
+    """Raised when all OpenAI billing queries fail."""
+
+
+def _build_openai_headers(
+    api_key: str, organization: Optional[str], project: Optional[str]
+) -> Dict[str, str]:
+    headers = {"Authorization": f"Bearer {api_key.strip()}"}
+    if organization:
+        headers["OpenAI-Organization"] = organization
+    if project:
+        headers["OpenAI-Project"] = project
+    return headers
+
+
+def _call_openai_get(url: str, headers: Dict[str, str]) -> Dict:
+    response = requests.get(url, headers=headers, timeout=10)
+    response.raise_for_status()
+    data = response.json()
+    return data or {}
+
+
+def _fetch_credit_via_grants(headers: Dict[str, str], organization: Optional[str]):
+    """Try the direct credit_grants endpoint variants."""
+
+    urls = []
+    if organization:
+        urls.append(
+            f"https://api.openai.com/v1/organizations/{organization}/billing/credit_grants"
+        )
+        urls.append(
+            f"https://api.openai.com/v1/organization/{organization}/billing/credit_grants"
+        )
+    urls.extend(
+        [
+            "https://api.openai.com/v1/billing/credit_grants",
+            "https://api.openai.com/v1/dashboard/billing/credit_grants",
+            "https://api.openai.com/dashboard/billing/credit_grants",
+        ]
+    )
+
+    errors = []
+    for url in urls:
+        try:
+            payload = _call_openai_get(url, headers)
+            if payload:
+                return {
+                    "total": payload.get("total_granted"),
+                    "used": payload.get("total_used"),
+                    "available": payload.get("total_available"),
+                }
+        except requests.HTTPError as exc:
+            detail = None
+            if exc.response is not None:
+                try:
+                    detail = exc.response.json().get("error", {}).get("message")
+                except Exception:
+                    detail = exc.response.text
+            status = exc.response.status_code if exc.response is not None else None
+            errors.append((url, status, detail))
+            # Try other URL variants on 404/403/etc.
+            continue
+        except requests.RequestException as exc:
+            errors.append((url, None, str(exc)))
+            continue
+
+    if errors:
+        formatted = "; ".join(
+            f"{url} -> status={status}, detail={detail}" for url, status, detail in errors
+        )
+        raise OpenAICreditError(formatted)
+    raise OpenAICreditError("Unknown error contacting credit_grants endpoints.")
+
+
+def _fetch_credit_via_usage(headers: Dict[str, str]):
+    """Fallback to subscription + usage endpoints if credit grants fail."""
+
+    now = datetime.utcnow().date()
+    # Usage endpoint expects ISO dates; grab the last 90 days for coverage.
+    start = (now - timedelta(days=90)).isoformat()
+    end = (now + timedelta(days=1)).isoformat()
+
+    subscription = _call_openai_get(
+        "https://api.openai.com/v1/dashboard/billing/subscription", headers
+    )
+    usage = _call_openai_get(
+        "https://api.openai.com/v1/dashboard/billing/usage"
+        f"?start_date={start}&end_date={end}",
+        headers,
+    )
+
+    total_granted = subscription.get("hard_limit_usd")
+    system_limit = subscription.get("system_hard_limit_usd")
+    total_limit = total_granted or system_limit
+
+    total_used = None
+    total_available = None
+
+    if usage:
+        raw_usage = usage.get("total_usage")
+        if raw_usage is not None:
+            # OpenAI returns usage in cents.
+            total_used = raw_usage / 100.0
+    if total_limit is not None and total_used is not None:
+        total_available = max(total_limit - total_used, 0)
+
+    if total_limit is None and total_used is None:
+        raise OpenAICreditError("usage/subscription endpoints returned no totals")
+
+    return {
+        "total": total_limit,
+        "used": total_used,
+        "available": total_available,
+    }
+
+
 def fetch_openai_credit_balance(
     api_key: str, organization: Optional[str] = None, project: Optional[str] = None
 ):
@@ -285,21 +401,20 @@ def fetch_openai_credit_balance(
     if not api_key or not api_key.strip():
         raise ValueError("An OpenAI API key is required to query credit balance.")
 
-    url = "https://api.openai.com/v1/dashboard/billing/credit_grants"
-    headers = {"Authorization": f"Bearer {api_key.strip()}"}
-    if organization:
-        headers["OpenAI-Organization"] = organization
-    if project:
-        headers["OpenAI-Project"] = project
+    headers = _build_openai_headers(api_key, organization, project)
 
-    response = requests.get(url, headers=headers, timeout=10)
-    response.raise_for_status()
-    payload = response.json() or {}
-    return {
-        "total": payload.get("total_granted"),
-        "used": payload.get("total_used"),
-        "available": payload.get("total_available"),
-    }
+    try:
+        return _fetch_credit_via_grants(headers, organization)
+    except OpenAICreditError as primary_err:
+        # Attempt fallback through subscription/usage endpoints before surfacing error.
+        try:
+            return _fetch_credit_via_usage(headers)
+        except requests.HTTPError as exc:
+            raise exc
+        except requests.RequestException as exc:
+            raise exc
+        except OpenAICreditError:
+            raise primary_err
 
 
 def display_credit_information(tokens_estimated, creds):
@@ -336,6 +451,12 @@ def display_credit_information(tokens_estimated, creds):
         return
     except ValueError as exc:
         st.error(str(exc))
+        return
+    except OpenAICreditError as exc:
+        st.error(
+            "Unable to retrieve OpenAI credit information automatically. "
+            f"OpenAI returned errors for all billing endpoints: {exc}"
+        )
         return
 
     if not credit:
