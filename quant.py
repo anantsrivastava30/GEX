@@ -451,6 +451,10 @@ def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset
         st.error("OpenAI API key is not configured.")
         return
 
+    def _build_form_key(label: str) -> str:
+        exp_fragment = "-".join(exp) if isinstance(exp, list) else str(exp)
+        return f"{label}_{ticker}_{exp_fragment}" if exp_fragment else f"{label}_{ticker}"
+
     st.subheader("Model Discovery")
     models, discovery_error = discover_financial_models(openai_creds)
     if discovery_error:
@@ -507,13 +511,35 @@ def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset
     except ValueError:
         default_index = 0
 
-    selected_model = st.selectbox(
-        "Select an OpenAI model for the financial analysis", unique_options, index=default_index
-    )
-    st.session_state["ai_selected_model"] = selected_model
+    selection_form_key = _build_form_key("ai_model_select")
+    with st.form(selection_form_key):
+        chosen_model = st.selectbox(
+            "Select an OpenAI model for the financial analysis",
+            unique_options,
+            index=default_index,
+        )
+        confirm_model = st.form_submit_button("Use this model")
+
+    if confirm_model:
+        st.session_state["ai_selected_model"] = chosen_model
+        st.session_state["ai_model_confirmed"] = True
+        st.success(f"Model `{chosen_model}` selected. Continue below to review the payload.")
+
+    if not st.session_state.get("ai_model_confirmed"):
+        st.info("Confirm the model selection above to generate the AI payload preview.")
+        return
+
+    selected_model = st.session_state.get("ai_selected_model", unique_options[default_index])
+
     st.caption(
         "Models are ranked heuristically based on reasoning strength, finance-focused naming, and cost tier."
     )
+    st.markdown(f"**Using model:** `{selected_model}`")
+
+    reset_key = _build_form_key("ai_model_reset")
+    if st.button("Choose a different model", key=reset_key):
+        st.session_state["ai_model_confirmed"] = False
+        return
 
     if not df_net.empty:
         df_net = df_net[(df_net['strike'] >= spot-offset) & (df_net['strike'] <= spot+offset)]
@@ -558,10 +584,6 @@ def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset
     tokens = estimate_token_count(data_packet, selected_model)
 
     st.info("Review the prepared data packet and estimated usage before proceeding.")
-
-    def _build_form_key(label: str) -> str:
-        exp_fragment = "-".join(exp) if isinstance(exp, list) else str(exp)
-        return f"{label}_{ticker}_{exp_fragment}" if exp_fragment else f"{label}_{ticker}"
 
     form_key = _build_form_key("ai_confirmation")
     with st.form(form_key):

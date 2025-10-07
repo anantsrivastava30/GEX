@@ -365,6 +365,8 @@ if enable_ai and ai_tab:
 
         if st.session_state.want_ai and st.button("Cancel AI Preparation"):
             st.session_state.want_ai = False
+            st.session_state.pop("ai_model_confirmed", None)
+            st.session_state.pop("ai_selected_model", None)
 
         st.markdown("---")
         st.header("📚 Past AI Analyses")
