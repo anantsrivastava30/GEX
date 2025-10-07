@@ -240,65 +240,87 @@ def get_model_pricing(model_name):
     return MODEL_PRICING_PER_MTOKENS.get("gpt-4o")
 
 
-def _get_credit_configuration():
-    openai_cfg = CONFIG.get("openai", {})
-    token_credit = openai_cfg.get("token_credit")
-    credit_usd = openai_cfg.get("credit_usd")
+def fetch_openai_credit_balance(api_key: str):
+    """Return the current OpenAI wallet credit information."""
 
-    try:
-        secrets = st.secrets
-        token_credit = secrets.get("OPENAI_TOKEN_CREDIT", token_credit)
-        credit_usd = secrets.get("OPENAI_CREDIT_USD", credit_usd)
-    except Exception:
-        pass
+    if not api_key:
+        raise ValueError("An OpenAI API key is required to query credit balance.")
 
-    return {"token_credit": token_credit, "credit_usd": credit_usd}
+    url = "https://api.openai.com/v1/dashboard/billing/credit_grants"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    response = requests.get(url, headers=headers, timeout=10)
+    response.raise_for_status()
+    payload = response.json() or {}
+    return {
+        "total": payload.get("total_granted"),
+        "used": payload.get("total_used"),
+        "available": payload.get("total_available"),
+    }
 
 
-def display_token_budget(tokens_estimated):
+def display_credit_information(tokens_estimated, api_key):
     if tokens_estimated is None:
         return
 
-    credit_cfg = _get_credit_configuration()
-    token_credit = credit_cfg.get("token_credit")
-    credit_usd = credit_cfg.get("credit_usd")
-
-    if token_credit is None and credit_usd is None:
+    if not api_key:
+        st.info("Configure OPENAI_API_KEY in secrets to display live credit balance.")
         return
+
+    try:
+        credit = fetch_openai_credit_balance(api_key)
+    except requests.HTTPError as exc:
+        st.error(f"Failed to fetch OpenAI credit balance: {exc}")
+        return
+    except requests.RequestException as exc:
+        st.error(f"Network error while contacting OpenAI billing API: {exc}")
+        return
+    except ValueError as exc:
+        st.error(str(exc))
+        return
+
+    if not credit:
+        st.warning("Unable to parse OpenAI credit balance response.")
+        return
+
+    fragments = []
+    available = credit.get("available")
+    used = credit.get("used")
+    total = credit.get("total")
+
+    if available is not None:
+        fragments.append(f"**${available:,.2f}** remaining")
+    if used is not None and total is not None:
+        fragments.append(f"${used:,.2f} used of ${total:,.2f} granted")
+    elif used is not None:
+        fragments.append(f"${used:,.2f} used")
+    elif total is not None:
+        fragments.append(f"${total:,.2f} granted")
+
+    if fragments:
+        st.write("OpenAI wallet balance: " + ", ".join(fragments) + ".")
+
+    model_name = CONFIG.get("openai", {}).get("model", "gpt-4o")
+    pricing = get_model_pricing(model_name)
+    if pricing and pricing.get("input"):
+        est_cost = (tokens_estimated / 1_000_000) * pricing["input"]
+        st.write(
+            f"Estimated prompt input cost at {model_name}: **${est_cost:,.4f}** "
+            "(input-side pricing only)."
+        )
+        if available is not None:
+            tokens_cover = available * (1_000_000 / pricing["input"])
+            st.write(
+                f"Remaining balance covers roughly **{tokens_cover:,.0f}** additional input tokens."
+            )
 
     try:
         total_tokens_used = get_total_token_usage()
     except Exception as exc:
         print(f"Token usage aggregation error: {exc}")
-        return
-
-    model_name = CONFIG.get("openai", {}).get("model", "gpt-4o")
-    pricing = get_model_pricing(model_name)
-    projected_usage = total_tokens_used + tokens_estimated
-
-    if token_credit is not None:
-        try:
-            credit_value = float(token_credit)
-        except (TypeError, ValueError):
-            return
-        tokens_remaining = max(credit_value - projected_usage, 0)
-        st.write(
-            f"Estimated tokens remaining before credit exhaustion: **{tokens_remaining:,.0f}**"
-        )
-        return
-
-    if credit_usd is not None and pricing:
-        try:
-            credit_value = float(credit_usd)
-        except (TypeError, ValueError):
-            return
-        usd_spent = (projected_usage / 1_000_000) * pricing["input"]
-        usd_remaining = max(credit_value - usd_spent, 0.0)
-        tokens_per_usd = 1_000_000 / pricing["input"] if pricing["input"] else 0
-        if tokens_per_usd:
-            tokens_remaining = usd_remaining * tokens_per_usd
+    else:
+        if total_tokens_used:
             st.write(
-                f"Estimated tokens remaining before credit exhaustion: **{tokens_remaining:,.0f}** (~${usd_remaining:,.2f} remaining)."
+                f"Tokens logged across saved analyses so far: **{total_tokens_used:,.0f}**"
             )
 
 # Helper function to call OpenAI API and return response analysis
@@ -420,7 +442,7 @@ def openai_query(df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset
     st.json(data_packet)
 
     tokens = estimate_token_count(data_packet)
-    display_token_budget(tokens)
+    display_credit_information(tokens, api_key)
 
     st.info("Review the prepared data packet and estimated usage before proceeding.")
 
