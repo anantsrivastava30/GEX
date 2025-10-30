@@ -10,6 +10,7 @@ import math
 import yfinance as yf
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta, time
+from typing import Dict, Optional
 from tradier_api import TradierAPI
 
 def interpret_net_gex(df_net, S, offset=25):
@@ -90,6 +91,175 @@ def compute_net_gamma_exposure(chain, S, offset=25):
     net   = calls.sub(puts, fill_value=0).reset_index().rename(columns={0:"Net GEX"})
     net.columns = ["Strike","Net GEX"]
     return net.sort_values("Strike")
+
+
+def compute_gamma_gap_metrics(
+    df_net: pd.DataFrame,
+    spot: float,
+    offset: int = 35,
+) -> Optional[Dict[str, float]]:
+    """Score the likelihood of a spot-to-magnet gap fill for a net GEX profile."""
+
+    if df_net is None or df_net.empty or spot is None:
+        return None
+
+    work = df_net.copy()
+    work = work.dropna(subset=["Strike", "GEX"]).astype({"Strike": float, "GEX": float})
+    if work.empty:
+        return None
+
+    work = work.sort_values("Strike").reset_index(drop=True)
+    pos_mask = work["GEX"] > 0
+    if not pos_mask.any():
+        return None
+
+    idx_magnet = work.loc[pos_mask, "GEX"].idxmax()
+    magnet_row = work.loc[idx_magnet]
+    magnet_strike = float(magnet_row["Strike"])
+    magnet_gex = float(magnet_row["GEX"])
+    if magnet_gex <= 0:
+        return None
+
+    nearest_idx = (work["Strike"] - spot).abs().idxmin()
+    spot_gamma = float(work.loc[nearest_idx, "GEX"])
+    total_abs = float(work["GEX"].abs().sum()) or 1.0
+    magnet_weight = abs(magnet_gex) / total_abs
+
+    offset = max(offset, 1)
+    distance = magnet_strike - spot
+    dist_norm = max(0.0, 1 - min(abs(distance), offset) / offset)
+
+    gradients = np.gradient(work["GEX"].values, work["Strike"].values)
+    spot_gradient = float(gradients[nearest_idx]) if len(gradients) else 0.0
+
+    signs = np.sign(work["GEX"].values)
+    zero_cross = int(np.sum(np.diff(signs) != 0))
+
+    score = 100 * magnet_weight * dist_norm
+    if spot_gamma > 0:
+        score *= 1.2
+    else:
+        score *= 0.6
+    if abs(distance) <= 1:
+        score += 5
+    score = float(np.clip(score, 0, 120))
+
+    band_mask = work["GEX"] >= 0.8 * magnet_gex
+    if band_mask.any():
+        band_low = float(work.loc[band_mask, "Strike"].min())
+        band_high = float(work.loc[band_mask, "Strike"].max())
+    else:
+        band_low = band_high = magnet_strike
+
+    return {
+        "magnet_strike": magnet_strike,
+        "magnet_gex": magnet_gex,
+        "distance": distance,
+        "distance_pct": (distance / spot) if spot else 0.0,
+        "spot_gamma": spot_gamma,
+        "spot_gamma_ratio": (spot_gamma / magnet_gex) if magnet_gex else 0.0,
+        "magnet_weight": magnet_weight,
+        "score": score,
+        "zero_crossings": zero_cross,
+        "spot_gradient": spot_gradient,
+        "band_low": band_low,
+        "band_high": band_high,
+        "positive_zone": bool(spot_gamma > 0),
+        "distance_abs": abs(distance),
+    }
+
+
+def describe_gamma_gap(metrics: Dict[str, float]) -> str:
+    """Return a human-readable interpretation of gamma gap metrics."""
+
+    if not metrics:
+        return "No positive gamma magnet identified."
+
+    direction = "higher" if metrics["distance"] > 0 else "lower"
+    band_low = metrics.get("band_low")
+    band_high = metrics.get("band_high")
+    band_text = (
+        f"{band_low:.1f}–{band_high:.1f}"
+        if band_low is not None and band_high is not None and band_low != band_high
+        else f"{metrics['magnet_strike']:.1f}"
+    )
+
+    bullet_points = [
+        f"Peak positive gamma sits at **{metrics['magnet_strike']:.1f}**, {metrics['distance']:+.2f} points from spot.",
+        f"Spot gamma is {'positive' if metrics['positive_zone'] else 'negative'}, "
+        f"running at {metrics['spot_gamma_ratio']*100:+.1f}% of magnet strength.",
+        f"Magnet band (~80% of peak) spans **{band_text}** with {metrics['zero_crossings']} gamma flip(s) inside ±range.",
+    ]
+
+    if metrics["positive_zone"]:
+        bullet_points.append(
+            "Dealers are long gamma locally, so hedging flows tend to mean-revert price toward the magnet."
+        )
+    else:
+        bullet_points.append(
+            "Dealers are short gamma near spot, so a magnet-driven gap fill is less reliable without flow support."
+        )
+
+    gradient = metrics.get("spot_gradient", 0.0)
+    if gradient < 0:
+        bullet_points.append(
+            "Gamma gradient is negative at spot, reinforcing a pull back toward lower strikes before stabilising."
+        )
+    else:
+        bullet_points.append(
+            "Gamma gradient is positive at spot, supporting an upward grind toward the magnet."
+        )
+
+    bullet_points.append(f"Composite gap-fill score: **{metrics['score']:.1f}/120** (higher favours a magnet tag).")
+
+    return "\n".join(f"- {line}" for line in bullet_points)
+
+
+def build_gamma_gap_plot(df_net: pd.DataFrame, spot: float, magnet: float) -> go.Figure:
+    """Create a horizontal bar chart of net gamma with spot and magnet overlays."""
+
+    df_plot = df_net.sort_values("Strike")
+    fig = go.Figure()
+    fig.add_bar(
+        x=df_plot["GEX"],
+        y=df_plot["Strike"],
+        orientation="h",
+        marker_color="#38bdf8",
+        name="Net GEX",
+    )
+
+    fig.add_shape(
+        type="line",
+        x0=df_plot["GEX"].min(),
+        x1=df_plot["GEX"].max(),
+        y0=spot,
+        y1=spot,
+        line=dict(color="#f87171", width=2, dash="dash"),
+    )
+    fig.add_shape(
+        type="line",
+        x0=df_plot["GEX"].min(),
+        x1=df_plot["GEX"].max(),
+        y0=magnet,
+        y1=magnet,
+        line=dict(color="#34d399", width=2),
+    )
+
+    fig.update_layout(
+        template="plotly_dark",
+        height=520,
+        margin=dict(l=60, r=40, t=60, b=40),
+        xaxis_title="Net Gamma Exposure",
+        yaxis_title="Strike",
+        plot_bgcolor="rgba(15,23,42,0.3)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        showlegend=False,
+        annotations=[
+            dict(x=df_plot["GEX"].max(), y=spot, xref="x", yref="y", text="Spot", showarrow=True, arrowcolor="#f87171"),
+            dict(x=df_plot["GEX"].max(), y=magnet, xref="x", yref="y", text="Magnet", showarrow=True, arrowcolor="#34d399"),
+        ],
+    )
+    return fig
 
 
 def cache_current_data(df_current, timestamp, CACHE_FILE):

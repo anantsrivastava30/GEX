@@ -128,6 +128,33 @@ def get_option_chain(ticker, expiration, token, include_all_roots=True):
     return api.option_chain(ticker, expiration, include_all_roots=include_all_roots)
 
 
+def fetch_net_gex_for_expiration(
+    ticker: str,
+    expiration: str,
+    token: str,
+    spot: float,
+    offset: int = 35,
+    include_all_roots: bool = True,
+):
+    """Return the net gamma exposure profile for a given expiration."""
+
+    if spot is None:
+        return pd.DataFrame(columns=["Strike", "Net GEX"])
+
+    chain = get_option_chain(
+        ticker,
+        expiration,
+        token,
+        include_all_roots=include_all_roots,
+    )
+    if not chain:
+        return pd.DataFrame(columns=["Strike", "Net GEX"])
+
+    df_net = compute_net_gex(chain, spot, offset=offset)
+    df_net = df_net.rename(columns={"Net GEX": "GEX"})
+    return df_net
+
+
 def get_stock_quote(ticker, token):
     api = TradierAPI(token, API_URL)
     data = api.quote(ticker)
