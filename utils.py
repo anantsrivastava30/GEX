@@ -12,6 +12,253 @@ from plotly.subplots import make_subplots
 from datetime import datetime, timedelta, time
 from tradier_api import TradierAPI
 
+
+def build_gamma_profile(chain, spot: float | None, offset: float = 25.0) -> pd.DataFrame:
+    """Return call, put and net gamma exposure grouped by strike."""
+
+    if not chain or spot is None:
+        return pd.DataFrame(columns=["Strike", "CallGamma", "PutGamma", "NetGamma"])
+
+    df = pd.DataFrame(chain)
+    if df.empty:
+        return pd.DataFrame(columns=["Strike", "CallGamma", "PutGamma", "NetGamma"])
+
+    if "greeks" in df.columns:
+        greeks_df = pd.json_normalize(df.pop("greeks"))
+        df = pd.concat([df, greeks_df], axis=1)
+
+    try:
+        strikes = df["strike"].astype(float)
+    except Exception:
+        strikes = pd.to_numeric(df.get("strike"), errors="coerce")
+    df["Strike"] = strikes
+    df = df.dropna(subset=["Strike"])
+    if df.empty:
+        return pd.DataFrame(columns=["Strike", "CallGamma", "PutGamma", "NetGamma"])
+
+    df = df[(df["Strike"] >= spot - offset) & (df["Strike"] <= spot + offset)]
+    if df.empty:
+        return pd.DataFrame(columns=["Strike", "CallGamma", "PutGamma", "NetGamma"])
+
+    contract_size = df.get("contract_size")
+    if contract_size is None:
+        contract_size = pd.Series(100, index=df.index)
+    elif not isinstance(contract_size, pd.Series):
+        contract_size = pd.Series(contract_size, index=df.index)
+    contract_size = contract_size.fillna(100).replace(0, 100)
+
+    open_interest = df.get("open_interest")
+    if open_interest is None:
+        open_interest = pd.Series(0, index=df.index)
+    elif not isinstance(open_interest, pd.Series):
+        open_interest = pd.Series(open_interest, index=df.index)
+    open_interest = open_interest.fillna(0)
+
+    gamma_series = df.get("gamma")
+    if gamma_series is None:
+        gamma_series = pd.Series(0.0, index=df.index)
+    else:
+        gamma_series = pd.to_numeric(gamma_series, errors="coerce").fillna(0.0)
+
+    gamma_exposure = gamma_series * open_interest * contract_size
+
+    if "option_type" in df.columns:
+        option_type = df["option_type"].astype(str).str.lower()
+    else:
+        option_type = pd.Series("call", index=df.index)
+
+    call_gamma = (
+        gamma_exposure.where(option_type == "call", other=0.0)
+        .groupby(df["Strike"])
+        .sum()
+    )
+    put_gamma = (
+        gamma_exposure.where(option_type == "put", other=0.0)
+        .groupby(df["Strike"])
+        .sum()
+    )
+
+    profile = (
+        pd.concat(
+            {
+                "CallGamma": call_gamma,
+                "PutGamma": put_gamma,
+            },
+            axis=1,
+        )
+        .fillna(0.0)
+        .reset_index()
+    )
+    profile["NetGamma"] = profile["CallGamma"] - profile["PutGamma"]
+    profile = profile.sort_values("Strike").reset_index(drop=True)
+    return profile
+
+
+def _interpolate_boundary(df: pd.DataFrame, start_idx: int, direction: int) -> float:
+    """Return strike where gamma changes sign starting from ``start_idx``."""
+
+    if df.empty:
+        return float("nan")
+
+    idx = start_idx
+    curr_val = float(df.loc[idx, "NetGamma"])
+    curr_strike = float(df.loc[idx, "Strike"])
+
+    if curr_val == 0:
+        return curr_strike
+
+    sign = math.copysign(1.0, curr_val)
+    while 0 <= idx + direction < len(df):
+        next_idx = idx + direction
+        next_val = float(df.loc[next_idx, "NetGamma"])
+        next_strike = float(df.loc[next_idx, "Strike"])
+
+        if next_val == 0 or math.copysign(1.0, next_val) == sign:
+            idx = next_idx
+            curr_val = next_val if next_val != 0 else curr_val
+            curr_strike = next_strike if next_val != 0 else curr_strike
+            continue
+
+        span = abs(curr_val) + abs(next_val)
+        if span == 0:
+            frac = 0.5
+        else:
+            frac = abs(curr_val) / span
+
+        delta_strike = abs(next_strike - curr_strike)
+        if direction < 0:
+            boundary = curr_strike - frac * delta_strike
+        else:
+            boundary = curr_strike + frac * delta_strike
+        return boundary
+
+    return curr_strike
+
+
+def summarize_gamma_gap(profile: pd.DataFrame, spot: float | None) -> dict:
+    """Summarise magnet strike and gap-fill potential from a gamma profile."""
+
+    if spot is None or profile.empty:
+        return {
+            "has_data": False,
+            "message": "No gamma data available",
+        }
+
+    df = profile.copy()
+    df = df.sort_values("Strike").reset_index(drop=True)
+    df["NetGamma"] = pd.to_numeric(df["NetGamma"], errors="coerce").fillna(0.0)
+
+    total_abs_gamma = float(df["NetGamma"].abs().sum())
+    net_gamma = float(df["NetGamma"].sum())
+
+    if math.isclose(total_abs_gamma, 0.0):
+        return {
+            "has_data": False,
+            "message": "Gamma exposures are all zero",
+        }
+
+    idx_max = int(df["NetGamma"].idxmax())
+    idx_min = int(df["NetGamma"].idxmin())
+    peak_positive = float(df.loc[idx_max, "NetGamma"])
+    peak_negative = float(df.loc[idx_min, "NetGamma"])
+
+    if peak_positive <= 0 and abs(peak_negative) >= abs(peak_positive):
+        magnet_idx = idx_min
+    else:
+        magnet_idx = idx_max
+
+    magnet_row = df.loc[magnet_idx]
+    magnet_gamma = float(magnet_row["NetGamma"])
+    magnet_strike = float(magnet_row["Strike"])
+
+    magnet_sign = 0.0 if magnet_gamma == 0 else math.copysign(1.0, magnet_gamma)
+    if magnet_sign != 0.0:
+        lower_bound = _interpolate_boundary(df, magnet_idx, -1)
+        upper_bound = _interpolate_boundary(df, magnet_idx, 1)
+    else:
+        lower_bound = magnet_strike
+        upper_bound = magnet_strike
+
+    zero_crossings: list[float] = []
+    for i in range(len(df) - 1):
+        curr_val = float(df.loc[i, "NetGamma"])
+        next_val = float(df.loc[i + 1, "NetGamma"])
+        if curr_val == 0:
+            zero_crossings.append(float(df.loc[i, "Strike"]))
+            continue
+        if curr_val * next_val < 0:
+            strike_curr = float(df.loc[i, "Strike"])
+            strike_next = float(df.loc[i + 1, "Strike"])
+            span = abs(curr_val) + abs(next_val)
+            frac = abs(curr_val) / span if span else 0.5
+            crossing = strike_curr + (strike_next - strike_curr) * frac
+            zero_crossings.append(crossing)
+
+    gap = float(spot - magnet_strike)
+    gap_abs = abs(gap)
+    spot_ref = abs(float(spot)) if spot not in (0, None) else 1.0
+    gap_pct = gap_abs / max(spot_ref, 1e-6)
+
+    gamma_strength = abs(magnet_gamma) / total_abs_gamma if total_abs_gamma else 0.0
+
+    inside_band = lower_bound <= spot <= upper_bound if lower_bound <= upper_bound else upper_bound <= spot <= lower_bound
+
+    if magnet_gamma > 0:
+        if spot < min(lower_bound, upper_bound):
+            bias_note = "Spot below positive gamma band — upward mean-reversion bias"
+            positional_bias = 1.0
+        elif spot > max(lower_bound, upper_bound):
+            bias_note = "Spot above positive gamma band — downward mean-reversion bias"
+            positional_bias = 1.0
+        elif inside_band:
+            bias_note = "Spot pinned inside positive gamma band"
+            positional_bias = 0.6
+        else:
+            bias_note = "Spot between gamma flip levels"
+            positional_bias = 0.8
+        bias_factor = 1.0
+    elif magnet_gamma < 0:
+        bias_note = "Peak gamma is negative — expect trend-following flows"
+        positional_bias = 0.3
+        bias_factor = 0.3
+    else:
+        bias_note = "No dominant gamma peak"
+        positional_bias = 0.2
+        bias_factor = 0.2
+
+    gap_signal = float(np.tanh(gap_pct * 5.0))
+    score = gap_signal * gamma_strength * positional_bias * bias_factor
+
+    gap_direction = "above" if gap < 0 else "below"
+    if math.isclose(gap, 0.0, abs_tol=1e-6):
+        gap_direction = "at"
+
+    metrics = {
+        "has_data": True,
+        "magnet_strike": magnet_strike,
+        "magnet_gamma": magnet_gamma,
+        "magnet_sign": magnet_sign,
+        "lower_bound": lower_bound,
+        "upper_bound": upper_bound,
+        "zero_crossings": sorted(set(zero_crossings)),
+        "spot": float(spot),
+        "gap": gap,
+        "gap_abs": gap_abs,
+        "gap_pct": gap_pct,
+        "gap_direction": gap_direction,
+        "gamma_strength": gamma_strength,
+        "total_abs_gamma": total_abs_gamma,
+        "net_gamma": net_gamma,
+        "score": score,
+        "bias_note": bias_note,
+        "inside_band": inside_band,
+        "positive_gamma_share": float(df.loc[df["NetGamma"] > 0, "NetGamma"].sum()),
+        "negative_gamma_share": float(df.loc[df["NetGamma"] < 0, "NetGamma"].sum()),
+        "call_gamma_total": float(df["CallGamma"].sum()),
+        "put_gamma_total": float(df["PutGamma"].sum()),
+    }
+    return metrics
+
 def interpret_net_gex(df_net, S, offset=25):
     """
     Returns a list of strings with automated interpretation:
