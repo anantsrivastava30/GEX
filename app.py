@@ -19,6 +19,7 @@ from helpers import (
     get_bid_to_cover,
     get_bond_yield_info,
     get_vix_info,
+    analyze_gamma_gap_fill,
 )
 from utils import (
     plot_put_call_ratios,
@@ -28,7 +29,7 @@ from utils import (
     plot_binomial_tree,
 )
 from quant import openai_query, render_model_selection
-from db import init_db, load_analyses
+from db import init_db, load_analyses, save_gamma_gap_predictions
 
 
 METRIC_COLOR_THEMES = {
@@ -603,6 +604,7 @@ enable_ai = st.sidebar.checkbox("Enable AI Analysis", value=True)
 tab_names = [
     "Overview Metrics",
     "Options Positioning",
+    "Gamma Gap Lens",
     "Binomial Tree",
     "Market Sentiment",
     "Market News"
@@ -613,15 +615,16 @@ tab_names.append("Economic Calendar")
 tabs = st.tabs(tab_names)
 tab1 = tabs[0]
 tab2 = tabs[1]
-binom_tab = tabs[2]
-sentiment_tab = tabs[3]
-news_tab = tabs[4]
+gamma_tab = tabs[2]
+binom_tab = tabs[3]
+sentiment_tab = tabs[4]
+news_tab = tabs[5]
 if enable_ai:
-    ai_tab = tabs[5]
-    calender_tab = tabs[6]
+    ai_tab = tabs[6]
+    calender_tab = tabs[7]
 else:
     ai_tab = None
-    calender_tab = tabs[5]
+    calender_tab = tabs[6]
 
 # --- Tab 1: Overview Metrics ---
 with tab1:
@@ -966,6 +969,216 @@ with tab1:
         )
     else:
         st.info("Select ticker, expirations, and ensure spot price loaded.")
+
+with gamma_tab:
+    st.header("🔁 Gamma Gap Lens")
+    st.markdown(
+        """
+        Assess how strongly near-dated positive gamma structures may pull price toward a magnet strike. We look at:
+
+        - The distance between spot and the peak positive gamma strike (the "magnet").
+        - How dominant that strike is within the positive gamma pool.
+        - Whether the underlying is currently inside or outside the positive gamma zone.
+        """
+    )
+
+    tradier_token = st.secrets.get("TRADIER_TOKEN")
+    if not tradier_token:
+        st.warning("Tradier token missing—cannot evaluate gamma gaps without data access.")
+    else:
+        default_hot = ["SPY", "QQQ", "NVDA", "TSLA", "AAPL"]
+        tickers_text = st.text_input(
+            "Hot tickers (comma separated)",
+            value=",".join(default_hot),
+            help="Enter the symbols you want to scan for gap-to-gamma potential.",
+        )
+        hot_tickers = [t.strip().upper() for t in tickers_text.split(",") if t.strip()]
+
+        dte_min, dte_max = st.slider(
+            "Target DTE window",
+            min_value=0,
+            max_value=30,
+            value=(1, 7),
+            help="Focus the analysis on expirations inside this day-to-expiry range.",
+        )
+        max_expirations = st.number_input(
+            "Max expirations per ticker",
+            min_value=1,
+            max_value=6,
+            value=3,
+            help="We rank the strongest opportunities across this many expirations per symbol.",
+        )
+        custom_offset = st.slider(
+            "Strike band (±)",
+            min_value=5,
+            max_value=200,
+            value=int(offset),
+            help="Gamma is evaluated within this band around spot.",
+        )
+        log_predictions = st.checkbox(
+            "Log predictions for future gap-close validation",
+            value=True,
+            help="When enabled, the current run is stored so we can verify gap closes at expiry later.",
+        )
+
+        if not hot_tickers:
+            st.info("Add at least one ticker to evaluate gap potential.")
+        else:
+            results_table: list[dict] = []
+            details_map: dict[str, list[dict]] = {}
+            predictions_payload: list[dict] = []
+
+            for symbol in hot_tickers:
+                try:
+                    analysis = analyze_gamma_gap_fill(
+                        symbol,
+                        tradier_token,
+                        offset=custom_offset,
+                        dte_window=(dte_min, dte_max),
+                        max_expirations=int(max_expirations),
+                    )
+                except Exception as exc:
+                    st.warning(f"{symbol}: unable to compute gamma gap analysis ({exc}).")
+                    continue
+
+                records = analysis.get("records", [])
+                if not records:
+                    st.info(f"{symbol}: no positive gamma magnet found in the selected window.")
+                    continue
+
+                details_map[symbol] = records
+                best_record = max(records, key=lambda row: row["score"])
+                results_table.append(
+                    {
+                        "Ticker": symbol,
+                        "Bias": best_record["direction"],
+                        "Spot": analysis.get("spot"),
+                        "Magnet": best_record["magnet_strike"],
+                        "Gap $": best_record["signed_gap"],
+                        "Gap %": best_record["gap_pct"] * 100,
+                        "Score": best_record["score"] * 100,
+                        "Expiration": best_record["expiration"],
+                        "DTE": best_record["dte"],
+                        "+Γ Share": best_record["share_positive"] * 100,
+                        "Inside +Γ Zone": "Yes" if best_record["inside_zone"] else "No",
+                    }
+                )
+
+                for row in records:
+                    predictions_payload.append({
+                        "ticker": row["ticker"],
+                        "expiration": row["expiration"],
+                        "dte": row["dte"],
+                        "spot": row["spot"],
+                        "magnet_strike": row["magnet_strike"],
+                        "magnet_gamma": row["magnet_gamma"],
+                        "positive_gamma": row["positive_gamma"],
+                        "total_abs_gamma": row["total_abs_gamma"],
+                        "signed_gap": row["signed_gap"],
+                        "gap_pct": row["gap_pct"],
+                        "score": row["score"],
+                        "share_positive": row["share_positive"],
+                        "intensity_ratio": row["intensity_ratio"],
+                        "zone_low": row["zone_low"],
+                        "zone_high": row["zone_high"],
+                        "inside_zone": row["inside_zone"],
+                        "direction": row["direction"],
+                        "notes": row["notes"],
+                    })
+
+            if results_table:
+                results_df = pd.DataFrame(results_table)
+                results_df = results_df.sort_values("Score", ascending=False)
+                st.subheader("Top gap-fill setups")
+                st.dataframe(
+                    results_df.style.format(
+                        {
+                            "Spot": "${:,.2f}",
+                            "Magnet": "${:,.2f}",
+                            "Gap $": "${:,.2f}",
+                            "Gap %": "{:.2f}%",
+                            "Score": "{:.2f}",
+                            "+Γ Share": "{:.1f}%",
+                        }
+                    ),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+
+                st.markdown("### Ticker breakdown")
+                for symbol, rows in details_map.items():
+                    with st.expander(f"{symbol} details"):
+                        breakdown_df = pd.DataFrame(rows)
+                        display_cols = [
+                            "expiration",
+                            "dte",
+                            "magnet_strike",
+                            "signed_gap",
+                            "gap_pct",
+                            "score",
+                            "share_positive",
+                            "intensity_ratio",
+                            "zone_low",
+                            "zone_high",
+                            "inside_zone",
+                            "notes",
+                        ]
+                        breakdown_df = breakdown_df[display_cols]
+                        st.dataframe(
+                            breakdown_df.rename(
+                                columns={
+                                    "expiration": "Expiration",
+                                    "dte": "DTE",
+                                    "magnet_strike": "Magnet",
+                                    "signed_gap": "Gap $",
+                                    "gap_pct": "Gap %",
+                                    "score": "Score",
+                                    "share_positive": "+Γ Share",
+                                    "intensity_ratio": "Intensity",
+                                    "zone_low": "Zone Low",
+                                    "zone_high": "Zone High",
+                                    "inside_zone": "Inside +Γ?",
+                                }
+                            ).style.format(
+                                {
+                                    "Magnet": "${:,.2f}",
+                                    "Gap $": "${:,.2f}",
+                                    "Gap %": "{:.2%}",
+                                    "Score": "{:.3f}",
+                                    "+Γ Share": "{:.2%}",
+                                    "Intensity": "{:.2%}",
+                                    "Zone Low": "${:,.2f}",
+                                    "Zone High": "${:,.2f}",
+                                }
+                            ),
+                            hide_index=True,
+                            use_container_width=True,
+                        )
+                        st.caption(rows[0]["notes"])
+
+                if log_predictions and predictions_payload:
+                    key_name = "gamma_gap_logged_rows"
+                    stored = st.session_state.setdefault(key_name, set())
+                    fresh_rows = []
+                    for row in predictions_payload:
+                        row_key = (
+                            row["ticker"],
+                            row["expiration"],
+                            int(row["dte"]),
+                            round(row["score"], 6),
+                        )
+                        if row_key not in stored:
+                            fresh_rows.append(row)
+                            stored.add(row_key)
+
+                    if fresh_rows:
+                        save_gamma_gap_predictions(fresh_rows)
+                        st.success(
+                            f"Logged {len(fresh_rows)} prediction{'s' if len(fresh_rows) != 1 else ''} for future validation."
+                        )
+
+            else:
+                st.info("No qualifying gamma gap setups in the configured window.")
 # --- Tab 2: Options Positioning ---
 with tab2:
     st.header("🎯 Options Positioning")

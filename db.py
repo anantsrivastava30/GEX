@@ -72,6 +72,36 @@ def init_db() -> None:
     except sqlite3.OperationalError:
         # Column already exists.
         pass
+
+    con.execute(
+        """
+      CREATE TABLE IF NOT EXISTS gamma_gap_predictions (
+         id                INTEGER PRIMARY KEY AUTOINCREMENT,
+         ts                TEXT NOT NULL,
+         ticker            TEXT NOT NULL,
+         expiration        TEXT NOT NULL,
+         dte               INTEGER,
+         spot              REAL,
+         magnet_strike     REAL,
+         magnet_gamma      REAL,
+         positive_gamma    REAL,
+         total_abs_gamma   REAL,
+         signed_gap        REAL,
+         gap_pct           REAL,
+         score             REAL,
+         share_positive    REAL,
+         intensity_ratio   REAL,
+         zone_low          REAL,
+         zone_high         REAL,
+         inside_zone       INTEGER,
+         direction         TEXT,
+         notes             TEXT,
+         realized_close    REAL,
+         gap_close_pct     REAL,
+         evaluated_ts      TEXT
+      )
+    """
+    )
     con.commit()
     con.close()
 
@@ -214,3 +244,79 @@ def load_analyses(limit: int = 20) -> List[Dict[str, Any]]:
             )
 
     return _load_sqlite(limit)
+
+
+def save_gamma_gap_predictions(predictions: List[Dict[str, Any]]) -> None:
+    """Persist gamma gap predictions for future validation."""
+
+    if not predictions:
+        return
+
+    timestamp = datetime.utcnow().isoformat()
+    normalised = []
+    for row in predictions:
+        payload = {**row}
+        payload.setdefault("ts", timestamp)
+        payload["inside_zone"] = 1 if payload.get("inside_zone") else 0
+        normalised.append(payload)
+
+    if _supabase_client is not None:
+        try:
+            _supabase_client.table("gamma_gap_predictions").insert(normalised).execute()
+            return
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning(
+                "Failed to save gamma gap predictions to Supabase; falling back to SQLite",
+                exc_info=exc,
+            )
+
+    init_db()
+    con = sqlite3.connect(DB_FILE)
+    with con:
+        con.executemany(
+            """
+            INSERT INTO gamma_gap_predictions (
+                ts,
+                ticker,
+                expiration,
+                dte,
+                spot,
+                magnet_strike,
+                magnet_gamma,
+                positive_gamma,
+                total_abs_gamma,
+                signed_gap,
+                gap_pct,
+                score,
+                share_positive,
+                intensity_ratio,
+                zone_low,
+                zone_high,
+                inside_zone,
+                direction,
+                notes
+            ) VALUES (
+                :ts,
+                :ticker,
+                :expiration,
+                :dte,
+                :spot,
+                :magnet_strike,
+                :magnet_gamma,
+                :positive_gamma,
+                :total_abs_gamma,
+                :signed_gap,
+                :gap_pct,
+                :score,
+                :share_positive,
+                :intensity_ratio,
+                :zone_low,
+                :zone_high,
+                :inside_zone,
+                :direction,
+                :notes
+            )
+            """,
+            normalised,
+        )
+    con.close()

@@ -1,3 +1,4 @@
+import math
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta, timezone
@@ -5,7 +6,7 @@ import yfinance as yf
 import feedparser
 import streamlit as st
 from zoneinfo import ZoneInfo
-from typing import Optional
+from typing import Optional, Dict, List, Tuple
 import yaml
 import os
 
@@ -482,6 +483,159 @@ def compute_butterfly_skew(chain, spot):
     iv_high = df[(df['strike']==high_wing) & (df['option_type']=='call')]['mid_iv'].mean()
     
     return ((iv_low + iv_high)/2) - iv_atm
+
+
+def _filter_expirations_for_window(
+    expirations: List[str],
+    min_dte: int,
+    max_dte: Optional[int],
+    limit: int = 3,
+) -> List[Tuple[str, int]]:
+    """Return expirations within the requested DTE window ordered soonest first."""
+
+    today = datetime.utcnow().date()
+    filtered: List[Tuple[str, int]] = []
+    for exp in expirations:
+        try:
+            exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        dte = (exp_date - today).days
+        if dte < min_dte:
+            continue
+        if max_dte is not None and dte > max_dte:
+            continue
+        filtered.append((exp, dte))
+
+    filtered.sort(key=lambda item: item[1])
+    if limit:
+        filtered = filtered[:limit]
+    return filtered
+
+
+def analyze_gamma_gap_fill(
+    ticker: str,
+    tradier_token: str,
+    *,
+    offset: int = 35,
+    dte_window: Tuple[int, Optional[int]] = (0, 7),
+    max_expirations: int = 3,
+) -> Dict[str, object]:
+    """Return structured gamma gap analysis for near-dated expirations.
+
+    The output dictionary contains:
+
+    - ``spot``: latest stock price (float or ``None`` if unavailable)
+    - ``records``: list of dicts, one per expiration, with gamma metrics
+    """
+
+    if not tradier_token:
+        raise ValueError("Tradier token is required for gamma gap analysis")
+
+    spot = get_stock_quote(ticker, tradier_token)
+    if spot is None:
+        return {"spot": None, "records": []}
+
+    expirations = get_expirations(ticker, tradier_token, include_all_roots=True)
+    if not expirations:
+        return {"spot": spot, "records": []}
+
+    min_dte, max_dte = dte_window
+    expirations_with_dte = _filter_expirations_for_window(
+        expirations, min_dte=min_dte, max_dte=max_dte, limit=max_expirations
+    )
+
+    records: List[Dict[str, object]] = []
+    for exp, dte in expirations_with_dte:
+        try:
+            chain = get_option_chain(
+                ticker,
+                exp,
+                tradier_token,
+                include_all_roots=True,
+            )
+        except Exception:
+            continue
+
+        net_df = compute_net_gex(chain, spot, offset=offset)
+        if net_df.empty:
+            continue
+
+        net_df = net_df.rename(columns={"Net GEX": "GEX"})
+        if net_df["GEX"].max() <= 0:
+            # No positive gamma anchor to act as magnet
+            continue
+
+        # Ensure strikes are numeric for math operations
+        net_df["Strike"] = net_df["Strike"].astype(float)
+        gex_series = net_df["GEX"].astype(float)
+
+        magnet_idx = gex_series.idxmax()
+        magnet_row = net_df.loc[magnet_idx]
+        magnet_strike = float(magnet_row["Strike"])
+        magnet_gamma = float(magnet_row["GEX"])
+        if magnet_gamma <= 0:
+            continue
+
+        positive_gamma = float(gex_series[gex_series > 0].sum())
+        total_abs_gamma = float(gex_series.abs().sum())
+        if positive_gamma <= 0 or total_abs_gamma <= 0:
+            continue
+
+        signed_gap = magnet_strike - spot
+        gap_pct = signed_gap / spot if spot else 0.0
+
+        flip_mask = gex_series.shift().mul(gex_series).lt(0)
+        flip_strikes = net_df.loc[flip_mask, "Strike"].tolist()
+        lower_candidates = [strike for strike in flip_strikes if strike < magnet_strike]
+        upper_candidates = [strike for strike in flip_strikes if strike > magnet_strike]
+        zone_low = float(max(lower_candidates) if lower_candidates else net_df["Strike"].min())
+        zone_high = float(min(upper_candidates) if upper_candidates else net_df["Strike"].max())
+        zone_width = max(zone_high - zone_low, 1e-6)
+        inside_zone = zone_low <= spot <= zone_high
+
+        share_positive = magnet_gamma / positive_gamma
+        intensity_ratio = magnet_gamma / total_abs_gamma
+        gap_factor = abs(signed_gap) / max(spot, 1e-6)
+
+        zone_factor = 0.7 if inside_zone else 1.0 + min(abs(signed_gap) / zone_width, 2.5) * 0.2
+        score = gap_factor * (0.6 * share_positive + 0.4 * intensity_ratio) * zone_factor
+
+        direction = "Pinned" if math.isclose(signed_gap, 0, abs_tol=0.05) else (
+            "Rebound ↑" if signed_gap > 0 else "Reversion ↓"
+        )
+
+        notes = (
+            f"Peak +Γ at {magnet_strike:.1f}; zone {zone_low:.1f}–{zone_high:.1f}. "
+            f"Spot is {'inside' if inside_zone else 'outside'} the positive gamma pocket."
+        )
+
+        records.append(
+            {
+                "ticker": ticker,
+                "expiration": exp,
+                "dte": dte,
+                "spot": spot,
+                "magnet_strike": magnet_strike,
+                "magnet_gamma": magnet_gamma,
+                "positive_gamma": positive_gamma,
+                "total_abs_gamma": total_abs_gamma,
+                "signed_gap": signed_gap,
+                "gap_pct": gap_pct,
+                "direction": direction,
+                "share_positive": share_positive,
+                "intensity_ratio": intensity_ratio,
+                "zone_low": zone_low,
+                "zone_high": zone_high,
+                "zone_width": zone_width,
+                "inside_zone": inside_zone,
+                "score": score,
+                "notes": notes,
+            }
+        )
+
+    records.sort(key=lambda item: item["score"], reverse=True)
+    return {"spot": spot, "records": records}
 
 
 def compute_term_structure_slope(tradier_token, ticker, expirations, spot, offset):
