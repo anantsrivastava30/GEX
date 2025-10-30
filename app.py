@@ -1,3 +1,4 @@
+import math
 import re
 import streamlit as st
 import pandas as pd
@@ -6,6 +7,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from html import escape, unescape
 from textwrap import shorten, dedent
+from typing import Any, Dict
 from helpers import (
     get_expirations,
     get_option_chain,
@@ -19,6 +21,7 @@ from helpers import (
     get_bid_to_cover,
     get_bond_yield_info,
     get_vix_info,
+    evaluate_gamma_gap_list,
 )
 from utils import (
     plot_put_call_ratios,
@@ -28,7 +31,7 @@ from utils import (
     plot_binomial_tree,
 )
 from quant import openai_query, render_model_selection
-from db import init_db, load_analyses
+from db import init_db, load_analyses, save_gamma_gap_predictions
 
 
 METRIC_COLOR_THEMES = {
@@ -603,28 +606,30 @@ enable_ai = st.sidebar.checkbox("Enable AI Analysis", value=True)
 tab_names = [
     "Overview Metrics",
     "Options Positioning",
+    "Gamma Gap Radar",
     "Binomial Tree",
     "Market Sentiment",
-    "Market News"
+    "Market News",
 ]
 if enable_ai:
     tab_names.append("AI Analysis")
 tab_names.append("Economic Calendar")
 tabs = st.tabs(tab_names)
-tab1 = tabs[0]
-tab2 = tabs[1]
-binom_tab = tabs[2]
-sentiment_tab = tabs[3]
-news_tab = tabs[4]
+overview_tab = tabs[0]
+options_tab = tabs[1]
+gamma_tab = tabs[2]
+binom_tab = tabs[3]
+sentiment_tab = tabs[4]
+news_tab = tabs[5]
 if enable_ai:
-    ai_tab = tabs[5]
-    calender_tab = tabs[6]
+    ai_tab = tabs[6]
+    calender_tab = tabs[7]
 else:
     ai_tab = None
-    calender_tab = tabs[5]
+    calender_tab = tabs[6]
 
 # --- Tab 1: Overview Metrics ---
-with tab1:
+with overview_tab:
     st.header("📈 Overview Metrics")
     tradier_token = st.secrets.get("TRADIER_TOKEN")
     if ticker and selected_exps and spot is not None:
@@ -967,7 +972,7 @@ with tab1:
     else:
         st.info("Select ticker, expirations, and ensure spot price loaded.")
 # --- Tab 2: Options Positioning ---
-with tab2:
+with options_tab:
     st.header("🎯 Options Positioning")
     if ticker and selected_exps and spot is not None:
         token = st.secrets.get("TRADIER_TOKEN")
@@ -1302,7 +1307,212 @@ with tab2:
     else:
         st.info("Select ticker and expirations to view positioning.")
 
-# --- Tab 3: Binomial Tree ---
+# --- Tab 3: Gamma Gap Radar ---
+with gamma_tab:
+    st.header("🧲 Gamma Gap Radar")
+    st.markdown(
+        dedent(
+            """
+            Positive dealer gamma typically dampens volatility and encourages **mean reversion back toward the strike with the
+            highest net gamma**. Use this radar to scan a hot list of tickers and surface where spot has room to "gap fill" into
+            the dealer magnet within the next few expirations.
+            """
+        )
+    )
+
+    col_hot, col_dte, col_offset = st.columns([3, 1.4, 1.4])
+    with col_hot:
+        hot_input = st.text_input(
+            "Hot tickers (comma separated)",
+            value="SPY, QQQ, NVDA, TSLA",
+            help="Tickers to evaluate for gamma magnets and gap potential.",
+        )
+    with col_dte:
+        scan_dte = st.slider(
+            "Max DTE to scan",
+            min_value=1,
+            max_value=45,
+            value=12,
+            help="Focus on the next few expirations (2-3 DTE, weekly/monthly).",
+            key="gamma_gap_max_dte",
+        )
+    with col_offset:
+        offset_scan = st.slider(
+            "Strike window (±)",
+            min_value=10,
+            max_value=100,
+            value=offset,
+            help="Limit strikes around spot when building the gamma curve.",
+            key="gamma_gap_offset",
+        )
+
+    tradier_token = st.secrets.get("TRADIER_TOKEN")
+    hot_list = [sym.strip().upper() for sym in hot_input.split(",") if sym.strip()]
+
+    if not hot_list:
+        st.info("Enter at least one ticker to evaluate gamma gap potential.")
+    elif not tradier_token:
+        st.warning("Add a Tradier token to enable the gamma radar scan.")
+    else:
+        with st.spinner("Scanning dealer gamma positioning across the hot list..."):
+            results, errors = evaluate_gamma_gap_list(
+                hot_list,
+                tradier_token,
+                offset=offset_scan,
+                max_expirations=3,
+                max_dte=scan_dte,
+            )
+
+        if errors:
+            for symbol, messages in errors.items():
+                if not messages:
+                    continue
+                unique_msgs = " | ".join(dict.fromkeys(messages))
+                st.warning(f"{symbol}: {unique_msgs}")
+
+        if results:
+            results_sorted = sorted(results, key=lambda row: row.get("score", 0), reverse=True)
+            table_records = []
+            label_map: Dict[str, Dict[str, Any]] = {}
+            for row in results_sorted:
+                label = f"{row['ticker']} · {row['expiration']} (DTE {row['dte']})"
+                label_map[label] = row
+                clean_row = {k: v for k, v in row.items() if k != "net_gex_curve"}
+                ratio_val = clean_row.get("pos_neg_ratio")
+                if isinstance(ratio_val, (int, float)):
+                    if not math.isfinite(ratio_val):
+                        clean_row["pos_neg_ratio"] = None
+                elif ratio_val is not None:
+                    clean_row["pos_neg_ratio"] = None
+                table_records.append(clean_row)
+
+            table_df = pd.DataFrame(table_records)
+            if not table_df.empty:
+                pos_neg_series = table_df["pos_neg_ratio"].apply(
+                    lambda v: None
+                    if v is None or (isinstance(v, float) and not math.isfinite(v)) or pd.isna(v)
+                    else round(float(v), 2)
+                )
+
+                display_df = pd.DataFrame(
+                    {
+                        "Ticker": table_df["ticker"],
+                        "Expiration": table_df["expiration"],
+                        "DTE": table_df["dte"],
+                        "Spot": table_df["spot"].round(2),
+                        "Magnet": table_df["magnet_strike"].round(2),
+                        "Gap ($)": table_df["gap"].round(2),
+                        "Gap (%)": (table_df["gap_pct"].astype(float) * 100).round(2),
+                        "Gamma Regime": table_df["gamma_regime"],
+                        "Positive Γ %": (table_df["positive_share"].astype(float) * 100).round(1),
+                        "Pos/Neg Γ": pos_neg_series,
+                        "Magnet Γ (M)": (table_df["magnet_gamma"].astype(float) / 1e6).round(2),
+                        "Net Γ (M)": (table_df["net_gamma_total"].astype(float) / 1e6).round(2),
+                        "Score": table_df["score"].round(2),
+                        "Gamma Flips": table_df["gamma_flips"].apply(
+                            lambda flips: ", ".join(
+                                f"{low:.0f}-{high:.0f}" for low, high in flips
+                            )
+                            if flips
+                            else "None"
+                        ),
+                    }
+                ).sort_values("Score", ascending=False)
+
+                st.markdown("#### Gap-fill leaderboard")
+                st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+                top_candidate = results_sorted[0]
+                met_a, met_b, met_c = st.columns(3)
+                with met_a:
+                    metric_card(
+                        "Top Candidate",
+                        f"{top_candidate['ticker']} {top_candidate['expiration']}",
+                        delta=f"DTE {top_candidate['dte']}",
+                        footnote=f"Score {top_candidate['score']:.1f}",
+                    )
+                with met_b:
+                    metric_card(
+                        "Gamma Magnet",
+                        f"{top_candidate['magnet_strike']:.2f}",
+                        delta=f"Gap {top_candidate['gap']:+.2f}",
+                        footnote="Spot vs peak net Γ",
+                    )
+                with met_c:
+                    metric_card(
+                        "Positive Γ Share",
+                        f"{top_candidate['positive_share'] * 100:.1f}%",
+                        delta=f"Regime {top_candidate['gamma_regime']}",
+                        footnote="Higher share = stronger magnet",
+                    )
+
+                st.markdown("#### Drill-down view")
+                selection = st.selectbox(
+                    "Select a candidate to inspect",
+                    options=list(label_map.keys()),
+                    key="gamma_gap_selection",
+                )
+
+                selected = label_map.get(selection)
+                if selected:
+                    curve_df = selected["net_gex_curve"].copy()
+                    curve_df["Net Γ (M)"] = curve_df["Net GEX"].astype(float) / 1e6
+                    fig_gap = px.bar(
+                        curve_df,
+                        x="Net Γ (M)",
+                        y="Strike",
+                        orientation="h",
+                        labels={"Net Γ (M)": "Net Gamma (Millions)", "Strike": "Strike"},
+                        height=520,
+                        title=f"Net Gamma Profile · {selected['ticker']} {selected['expiration']} (Spot {selected['spot']:.2f})",
+                    )
+                    fig_gap.update_traces(marker_color="#38bdf8")
+                    fig_gap.update_layout(
+                        template="plotly_dark",
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(15,23,42,0.25)",
+                        margin=dict(l=60, r=40, t=80, b=40),
+                    )
+                    fig_gap.add_vline(x=0, line_dash="dash", line_color="#64748b")
+                    st.plotly_chart(fig_gap, use_container_width=True)
+
+                    flips_text = (
+                        ", ".join(f"{low:.0f}-{high:.0f}" for low, high in selected["gamma_flips"])
+                        if selected["gamma_flips"]
+                        else "No zero-cross within scan window"
+                    )
+                    st.markdown(
+                        dedent(
+                            f"""
+                            - **Spot → Magnet:** ${selected['spot']:.2f} → {selected['magnet_strike']:.2f} (Δ {selected['gap']:+.2f}, {selected['gap_pct']*100:+.2f}%).
+                            - **Gamma regime:** {selected['gamma_regime']} with {selected['positive_share']*100:.1f}% of strikes carrying positive net Γ.
+                            - **Flip zones:** {flips_text}.
+                            - **Read:** Positive gamma with spot below the magnet supports the thesis that price drifts higher to close the gap as dealers hedge.
+                            """
+                        )
+                    )
+
+                best_rows = []
+                seen = set()
+                for row in results_sorted:
+                    ticker = row.get("ticker")
+                    if not ticker or ticker in seen:
+                        continue
+                    clean_row = {k: v for k, v in row.items() if k != "net_gex_curve"}
+                    best_rows.append(clean_row)
+                    seen.add(ticker)
+
+                if best_rows:
+                    if st.button("Log snapshot for follow-up", key="log_gamma_gap"):
+                        save_gamma_gap_predictions(best_rows)
+                        st.success("Stored the top gamma gap candidates for future verification.")
+                    st.caption(
+                        "Logging captures the strongest magnet per ticker so we can measure actual gap closure by upcoming expirations."
+                    )
+        else:
+            st.info("No analysable expirations returned within the scan parameters.")
+
+# --- Tab 4: Binomial Tree ---
 with binom_tab:
     st.header("🧮 Binomial Tree")
     if ticker and expirations and spot is not None:
@@ -1402,7 +1612,7 @@ with binom_tab:
     else:
         st.info("Enter ticker and expiration to build a tree.")
 
-# --- Tab 3: Market Sentiment ---
+# --- Tab 5: Market Sentiment ---
 with sentiment_tab:
     st.header("🌅 Market Sentiment & Futures")
     st.caption("Cross-asset gauges to frame the macro backdrop and liquidity tone.")
@@ -1480,7 +1690,7 @@ with sentiment_tab:
         else:
             metric_card("10Y Auction Bid-to-Cover", "N/A", footnote="FRED data unavailable")
 
-# --- Tab 5: Market News ---
+# --- Tab 6: Market News ---
 with news_tab:
     st.header("📰 Market & Sentiment News")
     st.caption("Condensed macro, volatility and flow stories curated from your watchlists.")
@@ -1535,7 +1745,7 @@ with calender_tab:
     )
     st.markdown("</div>", unsafe_allow_html=True)
 
-# --- Tab 6: AI Analysis ---
+# --- Tab 7: AI Analysis ---
 if enable_ai and ai_tab:
     with ai_tab:
         st.header("🤖 AI Analysis")

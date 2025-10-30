@@ -13,7 +13,9 @@ import logging
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
+
+import math
 
 import streamlit as st
 from supabase import create_client
@@ -72,6 +74,26 @@ def init_db() -> None:
     except sqlite3.OperationalError:
         # Column already exists.
         pass
+
+    con.execute(
+        """
+      CREATE TABLE IF NOT EXISTS gamma_gap_predictions (
+         id              INTEGER PRIMARY KEY AUTOINCREMENT,
+         ts              TEXT NOT NULL,
+         ticker          TEXT NOT NULL,
+         expiration      TEXT NOT NULL,
+         dte             INTEGER,
+         spot            REAL,
+         magnet          REAL,
+         gap             REAL,
+         gap_pct         REAL,
+         gamma_regime    TEXT,
+         positive_share  REAL,
+         pos_neg_ratio   REAL,
+         score           REAL
+      )
+    """
+    )
     con.commit()
     con.close()
 
@@ -190,6 +212,65 @@ def save_analysis(ticker: str, expirations: Any, payload: Any, response: Any, to
             )
 
     _save_sqlite(data)
+
+
+def save_gamma_gap_predictions(rows: Sequence[Dict[str, Any]]) -> None:
+    """Persist gamma gap predictions for future verification."""
+
+    if not rows:
+        return
+
+    init_db()
+    payload: List[Dict[str, Any]] = []
+    for row in rows:
+        try:
+            ticker = row["ticker"]
+            expiration = row["expiration"]
+        except KeyError:
+            continue
+
+        ts = row.get("ts") or datetime.utcnow().isoformat()
+
+        ratio = row.get("pos_neg_ratio")
+        if isinstance(ratio, (int, float)) and math.isinf(ratio):
+            ratio = None
+
+        payload.append(
+            {
+                "ts": ts,
+                "ticker": ticker,
+                "expiration": expiration,
+                "dte": row.get("dte"),
+                "spot": row.get("spot"),
+                "magnet": row.get("magnet_strike"),
+                "gap": row.get("gap"),
+                "gap_pct": row.get("gap_pct"),
+                "gamma_regime": row.get("gamma_regime"),
+                "positive_share": row.get("positive_share"),
+                "pos_neg_ratio": ratio,
+                "score": row.get("score"),
+            }
+        )
+
+    if not payload:
+        return
+
+    con = sqlite3.connect(DB_FILE)
+    con.executemany(
+        """
+        INSERT INTO gamma_gap_predictions (
+            ts, ticker, expiration, dte, spot, magnet, gap, gap_pct,
+            gamma_regime, positive_share, pos_neg_ratio, score
+        )
+        VALUES (
+            :ts, :ticker, :expiration, :dte, :spot, :magnet, :gap, :gap_pct,
+            :gamma_regime, :positive_share, :pos_neg_ratio, :score
+        )
+        """,
+        payload,
+    )
+    con.commit()
+    con.close()
 
 
 def load_analyses(limit: int = 20) -> List[Dict[str, Any]]:

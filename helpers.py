@@ -5,7 +5,7 @@ import yfinance as yf
 import feedparser
 import streamlit as st
 from zoneinfo import ZoneInfo
-from typing import Optional
+from typing import Optional, Sequence, Dict, Any, Tuple, List
 import yaml
 import os
 
@@ -192,6 +192,165 @@ def compute_net_gex(chain, spot, offset=20):
         rows.append({"Strike": K, "Net GEX": gamma * oi * size * multiplier})
     df = pd.DataFrame(rows)
     return df.groupby("Strike").sum().reset_index().sort_values("Strike")
+
+
+def compute_gamma_gap_profile(
+    chain: Sequence[Dict[str, Any]],
+    spot: float,
+    offset: int = 35,
+) -> Optional[Dict[str, Any]]:
+    """Analyse the net gamma curve to quantify gap-fill potential."""
+
+    if spot is None:
+        return None
+
+    df_net = compute_net_gex(chain, spot, offset=offset)
+    if df_net.empty:
+        return None
+
+    magnet_idx = df_net["Net GEX"].idxmax()
+    magnet_strike = float(df_net.loc[magnet_idx, "Strike"])
+    magnet_gamma = float(df_net.loc[magnet_idx, "Net GEX"])
+
+    net_total = float(df_net["Net GEX"].sum())
+    positive_total = float(df_net[df_net["Net GEX"] > 0]["Net GEX"].sum())
+    negative_total = float(df_net[df_net["Net GEX"] < 0]["Net GEX"].sum())
+
+    gross_total = positive_total + abs(negative_total)
+    positive_share = positive_total / gross_total if gross_total else 0.0
+
+    if abs(negative_total) > 1e-9:
+        pos_neg_ratio = positive_total / abs(negative_total)
+    else:
+        pos_neg_ratio = float("inf") if positive_total > 0 else 0.0
+
+    gap = magnet_strike - float(spot)
+    gap_pct = gap / float(spot) if spot else 0.0
+    gamma_regime = "Positive" if net_total >= 0 else "Negative"
+
+    signs = np.sign(df_net["Net GEX"].values)
+    flip_indices = np.where(np.diff(signs) != 0)[0]
+    gamma_flips = [
+        (float(df_net.iloc[idx]["Strike"]), float(df_net.iloc[idx + 1]["Strike"]))
+        for idx in flip_indices
+    ]
+
+    gap_component = min(abs(gap_pct) * 100.0, 35.0)
+    magnet_component = min(abs(magnet_gamma) / 1_000_000.0, 25.0)
+    stability_component = positive_share * 40.0
+
+    base_score = gap_component + magnet_component + stability_component
+    regime_multiplier = 1.25 if gamma_regime == "Positive" else 0.7
+    if gap > 0 and gamma_regime == "Positive":
+        direction_multiplier = 1.2
+    elif gap > 0:
+        direction_multiplier = 0.95
+    elif gap < 0 and gamma_regime == "Positive":
+        direction_multiplier = 1.05
+    else:
+        direction_multiplier = 0.85
+
+    score = round(base_score * regime_multiplier * direction_multiplier, 2)
+
+    return {
+        "magnet_strike": magnet_strike,
+        "magnet_gamma": magnet_gamma,
+        "net_gamma_total": net_total,
+        "positive_gamma": positive_total,
+        "negative_gamma": negative_total,
+        "positive_share": positive_share,
+        "pos_neg_ratio": pos_neg_ratio,
+        "gamma_regime": gamma_regime,
+        "gap": gap,
+        "gap_pct": gap_pct,
+        "gamma_flips": gamma_flips,
+        "score": score,
+        "net_gex_curve": df_net,
+    }
+
+
+def evaluate_gamma_gap_list(
+    tickers: Sequence[str],
+    token: str,
+    offset: int = 35,
+    max_expirations: int = 3,
+    max_dte: int = 21,
+) -> Tuple[List[Dict[str, Any]], Dict[str, List[str]]]:
+    """Run the gamma-gap analysis for each ticker and expiration."""
+
+    results: List[Dict[str, Any]] = []
+    errors: Dict[str, List[str]] = {}
+
+    for raw_ticker in tickers:
+        ticker = raw_ticker.strip().upper()
+        if not ticker:
+            continue
+
+        try:
+            spot = get_stock_quote(ticker, token)
+        except Exception as exc:  # pragma: no cover - network guard
+            errors.setdefault(ticker, []).append(f"Quote error: {exc}")
+            continue
+
+        if spot is None:
+            errors.setdefault(ticker, []).append("No spot price returned")
+            continue
+
+        try:
+            expirations = get_expirations(ticker, token, include_all_roots=True)
+        except Exception as exc:  # pragma: no cover - network guard
+            errors.setdefault(ticker, []).append(f"Expiration error: {exc}")
+            continue
+
+        if not expirations:
+            errors.setdefault(ticker, []).append("No expirations returned")
+            continue
+
+        processed = 0
+        for exp in expirations:
+            if processed >= max_expirations:
+                break
+            try:
+                exp_dt = datetime.strptime(exp, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+
+            dte = (exp_dt - datetime.utcnow().date()).days
+            if dte < 0:
+                continue
+            if max_dte is not None and dte > max_dte:
+                continue
+
+            try:
+                chain = get_option_chain(
+                    ticker,
+                    exp,
+                    token,
+                    include_all_roots=True,
+                )
+            except Exception as exc:  # pragma: no cover - network guard
+                errors.setdefault(ticker, []).append(f"Chain error ({exp}): {exc}")
+                continue
+
+            profile = compute_gamma_gap_profile(chain, spot, offset=offset)
+            if not profile:
+                continue
+
+            profile.update(
+                {
+                    "ticker": ticker,
+                    "expiration": exp,
+                    "dte": dte,
+                    "spot": float(spot),
+                }
+            )
+            results.append(profile)
+            processed += 1
+
+        if processed == 0:
+            errors.setdefault(ticker, []).append("No analysable expirations in range")
+
+    return results, errors
 
 
 def compute_iv_skew(chain):
