@@ -19,6 +19,7 @@ from helpers import (
     get_bid_to_cover,
     get_bond_yield_info,
     get_vix_info,
+    fetch_net_gex_for_expiration,
 )
 from utils import (
     plot_put_call_ratios,
@@ -26,9 +27,12 @@ from utils import (
     interpret_net_gex,
     generate_binomial_tree,
     plot_binomial_tree,
+    compute_gamma_gap_metrics,
+    describe_gamma_gap,
+    build_gamma_gap_plot,
 )
 from quant import openai_query, render_model_selection
-from db import init_db, load_analyses
+from db import init_db, load_analyses, save_gamma_gap_results, load_gamma_gap_history
 
 
 METRIC_COLOR_THEMES = {
@@ -603,6 +607,7 @@ enable_ai = st.sidebar.checkbox("Enable AI Analysis", value=True)
 tab_names = [
     "Overview Metrics",
     "Options Positioning",
+    "Gamma Gap Radar",
     "Binomial Tree",
     "Market Sentiment",
     "Market News"
@@ -613,15 +618,16 @@ tab_names.append("Economic Calendar")
 tabs = st.tabs(tab_names)
 tab1 = tabs[0]
 tab2 = tabs[1]
-binom_tab = tabs[2]
-sentiment_tab = tabs[3]
-news_tab = tabs[4]
+gap_tab = tabs[2]
+binom_tab = tabs[3]
+sentiment_tab = tabs[4]
+news_tab = tabs[5]
 if enable_ai:
-    ai_tab = tabs[5]
-    calender_tab = tabs[6]
+    ai_tab = tabs[6]
+    calender_tab = tabs[7]
 else:
     ai_tab = None
-    calender_tab = tabs[5]
+    calender_tab = tabs[6]
 
 # --- Tab 1: Overview Metrics ---
 with tab1:
@@ -1302,7 +1308,256 @@ with tab2:
     else:
         st.info("Select ticker and expirations to view positioning.")
 
-# --- Tab 3: Binomial Tree ---
+# --- Tab 3: Gamma Gap Radar ---
+with gap_tab:
+    st.header("🧲 Gamma Gap Radar")
+    st.caption(
+        "Scan hot tickers for positive gamma magnets where spot is likely to mean-revert."
+    )
+
+    tradier_token = st.secrets.get("TRADIER_TOKEN")
+    default_hot_list = "SPY, QQQ, NVDA, TSLA, META"
+    col_hot, col_dte, col_max = st.columns([3, 2, 1])
+    hot_input = col_hot.text_input(
+        "Hot tickers (comma separated)",
+        value=st.session_state.get("gamma_gap_hot", default_hot_list),
+        help="List tickers you want to evaluate for gamma-driven gap fills.",
+    )
+    st.session_state["gamma_gap_hot"] = hot_input
+
+    dte_min_max = col_dte.slider(
+        "DTE window",
+        min_value=0,
+        max_value=45,
+        value=st.session_state.get("gamma_gap_dte", (0, 7)),
+        help="Filter expirations to a DTE range so we focus on imminent dealer hedging flows.",
+    )
+    st.session_state["gamma_gap_dte"] = dte_min_max
+
+    max_expirations = int(
+        col_max.number_input(
+            "Exp per ticker",
+            min_value=1,
+            max_value=4,
+            value=int(st.session_state.get("gamma_gap_exp", 2)),
+            help="Limit the number of expirations scanned per ticker (nearest DTE first).",
+        )
+    )
+    st.session_state["gamma_gap_exp"] = max_expirations
+
+    offset_scan = st.slider(
+        "Strike range (±)",
+        min_value=5,
+        max_value=150,
+        value=int(st.session_state.get("gamma_gap_offset", offset)),
+        help="Gamma magnets are calculated using strikes within spot ± this range.",
+    )
+    st.session_state["gamma_gap_offset"] = offset_scan
+
+    run_scan = st.button("Run Gamma Gap Scan", type="primary")
+
+    if run_scan:
+        if not tradier_token:
+            st.error("Tradier token missing – unable to fetch option data.")
+        else:
+            tickers_to_scan = [sym.strip().upper() for sym in hot_input.split(",") if sym.strip()]
+            tickers_to_scan = sorted(set(tickers_to_scan))
+            if not tickers_to_scan:
+                st.warning("Please provide at least one ticker symbol.")
+            else:
+                with st.spinner("Analysing gamma profiles..."):
+                    analysis_records: list[dict] = []
+                    db_rows: list[dict] = []
+                    errors: list[str] = []
+                    for symbol in tickers_to_scan:
+                        try:
+                            spot_px = get_stock_quote(symbol, tradier_token)
+                        except Exception as exc:
+                            errors.append(f"{symbol}: quote error ({exc})")
+                            continue
+
+                        if spot_px in (None, 0):
+                            errors.append(f"{symbol}: invalid spot price")
+                            continue
+
+                        try:
+                            expirations = get_expirations(
+                                symbol,
+                                tradier_token,
+                                include_all_roots=True,
+                            )
+                        except Exception as exc:
+                            errors.append(f"{symbol}: expirations error ({exc})")
+                            continue
+
+                        if not expirations:
+                            errors.append(f"{symbol}: no expirations returned")
+                            continue
+
+                        dte_window = (min(dte_min_max), max(dte_min_max))
+                        scoped_exps: list[tuple[str, int]] = []
+                        for exp in expirations:
+                            try:
+                                exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
+                            except ValueError:
+                                continue
+                            dte = (exp_date - datetime.utcnow().date()).days
+                            if dte_window[0] <= dte <= dte_window[1]:
+                                scoped_exps.append((exp, dte))
+                        if not scoped_exps:
+                            errors.append(
+                                f"{symbol}: no expirations within {dte_window[0]}-{dte_window[1]} DTE"
+                            )
+                            continue
+
+                        scoped_exps.sort(key=lambda x: x[1])
+                        for exp, dte in scoped_exps[:max_expirations]:
+                            df_net = fetch_net_gex_for_expiration(
+                                symbol,
+                                exp,
+                                tradier_token,
+                                spot_px,
+                                offset=offset_scan,
+                            )
+                            if df_net.empty:
+                                continue
+
+                            metrics = compute_gamma_gap_metrics(df_net, spot_px, offset=offset_scan)
+                            if not metrics:
+                                continue
+
+                            commentary = describe_gamma_gap(metrics)
+                            record = {
+                                "ticker": symbol,
+                                "expiration": exp,
+                                "dte": dte,
+                                "spot": spot_px,
+                                "settings": {
+                                    "offset": offset_scan,
+                                    "dte_window": dte_window,
+                                },
+                                **metrics,
+                                "direction": "Up toward magnet" if metrics["distance"] > 0 else "Down toward magnet",
+                                "df_net": df_net,
+                                "commentary": commentary,
+                            }
+                            analysis_records.append(record)
+                            row_payload = {k: v for k, v in record.items() if k not in {"df_net", "commentary"}}
+                            db_rows.append(row_payload)
+
+                    if errors:
+                        st.warning("\n".join(errors))
+
+                st.session_state["gamma_gap_results"] = analysis_records
+                if db_rows:
+                    try:
+                        save_gamma_gap_results(db_rows)
+                    except Exception as exc:
+                        st.warning(f"Unable to log gamma gap results: {exc}")
+
+    gamma_gap_results: list[dict] = st.session_state.get("gamma_gap_results", [])
+    if gamma_gap_results:
+        table_records = []
+        for rec in gamma_gap_results:
+            table_records.append(
+                {
+                    "Ticker": rec["ticker"],
+                    "Expiration": rec["expiration"],
+                    "DTE": rec["dte"],
+                    "Spot": rec["spot"],
+                    "Magnet": rec["magnet_strike"],
+                    "Distance": rec["distance"],
+                    "Score": rec["score"],
+                    "Positive γ?": "Yes" if rec["positive_zone"] else "No",
+                    "Direction": rec["direction"],
+                }
+            )
+        table_df = pd.DataFrame(table_records)
+        table_df = table_df.sort_values("Score", ascending=False)
+        st.markdown("#### Gap fill leaderboard")
+        st.dataframe(
+            table_df.style.format(
+                {
+                    "Spot": "{:.2f}",
+                    "Magnet": "{:.2f}",
+                    "Distance": "{:+.2f}",
+                    "Score": "{:.1f}",
+                }
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        key_options = [f"{rec['ticker']} · {rec['expiration']}" for rec in gamma_gap_results]
+        selection = st.selectbox(
+            "Inspect details",
+            options=key_options,
+            help="Pick a ticker/expiry combo to review the gamma profile and commentary.",
+        )
+
+        if selection:
+            sel_idx = key_options.index(selection)
+            chosen = gamma_gap_results[sel_idx]
+            detail_col, chart_col = st.columns([2, 3], gap="large")
+            with detail_col:
+                st.markdown("#### Magnet context")
+                st.markdown(chosen["commentary"], unsafe_allow_html=False)
+                st.metric(
+                    "Gap-fill score",
+                    f"{chosen['score']:.1f}/120",
+                    help="Composite score factoring magnet strength, distance, and local gamma sign.",
+                )
+                st.metric(
+                    "Gamma gradient",
+                    f"{chosen['spot_gradient']:+.2f}",
+                    help="Slope of net gamma at spot; steeper gradients imply stronger pull toward the magnet.",
+                )
+                st.markdown(
+                    f"**Settings:** ±{chosen['settings']['offset']} strikes · DTE window {chosen['settings']['dte_window'][0]}–{chosen['settings']['dte_window'][1]}"
+                )
+
+            with chart_col:
+                st.markdown("#### Net gamma profile")
+                fig_gap = build_gamma_gap_plot(chosen["df_net"], chosen["spot"], chosen["magnet_strike"])
+                st.plotly_chart(fig_gap, use_container_width=True)
+
+    else:
+        st.info("Run the scanner to populate magnet candidates.")
+
+    history = load_gamma_gap_history(limit=10)
+    if history:
+        with st.expander("Recent gamma gap snapshots"):
+            hist_df = pd.DataFrame(history)
+            hist_df["positive_zone"] = hist_df["positive_zone"].map({1: "Yes", 0: "No"})
+            st.dataframe(
+                hist_df[[
+                    "ts",
+                    "ticker",
+                    "expiration",
+                    "dte",
+                    "spot",
+                    "magnet_strike",
+                    "distance",
+                    "score",
+                    "positive_zone",
+                ]].rename(
+                    columns={
+                        "ts": "Timestamp",
+                        "ticker": "Ticker",
+                        "expiration": "Expiration",
+                        "dte": "DTE",
+                        "spot": "Spot",
+                        "magnet_strike": "Magnet",
+                        "distance": "Distance",
+                        "score": "Score",
+                        "positive_zone": "Positive γ?",
+                    }
+                ),
+                hide_index=True,
+                use_container_width=True,
+            )
+
+# --- Tab 4: Binomial Tree ---
 with binom_tab:
     st.header("🧮 Binomial Tree")
     if ticker and expirations and spot is not None:
@@ -1402,7 +1657,7 @@ with binom_tab:
     else:
         st.info("Enter ticker and expiration to build a tree.")
 
-# --- Tab 3: Market Sentiment ---
+# --- Tab 5: Market Sentiment ---
 with sentiment_tab:
     st.header("🌅 Market Sentiment & Futures")
     st.caption("Cross-asset gauges to frame the macro backdrop and liquidity tone.")
@@ -1480,7 +1735,7 @@ with sentiment_tab:
         else:
             metric_card("10Y Auction Bid-to-Cover", "N/A", footnote="FRED data unavailable")
 
-# --- Tab 5: Market News ---
+# --- Tab 6: Market News ---
 with news_tab:
     st.header("📰 Market & Sentiment News")
     st.caption("Condensed macro, volatility and flow stories curated from your watchlists.")
@@ -1535,7 +1790,7 @@ with calender_tab:
     )
     st.markdown("</div>", unsafe_allow_html=True)
 
-# --- Tab 6: AI Analysis ---
+# --- Tab 7: AI Analysis ---
 if enable_ai and ai_tab:
     with ai_tab:
         st.header("🤖 AI Analysis")

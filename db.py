@@ -72,6 +72,25 @@ def init_db() -> None:
     except sqlite3.OperationalError:
         # Column already exists.
         pass
+
+    con.execute(
+        """
+      CREATE TABLE IF NOT EXISTS gamma_gap_analysis (
+         id              INTEGER PRIMARY KEY AUTOINCREMENT,
+         ts              TEXT NOT NULL,
+         ticker          TEXT NOT NULL,
+         expiration      TEXT NOT NULL,
+         dte             INTEGER,
+         spot            REAL,
+         magnet_strike   REAL,
+         magnet_gex      REAL,
+         distance        REAL,
+         score           REAL,
+         positive_zone   INTEGER,
+         payload         TEXT
+      )
+    """
+    )
     con.commit()
     con.close()
 
@@ -190,6 +209,67 @@ def save_analysis(ticker: str, expirations: Any, payload: Any, response: Any, to
             )
 
     _save_sqlite(data)
+
+
+def save_gamma_gap_results(rows: List[Dict[str, Any]]) -> None:
+    """Persist gamma gap scan rows for future verification."""
+
+    if not rows:
+        return
+
+    init_db()
+    con = sqlite3.connect(DB_FILE)
+    insert_rows = [
+        {
+            "ts": datetime.utcnow().isoformat(),
+            "ticker": row.get("ticker"),
+            "expiration": row.get("expiration"),
+            "dte": row.get("dte"),
+            "spot": row.get("spot"),
+            "magnet_strike": row.get("magnet_strike"),
+            "magnet_gex": row.get("magnet_gex"),
+            "distance": row.get("distance"),
+            "score": row.get("score"),
+            "positive_zone": 1 if row.get("positive_zone") else 0,
+            "payload": json.dumps(row, default=str),
+        }
+        for row in rows
+    ]
+
+    con.executemany(
+        """
+        INSERT INTO gamma_gap_analysis (
+            ts, ticker, expiration, dte, spot, magnet_strike, magnet_gex,
+            distance, score, positive_zone, payload
+        ) VALUES (
+            :ts, :ticker, :expiration, :dte, :spot, :magnet_strike, :magnet_gex,
+            :distance, :score, :positive_zone, :payload
+        )
+        """,
+        insert_rows,
+    )
+    con.commit()
+    con.close()
+
+
+def load_gamma_gap_history(limit: int = 100) -> List[Dict[str, Any]]:
+    """Return the most recent gamma gap rows for monitoring accuracy."""
+
+    init_db()
+    con = sqlite3.connect(DB_FILE)
+    con.row_factory = sqlite3.Row
+    rows = con.execute(
+        """
+        SELECT ts, ticker, expiration, dte, spot, magnet_strike, magnet_gex,
+               distance, score, positive_zone, payload
+        FROM gamma_gap_analysis
+        ORDER BY ts DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    con.close()
+    return [dict(row) for row in rows]
 
 
 def load_analyses(limit: int = 20) -> List[Dict[str, Any]]:
