@@ -112,6 +112,37 @@ BEARISH_TERMS = {
 }
 
 
+SIGNAL_LEGEND = [
+    (
+        "Supportive",
+        "Tailwind — positioning and tape both leaning with the idea, so scaling in is safer.",
+    ),
+    (
+        "Neutral",
+        "Balanced — mixed cues suggest pacing entries and waiting for another pillar to join.",
+    ),
+    (
+        "Adverse",
+        "Headwind — opposing flow/sentiment means the setup is fighting the tape right now.",
+    ),
+]
+
+
+def _initialise_symbol_state() -> None:
+    """Ensure ticker-related session state survives reruns during rebase conflict fixes."""
+
+    default_symbol = DEFAULT_WATCHLIST[0]
+    state = st.session_state
+    state.setdefault("active_ticker", default_symbol)
+    state.setdefault("manual_ticker", state["active_ticker"])
+    state.setdefault(
+        "watchlist_choice",
+        state["active_ticker"] if state["active_ticker"] in DEFAULT_WATCHLIST else default_symbol,
+    )
+    if state["watchlist_choice"] not in DEFAULT_WATCHLIST:
+        state["watchlist_choice"] = default_symbol
+
+
 def ensure_news_cache(limit_per_feed: int = 25) -> list[dict]:
     """Fetch and cache the filtered RSS feed once per app run."""
 
@@ -141,24 +172,29 @@ def evaluate_gamma_signal(metrics: Optional[dict]) -> dict:
     distance = metrics.get("distance", 0.0)
     magnet = metrics.get("magnet_strike")
 
+    if magnet is None:
+        magnet_text = "the nearby strike"
+    else:
+        magnet_text = f"{magnet:.1f}"
+
     if score >= 70 and positive:
         status = "Supportive"
         level = 2
         explanation = (
-            f"Score {score:.0f}/120 with spot inside a positive gamma pocket → pull toward {magnet:.1f}."
+            f"Score {score:.0f}/120 with spot inside a positive gamma pocket → dealers lean toward {magnet_text}."
         )
     elif score >= 40:
-        status = "Balanced"
+        status = "Neutral"
         level = 1
         explanation = (
-            f"Score {score:.0f}/120; magnet at {magnet:.1f} is {distance:+.2f} away but hedging support is mixed."
+            f"Score {score:.0f}/120; magnet near {magnet_text} is {distance:+.2f} away so hedging pull is modest."
         )
     else:
-        status = "Caution"
+        status = "Adverse"
         level = 0
         tail = "negative" if not positive else "weak"
         explanation = (
-            f"Score {score:.0f}/120 with {tail} local gamma – magnet tug toward {magnet:.1f} is unreliable."
+            f"Score {score:.0f}/120 with {tail} local gamma – magnet tug toward {magnet_text} is unreliable."
         )
 
     return {
@@ -194,7 +230,7 @@ def evaluate_flow_signal(vol_ratio: float, oi_ratio: float, liquidity: Optional[
             + " and healthy depth."
         )
     elif positives == 2:
-        status = "Balanced"
+        status = "Neutral"
         level = 1
         explanation = (
             f"Mixed confirmation — call flow {'strong' if call_volume or call_oi else 'weak'}"
@@ -203,7 +239,7 @@ def evaluate_flow_signal(vol_ratio: float, oi_ratio: float, liquidity: Optional[
             + "."
         )
     else:
-        status = "Caution"
+        status = "Adverse"
         level = 0
         explanation_parts = [
             f"Put/Call vol {vol_ratio:.2f}",
@@ -255,13 +291,13 @@ def evaluate_sentiment_signal(ticker: str, articles: list[dict], vix: Optional[d
             f"Headlines skew bullish ({bull}:{bear}) with VIX {vix_chg:+.1f}% → risk appetite intact."
         )
     elif abs(spread) <= 1 and abs(vix_chg) <= 2.5:
-        status = "Balanced"
+        status = "Neutral"
         level = 1
         explanation = (
             f"News mixed ({bull}:{bear}) and VIX {vix_chg:+.1f}% — neutral tone."
         )
     else:
-        status = "Caution"
+        status = "Adverse"
         level = 0
         explanation = (
             f"Defensive skew ({bull}:{bear}) or volatility rising (VIX {vix_chg:+.1f}%)."
@@ -280,11 +316,11 @@ def render_signal_card(signal: dict):
 
     palette = {
         "Supportive": "#22c55e",
-        "Balanced": "#eab308",
-        "Caution": "#f97316",
+        "Neutral": "#facc15",
+        "Adverse": "#f97316",
         "Weak": "#94a3b8",
     }
-    status = signal.get("status", "Balanced")
+    status = signal.get("status", "Neutral")
     color = palette.get(status, "#38bdf8")
     title = signal.get("title", "Signal")
     explanation = signal.get("explanation", "")
@@ -297,6 +333,32 @@ def render_signal_card(signal: dict):
             <p class='metric-footnote' style='margin-top:0.75rem;'>{explanation}</p>
         </div>
         """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_signal_legend():
+    """Display a small legend that explains the Supportive/Neutral/Adverse tiers."""
+
+    palette = {
+        "Supportive": "#22c55e",
+        "Neutral": "#facc15",
+        "Adverse": "#f97316",
+    }
+    rows = []
+    for status, description in SIGNAL_LEGEND:
+        color = palette.get(status, "#38bdf8")
+        rows.append(
+            """
+            <div class='legend-row'>
+                <span class='legend-chip' style='border-color:{color}; color:{color};'>{status}</span>
+                <span>{description}</span>
+            </div>
+            """.format(color=color, status=status, description=description)
+        )
+
+    st.markdown(
+        "<div class='legend-card'>" + "".join(rows) + "</div>",
         unsafe_allow_html=True,
     )
 
@@ -392,6 +454,39 @@ def inject_global_styles():
                 color: #cbd5f5;
                 opacity: 0.85;
                 margin: 0;
+            }
+
+            .legend-card {
+                background: rgba(15, 23, 42, 0.55);
+                border-radius: 14px;
+                padding: 0.9rem 1.1rem;
+                border: 1px solid rgba(148, 163, 184, 0.18);
+                margin-top: 0.75rem;
+            }
+
+            .legend-row {
+                display: flex;
+                align-items: center;
+                gap: 0.6rem;
+                font-size: 0.8rem;
+                color: #cbd5f5;
+                margin-bottom: 0.45rem;
+            }
+
+            .legend-row:last-child {
+                margin-bottom: 0;
+            }
+
+            .legend-chip {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                padding: 0.18rem 0.7rem;
+                border-radius: 999px;
+                font-weight: 600;
+                font-size: 0.75rem;
+                border: 1px solid rgba(148, 163, 184, 0.45);
+                background: rgba(30, 64, 175, 0.16);
             }
 
             .soft-card {
@@ -818,17 +913,11 @@ inject_global_styles()
 st.title("📊 Options Analytics Dashboard")
 
 # --- Sidebar Inputs ---
-if "active_ticker" not in st.session_state:
-    st.session_state["active_ticker"] = DEFAULT_WATCHLIST[0]
-
-watch_index = 0
-if st.session_state["active_ticker"] in DEFAULT_WATCHLIST:
-    watch_index = DEFAULT_WATCHLIST.index(st.session_state["active_ticker"])
+_initialise_symbol_state()
 
 watch_choice = st.sidebar.selectbox(
     "Watchlist symbols",
     options=DEFAULT_WATCHLIST,
-    index=watch_index,
     key="watchlist_choice",
 )
 
@@ -836,13 +925,20 @@ if watch_choice != st.session_state["active_ticker"]:
     st.session_state["active_ticker"] = watch_choice
     st.session_state["manual_ticker"] = watch_choice
 
-manual_symbol = st.sidebar.text_input(
+manual_symbol_input = st.sidebar.text_input(
     "Or type a symbol",
-    value=st.session_state.get("manual_ticker", st.session_state["active_ticker"]),
     key="manual_ticker",
-).upper()
+)
+manual_symbol = manual_symbol_input.strip().upper()
 
-st.session_state["active_ticker"] = manual_symbol or DEFAULT_WATCHLIST[0]
+if manual_symbol:
+    if manual_symbol != st.session_state["manual_ticker"]:
+        st.session_state["manual_ticker"] = manual_symbol
+    if manual_symbol != st.session_state["active_ticker"]:
+        st.session_state["active_ticker"] = manual_symbol
+else:
+    st.session_state["manual_ticker"] = ""
+    st.session_state["active_ticker"] = watch_choice
 
 ticker = st.session_state["active_ticker"].upper()
 expirations = []
@@ -1232,7 +1328,10 @@ with tab1:
             vix_data = {"spot": float("nan"), "1d_return": 0.0, "5d_return": 0.0}
 
         st.markdown("#### Holistic trade posture")
-        st.caption("Demand alignment between magnets, flow, and sentiment before pressing long-dated risk.")
+        st.caption(
+            "Supportive = tailwind, Neutral = sideways, Adverse = headwind. Wait for at least two tailwinds before sizing up."
+        )
+        render_signal_legend()
         articles = st.session_state.get("cached_articles", articles)
         gamma_signal = evaluate_gamma_signal(gamma_metrics)
         flow_signal = evaluate_flow_signal(vol_ratio, oi_ratio, liq_metrics)
@@ -1245,17 +1344,37 @@ with tab1:
 
         st.session_state["latest_vix"] = vix_data
         supportive = sum(sig["score"] == 2 for sig in signals)
-        cautionary = [sig for sig in signals if sig["score"] == 0]
-        if supportive == 3:
+        neutral = sum(sig["score"] == 1 for sig in signals)
+        adverse = [sig for sig in signals if sig["score"] == 0]
+        supportive_names = ", ".join(sig["title"] for sig in signals if sig["score"] == 2)
+        neutral_names = ", ".join(sig["title"] for sig in signals if sig["score"] == 1)
+        adverse_names = ", ".join(sig["title"] for sig in adverse)
+
+        st.caption(
+            f"Snapshot → {supportive} supportive · {neutral} neutral · {len(adverse)} adverse pillars."
+        )
+
+        if supportive == len(signals):
             verdict_icon = "✅"
-            verdict_text = "All three pillars aligned — favour staged entries toward the dealer magnet."
-        elif cautionary:
+            verdict_text = (
+                f"All three pillars aligned ({supportive_names}) — favour staged entries toward the dealer magnet."
+            )
+        elif adverse:
             verdict_icon = "⚠️"
-            names = ", ".join(sig["title"] for sig in cautionary)
-            verdict_text = f"{names} flashing caution — wait for the lagging pillar before sizing LEAPS."
+            verdict_text = (
+                f"{adverse_names} showing headwinds — let those pillars improve before sizing LEAPS."
+            )
+        elif supportive == 0:
+            verdict_icon = "ℹ️"
+            neutral_hint = neutral_names or "Neutral reads only"
+            verdict_text = (
+                f"{neutral_hint} — stand aside or keep risk tiny until flow improves."
+            )
         else:
             verdict_icon = "ℹ️"
-            verdict_text = "Mixed read — trade smaller and let confirmation come from the muted pillars."
+            verdict_text = (
+                f"{supportive_names} supportive while {neutral_names or 'remaining pillars'} neutral — scale in gradually and monitor the neutral pillar."
+            )
 
         st.markdown(
             f"<div class='soft-card'><strong>{verdict_icon} Quant take:</strong> {verdict_text}</div>",
