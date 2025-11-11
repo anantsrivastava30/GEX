@@ -1,4 +1,7 @@
 import re
+from collections import Counter
+from typing import Optional
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -57,6 +60,245 @@ METRIC_COLOR_THEMES = {
         "single": "#a855f7",
     },
 }
+
+
+DEFAULT_WATCHLIST = [
+    "SPY",
+    "AAPL",
+    "GOOGL",
+    "PLTR",
+    "TEM",
+    "AMD",
+    "NVDA",
+    "TSLA",
+    "VST",
+    "META",
+    "SMCI",
+    "SOFI",
+    "TSM",
+    "AVGO",
+    "MU",
+    "HOOD",
+    "BULL",
+    "BE",
+    "INTC",
+    "QQQ",
+]
+
+BULLISH_TERMS = {
+    "upgrade",
+    "beats",
+    "beat",
+    "raised guidance",
+    "surge",
+    "record",
+    "bullish",
+    "rally",
+    "optimism",
+    "growth",
+}
+
+BEARISH_TERMS = {
+    "downgrade",
+    "miss",
+    "cuts guidance",
+    "slump",
+    "selloff",
+    "lawsuit",
+    "bearish",
+    "warning",
+    "slowdown",
+    "decline",
+}
+
+
+def ensure_news_cache(limit_per_feed: int = 25) -> list[dict]:
+    """Fetch and cache the filtered RSS feed once per app run."""
+
+    cache_key = "cached_articles"
+    if cache_key not in st.session_state:
+        try:
+            st.session_state[cache_key] = fetch_and_filter_rss(limit_per_feed=limit_per_feed)
+        except Exception:
+            st.session_state[cache_key] = []
+    return st.session_state[cache_key]
+
+
+def evaluate_gamma_signal(metrics: Optional[dict]) -> dict:
+    """Translate gamma gap metrics into a discrete signal."""
+
+    title = "Dealer Magnet"
+    if not metrics:
+        return {
+            "title": title,
+            "status": "Weak",
+            "score": 0,
+            "explanation": "No positive gamma magnet identified near spot.",
+        }
+
+    score = metrics.get("score", 0.0)
+    positive = metrics.get("positive_zone", False)
+    distance = metrics.get("distance", 0.0)
+    magnet = metrics.get("magnet_strike")
+
+    if score >= 70 and positive:
+        status = "Supportive"
+        level = 2
+        explanation = (
+            f"Score {score:.0f}/120 with spot inside a positive gamma pocket → pull toward {magnet:.1f}."
+        )
+    elif score >= 40:
+        status = "Balanced"
+        level = 1
+        explanation = (
+            f"Score {score:.0f}/120; magnet at {magnet:.1f} is {distance:+.2f} away but hedging support is mixed."
+        )
+    else:
+        status = "Caution"
+        level = 0
+        tail = "negative" if not positive else "weak"
+        explanation = (
+            f"Score {score:.0f}/120 with {tail} local gamma – magnet tug toward {magnet:.1f} is unreliable."
+        )
+
+    return {
+        "title": title,
+        "status": status,
+        "score": level,
+        "explanation": explanation,
+    }
+
+
+def evaluate_flow_signal(vol_ratio: float, oi_ratio: float, liquidity: Optional[dict]) -> dict:
+    """Assess whether tape flow and liquidity confirm the trade idea."""
+
+    title = "Flow & Liquidity"
+    liq = liquidity or {}
+    volume = liq.get("volume")
+    spread = liq.get("bid_ask_spread_pct")
+    depth = liq.get("order_book_depth")
+
+    call_volume = vol_ratio < 1
+    call_oi = oi_ratio < 1
+    tight_spread = spread is not None and spread <= 0.015
+    deep_book = depth is not None and depth >= 500
+
+    positives = sum([call_volume, call_oi, tight_spread, deep_book])
+
+    if positives >= 3:
+        status = "Supportive"
+        level = 2
+        explanation = (
+            f"Call flow dominating (V:{vol_ratio:.2f} · OI:{oi_ratio:.2f}) with tight spreads"
+            + (f" {spread*100:.2f}%" if spread is not None else "")
+            + " and healthy depth."
+        )
+    elif positives == 2:
+        status = "Balanced"
+        level = 1
+        explanation = (
+            f"Mixed confirmation — call flow {'strong' if call_volume or call_oi else 'weak'}"
+            f" and liquidity metrics {('ok' if tight_spread or deep_book else 'soft')}"
+            + (f" (spread {spread*100:.2f}%)" if spread is not None else "")
+            + "."
+        )
+    else:
+        status = "Caution"
+        level = 0
+        explanation_parts = [
+            f"Put/Call vol {vol_ratio:.2f}",
+            f"OI {oi_ratio:.2f}",
+        ]
+        if spread is not None:
+            explanation_parts.append(f"spread {spread*100:.2f}%")
+        if depth is not None:
+            explanation_parts.append(f"depth {int(depth):,}")
+        explanation = "Flow headwinds: " + " · ".join(explanation_parts)
+
+    return {
+        "title": title,
+        "status": status,
+        "score": level,
+        "explanation": explanation,
+    }
+
+
+def evaluate_sentiment_signal(ticker: str, articles: list[dict], vix: Optional[dict]) -> dict:
+    """Combine curated headlines and VIX regime into a sentiment pulse."""
+
+    title = "Macro & Sentiment"
+    vix = vix or {"1d_return": 0.0, "spot": float("nan")}
+    vix_chg = vix.get("1d_return") or 0.0
+    ticker_lower = (ticker or "").lower()
+    relevant = [a for a in articles if ticker_lower and ticker_lower in a.get("title", "").lower()]
+    if len(relevant) < 5:
+        relevant = articles[:5]
+
+    counts = Counter()
+    for art in relevant:
+        title = art.get("title", "").lower()
+        bull = any(term in title for term in BULLISH_TERMS)
+        bear = any(term in title for term in BEARISH_TERMS)
+        if bull and not bear:
+            counts["bull"] += 1
+        elif bear and not bull:
+            counts["bear"] += 1
+
+    bull = counts.get("bull", 0)
+    bear = counts.get("bear", 0)
+    spread = bull - bear
+
+    if spread > 0 and vix_chg <= 1.0:
+        status = "Supportive"
+        level = 2
+        explanation = (
+            f"Headlines skew bullish ({bull}:{bear}) with VIX {vix_chg:+.1f}% → risk appetite intact."
+        )
+    elif abs(spread) <= 1 and abs(vix_chg) <= 2.5:
+        status = "Balanced"
+        level = 1
+        explanation = (
+            f"News mixed ({bull}:{bear}) and VIX {vix_chg:+.1f}% — neutral tone."
+        )
+    else:
+        status = "Caution"
+        level = 0
+        explanation = (
+            f"Defensive skew ({bull}:{bear}) or volatility rising (VIX {vix_chg:+.1f}%)."
+        )
+
+    return {
+        "title": "Macro & Sentiment",
+        "status": status,
+        "score": level,
+        "explanation": explanation,
+    }
+
+
+def render_signal_card(signal: dict):
+    """Render a concise status tile for the holistic dashboard."""
+
+    palette = {
+        "Supportive": "#22c55e",
+        "Balanced": "#eab308",
+        "Caution": "#f97316",
+        "Weak": "#94a3b8",
+    }
+    status = signal.get("status", "Balanced")
+    color = palette.get(status, "#38bdf8")
+    title = signal.get("title", "Signal")
+    explanation = signal.get("explanation", "")
+
+    st.markdown(
+        f"""
+        <div class='soft-card'>
+            <div class='metric-footnote'>{title}</div>
+            <h3 style='color:{color};margin-top:0.2rem;'>{status}</h3>
+            <p class='metric-footnote' style='margin-top:0.75rem;'>{explanation}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def inject_global_styles():
@@ -567,7 +809,7 @@ def prepare_expiration_metric(
 
 init_db()
 
-articles: list[dict] = []
+articles: list[dict] = ensure_news_cache()
 
 # ---------------- Streamlit Config ----------------
 st.set_page_config(layout="wide", page_title="Options Analytics Dashboard")
@@ -576,7 +818,33 @@ inject_global_styles()
 st.title("📊 Options Analytics Dashboard")
 
 # --- Sidebar Inputs ---
-ticker = st.sidebar.text_input("Ticker", "SPY").upper()
+if "active_ticker" not in st.session_state:
+    st.session_state["active_ticker"] = DEFAULT_WATCHLIST[0]
+
+watch_index = 0
+if st.session_state["active_ticker"] in DEFAULT_WATCHLIST:
+    watch_index = DEFAULT_WATCHLIST.index(st.session_state["active_ticker"])
+
+watch_choice = st.sidebar.selectbox(
+    "Watchlist symbols",
+    options=DEFAULT_WATCHLIST,
+    index=watch_index,
+    key="watchlist_choice",
+)
+
+if watch_choice != st.session_state["active_ticker"]:
+    st.session_state["active_ticker"] = watch_choice
+    st.session_state["manual_ticker"] = watch_choice
+
+manual_symbol = st.sidebar.text_input(
+    "Or type a symbol",
+    value=st.session_state.get("manual_ticker", st.session_state["active_ticker"]),
+    key="manual_ticker",
+).upper()
+
+st.session_state["active_ticker"] = manual_symbol or DEFAULT_WATCHLIST[0]
+
+ticker = st.session_state["active_ticker"].upper()
 expirations = []
 if ticker:
     try:
@@ -671,6 +939,7 @@ with tab1:
             st.info("No gamma exposure data returned for the selected settings.")
             st.stop()
 
+        gamma_metrics = compute_gamma_gap_metrics(df_net, spot, offset=offset)
         total_oi = df0.get("open_interest", pd.Series(dtype=float)).sum()
         magnet_row = df_net.loc[df_net["GEX"].idxmax()]
         magnet_strike = magnet_row["Strike"]
@@ -925,36 +1194,73 @@ with tab1:
         )
         st.plotly_chart(fig, use_container_width=True)
 
+        liq_metrics = None
         try:
-            liq = get_liquidity_metrics(ticker, tradier_token)
+            liq_metrics = get_liquidity_metrics(ticker, tradier_token)
             st.markdown("#### Liquidity snapshot")
             lc1, lc2, lc3 = st.columns(3)
             with lc1:
-                metric_card("Trading Volume", f"{liq['volume']:,}")
-            if liq.get("bid_ask_spread_pct") is not None:
-                hist = liq.get("avg_spread_pct")
+                metric_card("Trading Volume", f"{liq_metrics['volume']:,}")
+            if liq_metrics.get("bid_ask_spread_pct") is not None:
+                hist = liq_metrics.get("avg_spread_pct")
                 delta = None
                 if hist is not None and hist:
-                    delta = f"{(liq['bid_ask_spread_pct']/hist-1)*100:+.1f}% vs avg"
+                    delta = f"{(liq_metrics['bid_ask_spread_pct']/hist-1)*100:+.1f}% vs avg"
                 with lc2:
                     metric_card(
                         "Bid-Ask Spread",
-                        f"{liq['bid_ask_spread_pct']*100:.2f}%",
+                        f"{liq_metrics['bid_ask_spread_pct']*100:.2f}%",
                         delta=delta,
                         footnote="Tighter spreads = easier executions",
                     )
             else:
                 with lc2:
                     metric_card("Bid-Ask Spread", "N/A")
-            if liq.get("order_book_depth") is not None:
+            if liq_metrics.get("order_book_depth") is not None:
                 with lc3:
-                    metric_card("Order Book Depth", f"{liq['order_book_depth']:,}")
+                    metric_card("Order Book Depth", f"{liq_metrics['order_book_depth']:,}")
             else:
                 with lc3:
                     metric_card("Order Book Depth", "N/A")
             st.caption("Lower volume, wider spreads and shallow depth typically signal **low liquidity**.")
         except Exception as e:
             st.warning(f"Liquidity metrics unavailable: {e}")
+
+        try:
+            vix_data = get_vix_info()
+        except Exception:
+            vix_data = {"spot": float("nan"), "1d_return": 0.0, "5d_return": 0.0}
+
+        st.markdown("#### Holistic trade posture")
+        st.caption("Demand alignment between magnets, flow, and sentiment before pressing long-dated risk.")
+        articles = st.session_state.get("cached_articles", articles)
+        gamma_signal = evaluate_gamma_signal(gamma_metrics)
+        flow_signal = evaluate_flow_signal(vol_ratio, oi_ratio, liq_metrics)
+        sentiment_signal = evaluate_sentiment_signal(ticker, articles, vix_data)
+        signals = [gamma_signal, flow_signal, sentiment_signal]
+        hol_cols = st.columns(3)
+        for col, sig in zip(hol_cols, signals):
+            with col:
+                render_signal_card(sig)
+
+        st.session_state["latest_vix"] = vix_data
+        supportive = sum(sig["score"] == 2 for sig in signals)
+        cautionary = [sig for sig in signals if sig["score"] == 0]
+        if supportive == 3:
+            verdict_icon = "✅"
+            verdict_text = "All three pillars aligned — favour staged entries toward the dealer magnet."
+        elif cautionary:
+            verdict_icon = "⚠️"
+            names = ", ".join(sig["title"] for sig in cautionary)
+            verdict_text = f"{names} flashing caution — wait for the lagging pillar before sizing LEAPS."
+        else:
+            verdict_icon = "ℹ️"
+            verdict_text = "Mixed read — trade smaller and let confirmation come from the muted pillars."
+
+        st.markdown(
+            f"<div class='soft-card'><strong>{verdict_icon} Quant take:</strong> {verdict_text}</div>",
+            unsafe_allow_html=True,
+        )
 
         spikes_df = compute_unusual_spikes(df0)
         st.markdown("#### Unusual flow radar")
@@ -1005,6 +1311,13 @@ with tab2:
                 else:
                     df["abs_gamma"] = df["GammaExposure"].abs()
                     df["abs_delta"] = df["DeltaExposure"].abs()
+
+                    for key, default in {
+                        "pos_lens_mode": "Strike lens",
+                        "pos_chart_metric": "Gamma Exposure",
+                        "pos_option_focus": "Combined",
+                    }.items():
+                        st.session_state.setdefault(key, default)
 
                     if "option_type" in df.columns:
                         call_peak = (
@@ -1081,22 +1394,48 @@ with tab2:
                             "<p class='hero-chart__caption'>Explore how dealer positioning stacks across strikes or expirations with side-specific views.</p>",
                             unsafe_allow_html=True,
                         )
-                        lens_mode = st.radio(
-                            "Slice positioning by",
-                            options=["Strike lens", "Expiration lens"],
-                            horizontal=True,
-                        )
-                        chart_metric = st.radio(
-                            "Focus metric",
-                            options=["Gamma Exposure", "Delta Exposure", "Open Interest", "Volume"],
-                            horizontal=True,
-                        )
-                        option_focus = st.radio(
-                            "Option side",
-                            options=["Combined", "Calls", "Puts"],
-                            horizontal=True,
-                            help="Combined sums call & put magnitudes; switch sides to isolate flows.",
-                        )
+                        lens_options = ["Strike lens", "Expiration lens"]
+                        metric_options = [
+                            "Gamma Exposure",
+                            "Delta Exposure",
+                            "Open Interest",
+                            "Volume",
+                        ]
+                        focus_options = ["Combined", "Calls", "Puts"]
+
+                        with st.form("positioning_controls"):
+                            lens_choice = st.radio(
+                                "Slice positioning by",
+                                options=lens_options,
+                                horizontal=True,
+                                index=lens_options.index(st.session_state["pos_lens_mode"]),
+                            )
+                            metric_choice = st.radio(
+                                "Focus metric",
+                                options=metric_options,
+                                horizontal=True,
+                                index=metric_options.index(st.session_state["pos_chart_metric"]),
+                            )
+                            focus_choice = st.radio(
+                                "Option side",
+                                options=focus_options,
+                                horizontal=True,
+                                index=focus_options.index(st.session_state["pos_option_focus"]),
+                                help="Combined sums call & put magnitudes; switch sides to isolate flows.",
+                            )
+                            submit_controls = st.form_submit_button(
+                                "Update positioning view",
+                                use_container_width=True,
+                            )
+
+                        if submit_controls:
+                            st.session_state["pos_lens_mode"] = lens_choice
+                            st.session_state["pos_chart_metric"] = metric_choice
+                            st.session_state["pos_option_focus"] = focus_choice
+
+                        lens_mode = st.session_state["pos_lens_mode"]
+                        chart_metric = st.session_state["pos_chart_metric"]
+                        option_focus = st.session_state["pos_option_focus"]
 
                         value_fmt = ".2f" if chart_metric in {"Gamma Exposure", "Delta Exposure"} else ",.0f"
                         signed_fmt = "+,.2f" if chart_metric in {"Gamma Exposure", "Delta Exposure"} else "+,.0f"
@@ -1316,7 +1655,7 @@ with gap_tab:
     )
 
     tradier_token = st.secrets.get("TRADIER_TOKEN")
-    default_hot_list = "SPY, QQQ, NVDA, TSLA, META"
+    default_hot_list = ", ".join(DEFAULT_WATCHLIST)
     col_hot, col_dte, col_max = st.columns([3, 2, 1])
     hot_input = col_hot.text_input(
         "Hot tickers (comma separated)",
@@ -1704,10 +2043,12 @@ with sentiment_tab:
         ten = get_bond_yield_info("^TNX")
     except Exception:
         ten = {"spot": float("nan"), "1d_return": 0.0}
-    try:
-        vix = get_vix_info()
-    except Exception:
-        vix = {"spot": float("nan"), "1d_return": 0.0, "5d_return": 0.0}
+    vix = st.session_state.get("latest_vix")
+    if not vix:
+        try:
+            vix = get_vix_info()
+        except Exception:
+            vix = {"spot": float("nan"), "1d_return": 0.0, "5d_return": 0.0}
     b2c = get_bid_to_cover(api_key=st.secrets.get("FRED_API_KEY"))
 
     metric_cols = st.columns(3)
@@ -1739,11 +2080,14 @@ with sentiment_tab:
 with news_tab:
     st.header("📰 Market & Sentiment News")
     st.caption("Condensed macro, volatility and flow stories curated from your watchlists.")
-    articles = []
-    try:
-        articles = fetch_and_filter_rss(limit_per_feed=30)
-    except Exception as e:
-        st.error(f"Error fetching news: {e}")
+    if st.button("Refresh headlines", key="refresh_headlines"):
+        try:
+            st.session_state["cached_articles"] = fetch_and_filter_rss(limit_per_feed=30)
+            st.experimental_rerun()
+        except Exception as e:
+            st.error(f"Error refreshing news: {e}")
+
+    articles = st.session_state.get("cached_articles", [])
 
     if articles:
         for row in chunked(articles[:12], 3):
