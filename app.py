@@ -112,6 +112,22 @@ BEARISH_TERMS = {
 }
 
 
+SIGNAL_LEGEND = [
+    (
+        "Supportive",
+        "Tailwind — positioning and tape both leaning with the idea, so scaling in is safer.",
+    ),
+    (
+        "Neutral",
+        "Balanced — mixed cues suggest pacing entries and waiting for another pillar to join.",
+    ),
+    (
+        "Adverse",
+        "Headwind — opposing flow/sentiment means the setup is fighting the tape right now.",
+    ),
+]
+
+
 def ensure_news_cache(limit_per_feed: int = 25) -> list[dict]:
     """Fetch and cache the filtered RSS feed once per app run."""
 
@@ -306,6 +322,32 @@ def render_signal_card(signal: dict):
     )
 
 
+def render_signal_legend():
+    """Display a small legend that explains the Supportive/Neutral/Adverse tiers."""
+
+    palette = {
+        "Supportive": "#22c55e",
+        "Neutral": "#facc15",
+        "Adverse": "#f97316",
+    }
+    rows = []
+    for status, description in SIGNAL_LEGEND:
+        color = palette.get(status, "#38bdf8")
+        rows.append(
+            """
+            <div class='legend-row'>
+                <span class='legend-chip' style='border-color:{color}; color:{color};'>{status}</span>
+                <span>{description}</span>
+            </div>
+            """.format(color=color, status=status, description=description)
+        )
+
+    st.markdown(
+        "<div class='legend-card'>" + "".join(rows) + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def inject_global_styles():
     st.markdown(
         """
@@ -397,6 +439,39 @@ def inject_global_styles():
                 color: #cbd5f5;
                 opacity: 0.85;
                 margin: 0;
+            }
+
+            .legend-card {
+                background: rgba(15, 23, 42, 0.55);
+                border-radius: 14px;
+                padding: 0.9rem 1.1rem;
+                border: 1px solid rgba(148, 163, 184, 0.18);
+                margin-top: 0.75rem;
+            }
+
+            .legend-row {
+                display: flex;
+                align-items: center;
+                gap: 0.6rem;
+                font-size: 0.8rem;
+                color: #cbd5f5;
+                margin-bottom: 0.45rem;
+            }
+
+            .legend-row:last-child {
+                margin-bottom: 0;
+            }
+
+            .legend-chip {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                padding: 0.18rem 0.7rem;
+                border-radius: 999px;
+                font-weight: 600;
+                font-size: 0.75rem;
+                border: 1px solid rgba(148, 163, 184, 0.45);
+                background: rgba(30, 64, 175, 0.16);
             }
 
             .soft-card {
@@ -1240,6 +1315,7 @@ with tab1:
         st.caption(
             "Supportive = tailwind, Neutral = sideways, Adverse = headwind. Wait for at least two tailwinds before sizing up."
         )
+        render_signal_legend()
         articles = st.session_state.get("cached_articles", articles)
         gamma_signal = evaluate_gamma_signal(gamma_metrics)
         flow_signal = evaluate_flow_signal(vol_ratio, oi_ratio, liq_metrics)
@@ -1254,6 +1330,9 @@ with tab1:
         supportive = sum(sig["score"] == 2 for sig in signals)
         neutral = sum(sig["score"] == 1 for sig in signals)
         adverse = [sig for sig in signals if sig["score"] == 0]
+        supportive_names = ", ".join(sig["title"] for sig in signals if sig["score"] == 2)
+        neutral_names = ", ".join(sig["title"] for sig in signals if sig["score"] == 1)
+        adverse_names = ", ".join(sig["title"] for sig in adverse)
 
         st.caption(
             f"Snapshot → {supportive} supportive · {neutral} neutral · {len(adverse)} adverse pillars."
@@ -1261,18 +1340,24 @@ with tab1:
 
         if supportive == len(signals):
             verdict_icon = "✅"
-            verdict_text = "All three pillars aligned — favour staged entries toward the dealer magnet."
+            verdict_text = (
+                f"All three pillars aligned ({supportive_names}) — favour staged entries toward the dealer magnet."
+            )
         elif adverse:
             verdict_icon = "⚠️"
-            names = ", ".join(sig["title"] for sig in adverse)
-            verdict_text = f"{names} showing headwinds — let those pillars improve before sizing LEAPS."
+            verdict_text = (
+                f"{adverse_names} showing headwinds — let those pillars improve before sizing LEAPS."
+            )
         elif supportive == 0:
             verdict_icon = "ℹ️"
-            verdict_text = "No supportive pillars yet — stand aside or keep risk tiny until flow improves."
+            neutral_hint = neutral_names or "Neutral reads only"
+            verdict_text = (
+                f"{neutral_hint} — stand aside or keep risk tiny until flow improves."
+            )
         else:
             verdict_icon = "ℹ️"
             verdict_text = (
-                f"{supportive} supportive and {neutral} neutral pillars — scale in gradually and monitor the neutral pillar."
+                f"{supportive_names} supportive while {neutral_names or 'remaining pillars'} neutral — scale in gradually and monitor the neutral pillar."
             )
 
         st.markdown(
