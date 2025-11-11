@@ -128,6 +128,21 @@ SIGNAL_LEGEND = [
 ]
 
 
+def _initialise_symbol_state() -> None:
+    """Ensure ticker-related session state survives reruns during rebase conflict fixes."""
+
+    default_symbol = DEFAULT_WATCHLIST[0]
+    state = st.session_state
+    state.setdefault("active_ticker", default_symbol)
+    state.setdefault("manual_ticker", state["active_ticker"])
+    state.setdefault(
+        "watchlist_choice",
+        state["active_ticker"] if state["active_ticker"] in DEFAULT_WATCHLIST else default_symbol,
+    )
+    if state["watchlist_choice"] not in DEFAULT_WATCHLIST:
+        state["watchlist_choice"] = default_symbol
+
+
 def ensure_news_cache(limit_per_feed: int = 25) -> list[dict]:
     """Fetch and cache the filtered RSS feed once per app run."""
 
@@ -898,17 +913,11 @@ inject_global_styles()
 st.title("📊 Options Analytics Dashboard")
 
 # --- Sidebar Inputs ---
-if "active_ticker" not in st.session_state:
-    st.session_state["active_ticker"] = DEFAULT_WATCHLIST[0]
-
-watch_index = 0
-if st.session_state["active_ticker"] in DEFAULT_WATCHLIST:
-    watch_index = DEFAULT_WATCHLIST.index(st.session_state["active_ticker"])
+_initialise_symbol_state()
 
 watch_choice = st.sidebar.selectbox(
     "Watchlist symbols",
     options=DEFAULT_WATCHLIST,
-    index=watch_index,
     key="watchlist_choice",
 )
 
@@ -916,13 +925,20 @@ if watch_choice != st.session_state["active_ticker"]:
     st.session_state["active_ticker"] = watch_choice
     st.session_state["manual_ticker"] = watch_choice
 
-manual_symbol = st.sidebar.text_input(
+manual_symbol_input = st.sidebar.text_input(
     "Or type a symbol",
-    value=st.session_state.get("manual_ticker", st.session_state["active_ticker"]),
     key="manual_ticker",
-).upper()
+)
+manual_symbol = manual_symbol_input.strip().upper()
 
-st.session_state["active_ticker"] = manual_symbol or DEFAULT_WATCHLIST[0]
+if manual_symbol:
+    if manual_symbol != st.session_state["manual_ticker"]:
+        st.session_state["manual_ticker"] = manual_symbol
+    if manual_symbol != st.session_state["active_ticker"]:
+        st.session_state["active_ticker"] = manual_symbol
+else:
+    st.session_state["manual_ticker"] = ""
+    st.session_state["active_ticker"] = watch_choice
 
 ticker = st.session_state["active_ticker"].upper()
 expirations = []
