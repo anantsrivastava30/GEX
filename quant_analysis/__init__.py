@@ -1,0 +1,2 @@
+"""Quant analysis application package."""
+
