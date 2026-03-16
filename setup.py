@@ -15,7 +15,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "quant=quant:main",  # Ensure you create a main() function in quant.py if needed.
+            "quant=quant_analysis.services.ai_analysis:main",
         ],
     },
 )

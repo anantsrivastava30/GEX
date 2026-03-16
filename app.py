@@ -9,7 +9,18 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from html import escape, unescape
 from textwrap import shorten, dedent
-from helpers import (
+from quant_analysis.analytics.visualization import (
+    build_gamma_gap_plot,
+    compute_gamma_gap_metrics,
+    describe_gamma_gap,
+    generate_binomial_tree,
+    interpret_net_gex,
+    plot_binomial_tree,
+    plot_put_call_ratios,
+    plot_volume_spikes_stacked,
+)
+from quant_analysis.services.ai_analysis import openai_query, render_model_selection
+from quant_analysis.services.market_data import (
     get_expirations,
     get_option_chain,
     get_stock_quote,
@@ -24,18 +35,12 @@ from helpers import (
     get_vix_info,
     fetch_net_gex_for_expiration,
 )
-from utils import (
-    plot_put_call_ratios,
-    plot_volume_spikes_stacked,
-    interpret_net_gex,
-    generate_binomial_tree,
-    plot_binomial_tree,
-    compute_gamma_gap_metrics,
-    describe_gamma_gap,
-    build_gamma_gap_plot,
+from quant_analysis.storage.db import (
+    init_db,
+    load_analyses,
+    load_gamma_gap_history,
+    save_gamma_gap_results,
 )
-from quant import openai_query, render_model_selection
-from db import init_db, load_analyses, save_gamma_gap_results, load_gamma_gap_history
 
 
 METRIC_COLOR_THEMES = {
