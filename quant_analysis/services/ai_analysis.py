@@ -793,6 +793,8 @@ def openai_query(
         ratios_summary,
         news_summary,
         snap_summary,
+        oi_ratio=oi_ratio,
+        vol_oi_spikes=snapshot.get('vol_oi_spikes') if isinstance(snapshot, dict) else None,
     )
     st.subheader("Data Packet JSON")
     st.json(data_packet)
