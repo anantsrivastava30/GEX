@@ -252,22 +252,40 @@ def compute_unusual_spikes(df, top_n=10):
     # 2) Compute volume/open_interest ratio
     agg['vol_oi'] = agg['volume'] / agg['open_interest'].replace(0, np.nan)
 
-    # 3) Pivot so we have separate columns for puts and calls
+    # 3) Pivot so we have separate columns for puts and calls (vol_oi)
     pivot = (
         agg
-        .pivot(index='strike', columns='option_type', values='vol_oi')
+        .pivot(index='strike', columns='option_type', values=['vol_oi','open_interest'])
         .fillna(0)
-        .rename(columns={'put': 'vol_oi_put', 'call': 'vol_oi_call'})
     )
 
-    # 4) Compute the combined total and select top_n strikes
-    pivot['total_vol_oi'] = pivot['vol_oi_put'] + pivot['vol_oi_call']
+    # normalize column names
+    pivot.columns = [f"{col[1]}_{col[0]}" for col in pivot.columns]
+    # e.g., 'put_open_interest', 'call_vol_oi', etc.
+
+    # 4) Compute the combined total vol_oi and select top_n strikes
+    pivot['total_vol_oi'] = pivot.get('put_vol_oi', 0) + pivot.get('call_vol_oi', 0)
+
     spikes = (
         pivot
         .sort_values('total_vol_oi', ascending=False)
         .head(top_n)
         .reset_index()
     )
+
+    # 5) Rename columns for consistency in downstream code
+    # provide both vol_oi and raw open_interest per side
+    rename_map = {}
+    if 'put_vol_oi' in spikes.columns:
+        rename_map['put_vol_oi'] = 'vol_oi_put'
+    if 'call_vol_oi' in spikes.columns:
+        rename_map['call_vol_oi'] = 'vol_oi_call'
+    if 'put_open_interest' in spikes.columns:
+        rename_map['put_open_interest'] = 'open_interest_put'
+    if 'call_open_interest' in spikes.columns:
+        rename_map['call_open_interest'] = 'open_interest_call'
+
+    spikes = spikes.rename(columns=rename_map)
     return spikes
 
 
