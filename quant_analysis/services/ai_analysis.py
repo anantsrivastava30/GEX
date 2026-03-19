@@ -321,6 +321,8 @@ def create_data_packet(ticker, overview_summary, pos_summary, iv_summary, ratios
             {pos_summary}
             IV Skew: {iv_summary}
             Ratios: {ratios_summary}
+            Open Interest Ratio: {oi_ratio}
+            Top Vol/OI Spikes: {vol_oi_spikes}
             News Headlines: {news_summary}
             Snapshot Summary: {snap_summary}
 
