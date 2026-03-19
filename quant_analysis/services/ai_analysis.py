@@ -785,6 +785,21 @@ def openai_query(
     )
     snap_summary = payload_to_markdown(snapshot)
     
+    # Build a simple open interest summary: top N strikes with put/call OI
+    oi_summary = None
+    try:
+        spikes = snapshot.get('vol_oi_spikes', []) if isinstance(snapshot, dict) else []
+        if spikes:
+            lines = []
+            for s in spikes[:10]:
+                strike = s.get('strike')
+                poi = s.get('open_interest_put', 0)
+                coi = s.get('open_interest_call', 0)
+                lines.append(f"{strike}: put_OI={int(poi)}, call_OI={int(coi)}")
+            oi_summary = "; ".join(lines)
+    except Exception:
+        oi_summary = None
+
     data_packet = create_data_packet(
         ticker,
         overview_summary,
@@ -793,7 +808,7 @@ def openai_query(
         ratios_summary,
         news_summary,
         snap_summary,
-        oi_ratio=oi_ratio,
+        open_interest_summary=oi_summary,
         vol_oi_spikes=snapshot.get('vol_oi_spikes') if isinstance(snapshot, dict) else None,
     )
     st.subheader("Data Packet JSON")
