@@ -302,7 +302,7 @@ def payload_to_markdown(payload, ticker=None, exp=None, offset=None):
     return "\n".join(md)
 
 # New helper function to build the data packet (prompt messages)
-def create_data_packet(ticker, overview_summary, pos_summary, iv_summary, ratios_summary, news_summary, snap_summary):
+def create_data_packet(ticker, overview_summary, pos_summary, iv_summary, ratios_summary, news_summary, snap_summary, oi_ratio=None, vol_oi_spikes=None):
     system_msg = {
         "role": "system",
         "content": (
