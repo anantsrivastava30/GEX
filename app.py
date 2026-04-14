@@ -1,12 +1,11 @@
 import re
-import calendar
 from collections import Counter
 from typing import Optional
 
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime, timedelta
+from datetime import datetime
 from zoneinfo import ZoneInfo
 from html import escape, unescape
 from textwrap import shorten, dedent
@@ -158,13 +157,6 @@ def _format_expiration_option(expiration: str) -> str:
         return expiration
 
 
-def _request_rerun() -> None:
-    if hasattr(st, "rerun"):
-        st.rerun()
-    else:
-        st.experimental_rerun()
-
-
 def _render_expiration_calendar(
     exp_pairs: list[tuple[str, datetime.date]],
     ticker: str,
@@ -175,92 +167,56 @@ def _render_expiration_calendar(
         return []
 
     exp_values = [exp for exp, _ in exp_pairs]
-    exp_dates = [d for _, d in exp_pairs]
-    exp_lookup = {d: exp for exp, d in exp_pairs}
+    exp_lookup = {exp: d for exp, d in exp_pairs}
     first_three = exp_values[:3]
 
     if st.session_state.get("selected_exp_ticker") != ticker:
         st.session_state["selected_expirations_list"] = first_three
         st.session_state["selected_exp_ticker"] = ticker
-        st.session_state["exp_cal_month"] = exp_dates[0].replace(day=1).isoformat()
 
     selected_buffer = list(st.session_state.get("selected_expirations_list", []))
     selected_buffer = [exp for exp in selected_buffer if exp in exp_values]
     st.session_state["selected_expirations_list"] = selected_buffer
 
-    month_token = st.session_state.get("exp_cal_month", exp_dates[0].replace(day=1).isoformat())
-    try:
-        month_anchor = datetime.strptime(month_token, "%Y-%m-%d").date().replace(day=1)
-    except Exception:
-        month_anchor = exp_dates[0].replace(day=1)
+    quick_a, quick_b, quick_c, quick_d = ui.columns(4)
+    with quick_a:
+        if ui.button("Nearest 3", key=f"exp_pick_3_{ticker}", use_container_width=True):
+            st.session_state["selected_expirations_list"] = exp_values[:3]
+    with quick_b:
+        if ui.button("Nearest 5", key=f"exp_pick_5_{ticker}", use_container_width=True):
+            st.session_state["selected_expirations_list"] = exp_values[:5]
+    with quick_c:
+        if ui.button("Nearest 10", key=f"exp_pick_10_{ticker}", use_container_width=True):
+            st.session_state["selected_expirations_list"] = exp_values[:10]
+    with quick_d:
+        if ui.button("Clear", key=f"exp_pick_clear_{ticker}", use_container_width=True):
+            st.session_state["selected_expirations_list"] = []
 
-    min_month = exp_dates[0].replace(day=1)
-    max_month = exp_dates[-1].replace(day=1)
+    weekly_last_by_week = {}
+    for exp, day in exp_pairs:
+        week_key = day.isocalendar()[:2]
+        current = weekly_last_by_week.get(week_key)
+        if current is None or day > current[1]:
+            weekly_last_by_week[week_key] = (exp, day)
+    weekly_last_exps = [item[0] for item in sorted(weekly_last_by_week.values(), key=lambda x: x[1])]
 
-    nav_prev, nav_title, nav_next = ui.columns([1, 2, 1])
-    with nav_prev:
-        prev_month = (month_anchor.replace(day=1) - timedelta(days=1)).replace(day=1)
-        if st.button("◀", key="exp_prev_month", use_container_width=True, disabled=month_anchor <= min_month):
-            st.session_state["exp_cal_month"] = prev_month.isoformat()
-            _request_rerun()
-    with nav_title:
-        st.markdown(
-            f"<div style='text-align:center;padding-top:0.4rem;'><strong>{month_anchor.strftime('%B %Y')}</strong></div>",
-            unsafe_allow_html=True,
-        )
-    with nav_next:
-        month_days = calendar.monthrange(month_anchor.year, month_anchor.month)[1]
-        next_month = (month_anchor.replace(day=month_days) + timedelta(days=1)).replace(day=1)
-        if st.button("▶", key="exp_next_month", use_container_width=True, disabled=month_anchor >= max_month):
-            st.session_state["exp_cal_month"] = next_month.isoformat()
-            _request_rerun()
+    week_a, week_b, week_c = ui.columns(3)
+    with week_a:
+        if ui.button("Last day x4", key=f"exp_last_week_4_{ticker}", use_container_width=True):
+            st.session_state["selected_expirations_list"] = weekly_last_exps[:4]
+    with week_b:
+        if ui.button("Last day x8", key=f"exp_last_week_8_{ticker}", use_container_width=True):
+            st.session_state["selected_expirations_list"] = weekly_last_exps[:8]
+    with week_c:
+        if ui.button("All week-end", key=f"exp_last_week_all_{ticker}", use_container_width=True):
+            st.session_state["selected_expirations_list"] = weekly_last_exps
 
-    weekday_cols = ui.columns(7)
-    for col, label in zip(weekday_cols, ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]):
-        with col:
-            st.caption(label)
+    selected_exps = list(st.session_state.get("selected_expirations_list", []))
+    selected_exps = [exp for exp in exp_values if exp in selected_exps]
+    st.session_state["selected_expirations_list"] = selected_exps
 
-    first_weekday, month_days = calendar.monthrange(month_anchor.year, month_anchor.month)
-    start_offset = first_weekday  # Monday=0
-    grid_start = month_anchor - timedelta(days=start_offset)
-    selected_set = set(selected_buffer)
-
-    for week_idx in range(6):
-        week_cols = ui.columns(7)
-        for day_idx, col in enumerate(week_cols):
-            day = grid_start + timedelta(days=week_idx * 7 + day_idx)
-            with col:
-                if day.month != month_anchor.month:
-                    st.markdown("&nbsp;", unsafe_allow_html=True)
-                    continue
-                exp_val = exp_lookup.get(day)
-                if exp_val is None:
-                    st.button(str(day.day), key=f"exp_day_{ticker}_{day.isoformat()}", disabled=True, use_container_width=True)
-                else:
-                    is_selected = exp_val in selected_set
-                    label = f"{day.day}*" if is_selected else str(day.day)
-                    if st.button(
-                        label,
-                        key=f"exp_day_{ticker}_{day.isoformat()}",
-                        use_container_width=True,
-                        type="primary",
-                    ):
-                        if exp_val in selected_set:
-                            selected_set.remove(exp_val)
-                        else:
-                            selected_set.add(exp_val)
-                        ordered = [exp for exp in exp_values if exp in selected_set]
-                        st.session_state["selected_expirations_list"] = ordered
-                        _request_rerun()
-
-    selected_exps = ui.multiselect(
-        "Selected expiration dates",
-        options=exp_values,
-        key="selected_expirations_list",
-        format_func=_format_expiration_option,
-        help="Calendar clicks populate this list; charts and algos use only these dates.",
-    )
-    ui.caption(f"Using {len(selected_exps)} selected expirations.")
+    friday_count = sum(1 for exp in selected_exps if exp_lookup.get(exp) and exp_lookup[exp].weekday() == 4)
+    ui.caption(f"Using {len(selected_exps)} selected expirations ({friday_count} Friday expiries).")
     return selected_exps
 
 
@@ -1122,11 +1078,19 @@ for exp in expirations:
 picker_col, picker_info_col = st.columns([1, 2], gap="small")
 with picker_col:
     with st.popover("🗓 Pick Expirations", use_container_width=True):
-        selected_exps = _render_expiration_calendar(exp_pairs, ticker, ui=st)
+        _render_expiration_calendar(exp_pairs, ticker, ui=st)
+
+exp_values = [exp for exp, _ in exp_pairs]
+selected_state = st.sidebar.multiselect(
+    "Expirations",
+    options=exp_values,
+    key="selected_expirations_list",
+    format_func=_format_expiration_option,
+    help="Primary list picker. Popover quick-actions update this selection.",
+)
+selected_state = [exp for exp in exp_values if exp in selected_state]
+
 with picker_info_col:
-    valid_expirations = {exp for exp, _ in exp_pairs}
-    selected_state = list(st.session_state.get("selected_expirations_list", []))
-    selected_state = [exp for exp in selected_state if exp in valid_expirations]
     selected_count = len(selected_state)
     st.markdown("**Expiration Selection**")
     st.caption(f"{selected_count} dates selected. Charts and algos use this list.")
