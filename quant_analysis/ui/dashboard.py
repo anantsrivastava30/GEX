@@ -2,6 +2,7 @@ import re
 from datetime import datetime
 from html import escape, unescape
 from textwrap import shorten, dedent
+from typing import Optional
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -64,6 +65,23 @@ METRIC_COLOR_THEMES = {
         "single": "#a855f7",
     },
 }
+
+
+def _recommended_strike_offset(ticker: str, spot: Optional[float]) -> int:
+    symbol = (ticker or "").upper()
+    if symbol == "SPX":
+        return 500
+    if spot is None or spot <= 0:
+        return 35
+    scaled = int(round((spot * 0.07) / 5.0) * 5)
+    return max(15, min(300, scaled))
+
+
+def _strike_slider_max(ticker: str, recommended_offset: int) -> int:
+    symbol = (ticker or "").upper()
+    if symbol == "SPX":
+        return 1500
+    return max(300, recommended_offset * 2)
 
 
 def inject_global_styles():
@@ -442,6 +460,8 @@ def prepare_strike_metric(
     if value_col not in work_df.columns:
         work_df[value_col] = 0.0
 
+    split_call_put = focus == "both" and value_col in {"open_interest", "volume"}
+
     if value_col in {"GammaExposure", "DeltaExposure"}:
         work_df["base_value"] = work_df[value_col] / 1e6
         work_df["display_value"] = (
@@ -450,11 +470,18 @@ def prepare_strike_metric(
         value_label = f"{label} ($M)" if signed_view else f"{label} (|$M|)"
     else:
         work_df["base_value"] = work_df[value_col]
-        work_df["display_value"] = work_df["base_value"]
-        value_label = label
+        if split_call_put and "option_type" in work_df.columns:
+            side_sign = work_df["option_type"].map({"call": 1.0, "put": -1.0}).fillna(0.0)
+            work_df["display_value"] = work_df["base_value"] * side_sign
+            value_label = f"{label} (Calls + / Puts -)"
+        else:
+            work_df["display_value"] = work_df["base_value"]
+            value_label = label
 
     if breakout_expirations:
         group_cols = ["strike", "expiration_label", "DTE", "expiration_display"]
+        if split_call_put and "option_type" in work_df.columns:
+            group_cols.append("option_type")
         grouped = (
             work_df.groupby(group_cols)
             .agg(Value=("display_value", "sum"), RawValue=("base_value", "sum"))
@@ -474,8 +501,24 @@ def prepare_strike_metric(
             )
             .sort_values(["DTE", "Strike"])
         )
+        if "option_type" in grouped.columns:
+            grouped["OptionSide"] = grouped["option_type"].str.title()
         return (
-            grouped[["Strike", "Expiration", "DTE", "expiration_label", "Value", "RawValue"]],
+            grouped[
+                [
+                    col
+                    for col in [
+                        "Strike",
+                        "Expiration",
+                        "DTE",
+                        "expiration_label",
+                        "OptionSide",
+                        "Value",
+                        "RawValue",
+                    ]
+                    if col in grouped.columns
+                ]
+            ],
             value_label,
             label,
             theme,
@@ -538,6 +581,8 @@ def prepare_expiration_metric(
     if value_col not in work_df.columns:
         work_df[value_col] = 0.0
 
+    split_call_put = focus == "both" and value_col in {"open_interest", "volume"}
+
     if value_col in {"GammaExposure", "DeltaExposure"}:
         work_df["base_value"] = work_df[value_col] / 1e6
         work_df["display_value"] = (
@@ -546,10 +591,17 @@ def prepare_expiration_metric(
         value_label = f"{label} ($M)" if signed_view else f"{label} (|$M|)"
     else:
         work_df["base_value"] = work_df[value_col]
-        work_df["display_value"] = work_df["base_value"]
-        value_label = label
+        if split_call_put and "option_type" in work_df.columns:
+            side_sign = work_df["option_type"].map({"call": 1.0, "put": -1.0}).fillna(0.0)
+            work_df["display_value"] = work_df["base_value"] * side_sign
+            value_label = f"{label} (Calls + / Puts -)"
+        else:
+            work_df["display_value"] = work_df["base_value"]
+            value_label = label
 
     group_cols = ["expiration_date", "expiration_label", "DTE", "expiration_display"]
+    if split_call_put and "option_type" in work_df.columns:
+        group_cols.append("option_type")
     grouped = (
         work_df.groupby(group_cols)
         .agg(Value=("display_value", "sum"), RawValue=("base_value", "sum"))
@@ -567,7 +619,16 @@ def prepare_expiration_metric(
 
     chart_df = grouped.sort_values("expiration_date").rename(
         columns={"expiration_display": "Expiration"}
-    )[["Expiration", "Value", "RawValue", "DTE", "expiration_label"]]
+    )
+    if "option_type" in chart_df.columns:
+        chart_df["OptionSide"] = chart_df["option_type"].str.title()
+    chart_df = chart_df[
+        [
+            col
+            for col in ["Expiration", "Value", "RawValue", "DTE", "expiration_label", "OptionSide"]
+            if col in chart_df.columns
+        ]
+    ]
 
     return chart_df, value_label, label, theme
 
@@ -599,7 +660,6 @@ selected_exps = st.sidebar.multiselect(
     options=expirations,
     default=expirations[:3]
 )
-offset = st.sidebar.slider("Strike Range ±", min_value=1, max_value=300, value=35)
 spot = None
 if ticker:
     try:
@@ -607,6 +667,25 @@ if ticker:
         st.sidebar.markdown(f"**Spot Price:** ***{spot:.2f}***")
     except Exception as exc:
         st.sidebar.error(f"Error fetching spot price: {exc}")
+
+recommended_offset = _recommended_strike_offset(ticker, spot)
+offset_max = _strike_slider_max(ticker, recommended_offset)
+if st.session_state.get("strike_offset_ticker") != ticker:
+    st.session_state["strike_offset"] = recommended_offset
+    st.session_state["strike_offset_ticker"] = ticker
+current_offset = int(st.session_state.get("strike_offset", recommended_offset))
+current_offset = max(1, min(offset_max, current_offset))
+st.session_state["strike_offset"] = current_offset
+offset = st.sidebar.slider(
+    "Strike Range ±",
+    min_value=1,
+    max_value=offset_max,
+    key="strike_offset",
+)
+if spot is not None:
+    st.sidebar.caption(f"Default for {ticker}: ±{recommended_offset} (~7% of spot).")
+elif ticker == "SPX":
+    st.sidebar.caption("Default for SPX: ±500.")
 
 enable_ai = st.sidebar.checkbox("Enable AI Analysis", value=True)
 
@@ -1102,7 +1181,7 @@ with tab2:
                             "Option side",
                             options=["Combined", "Calls", "Puts"],
                             horizontal=True,
-                            help="Combined sums call & put magnitudes; switch sides to isolate flows.",
+                            help="Combined overlays both sides; OI/Volume show calls as + and puts as - for quick skew reads.",
                         )
 
                         value_fmt = ".2f" if chart_metric in {"Gamma Exposure", "Delta Exposure"} else ",.0f"
@@ -1118,16 +1197,22 @@ with tab2:
                             if chart_df.empty:
                                 st.warning("No data available for this view.")
                             else:
-                                custom = chart_df[["Expiration", "DTE", "RawValue"]].values
+                                custom_cols = ["Expiration", "DTE", "RawValue"]
+                                has_side = "OptionSide" in chart_df.columns
+                                if has_side:
+                                    custom_cols.append("OptionSide")
+                                custom = chart_df[custom_cols].values
+                                color_field = "OptionSide" if has_side else "Expiration"
+                                color_sequence = ["#34d399", "#fb7185"] if has_side else theme["sequence"]
                                 fig = px.bar(
                                     chart_df,
                                     x="Value",
                                     y="Strike",
                                     orientation="h",
-                                    color="Expiration",
+                                    color=color_field,
                                     labels={"Value": value_label, "Strike": "Strike"},
                                     height=700,
-                                    color_discrete_sequence=theme["sequence"],
+                                    color_discrete_sequence=color_sequence,
                                     title=f"{label} across strikes\n(±{offset} around {spot:.1f})",
                                 )
                                 fig.update_traces(
@@ -1140,6 +1225,7 @@ with tab2:
                                         + "<br>Expiration %{customdata[0]}"
                                         + "<br>DTE %{customdata[1]}"
                                         + "<br>Signed %{customdata[2]:" + signed_fmt + "}"
+                                        + ("<br>Side %{customdata[3]}" if has_side else "")
                                         + "<extra></extra>"
                                     ),
                                 )
@@ -1148,7 +1234,7 @@ with tab2:
                                     paper_bgcolor="rgba(0,0,0,0)",
                                     plot_bgcolor="rgba(15,23,42,0.25)",
                                     margin=dict(l=40, r=40, t=90, b=40),
-                                    legend_title_text="Expiration · DTE",
+                                    legend_title_text=("Option Side" if has_side else "Expiration · DTE"),
                                     legend=dict(
                                         bgcolor="rgba(15,23,42,0.7)",
                                         bordercolor="rgba(148, 163, 184, 0.4)",
@@ -1175,15 +1261,21 @@ with tab2:
                             if chart_df.empty:
                                 st.warning("No data available for this view.")
                             else:
-                                custom = chart_df[["DTE", "RawValue"]].values
+                                custom_cols = ["DTE", "RawValue"]
+                                has_side = "OptionSide" in chart_df.columns
+                                if has_side:
+                                    custom_cols.append("OptionSide")
+                                custom = chart_df[custom_cols].values
+                                color_field = "OptionSide" if has_side else "Expiration"
+                                color_sequence = ["#34d399", "#fb7185"] if has_side else theme["sequence"]
                                 fig = px.bar(
                                     chart_df,
                                     x="Expiration",
                                     y="Value",
-                                    color="Expiration",
+                                    color=color_field,
                                     labels={"Value": value_label, "Expiration": "Expiration"},
                                     height=700,
-                                    color_discrete_sequence=theme["sequence"],
+                                    color_discrete_sequence=color_sequence,
                                     title=f"{label} across expirations",
                                 )
                                 fig.update_traces(
@@ -1195,6 +1287,7 @@ with tab2:
                                         + "Value %{y:" + value_fmt + "}"
                                         + "<br>DTE %{customdata[0]}"
                                         + "<br>Signed %{customdata[1]:" + signed_fmt + "}"
+                                        + ("<br>Side %{customdata[2]}" if has_side else "")
                                         + "<extra></extra>"
                                     ),
                                 )
@@ -1203,7 +1296,7 @@ with tab2:
                                     paper_bgcolor="rgba(0,0,0,0)",
                                     plot_bgcolor="rgba(15,23,42,0.25)",
                                     margin=dict(l=40, r=40, t=90, b=40),
-                                    showlegend=False,
+                                    showlegend=has_side,
                                 )
                                 fig.update_xaxes(tickfont=dict(color="#e2e8f0"))
                                 fig.update_yaxes(
@@ -1246,7 +1339,7 @@ with tab2:
                                 f"- **Gamma balance:** Calls house {call_mag:.2f}M |Γ| vs puts {put_mag:.2f}M |Γ|; toggle sides to inspect imbalance."
                             )
                         bullets.append(
-                            "- **Tip:** Use Combined for magnitude, then drill into Calls/Puts to validate directional bets."
+                            "- **Tip:** Use Combined to spot call/put skew at a glance, then isolate Calls or Puts to validate the driver."
                         )
                         st.markdown("<div class='soft-card'>", unsafe_allow_html=True)
                         st.markdown("\n".join(bullets))
