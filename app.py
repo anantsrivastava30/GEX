@@ -73,6 +73,7 @@ DEFAULT_WATCHLIST = [
     "AAPL",
     "GOOGL",
     "PLTR",
+    "PENG",
     "TEM",
     "AMD",
     "NVDA",
