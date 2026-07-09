@@ -1,0 +1,7 @@
+# Backend-only dependencies; the analytics stack comes from the root
+# requirements.txt (quant_analysis is imported directly).
+fastapi>=0.111
+uvicorn[standard]>=0.29
+pydantic-settings>=2.2
+tenacity>=8.2
+httpx>=0.27

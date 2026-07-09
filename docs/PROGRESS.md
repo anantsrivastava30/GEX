@@ -24,7 +24,7 @@ session should pick up.
 - [x] Tests for the snapshot engine (`tests/test_snapshots.py`)
 
 ### Phase 1 — UW-style shell + port (look & feel milestone)
-- [ ] P1.1 Backend skeleton: `backend/` FastAPI (config, deps w/ retry, `cache.py` TTL layer, `ratelimit.py` token bucket), routers `ticker`/`exposure`/`market`/`news`/`flow`/`ai`, pydantic schemas, pytest+httpx tests w/ mocked Tradier
+- [x] P1.1 Backend skeleton: `backend/` FastAPI (config, deps w/ tenacity retry, `cache.py` TTL layer, `ratelimit.py` token bucket), routers `ticker` (snapshot/expirations/gex/skew/ratios), `market`, `news`, `flow` (unusual proxy), `history` (iv-rank/oi-change/metrics from our snapshots), pydantic schemas, TestClient tests w/ faked Tradier. *Still to add: `ai` router (port `render_ai_tab` pipeline), split exposure router when vanna/charm lands.*
 - [ ] P1.2 Scheduler jobs in backend (APScheduler) calling the same snapshot engine intraday (gamma-gap every 30 min)
 - [ ] P1.3 Frontend shell: Next.js + Tailwind + shadcn/ui, dark theme tokens, SidebarNav / TopBar / TickerSearch, typed API client, DataTable + chart wrappers (lightweight-charts candles, ECharts strike profiles)
 - [ ] P1.4 Page ports (one PR each): `/market`, `/stock/[symbol]` (+`/gex`, `/vol`), `/news`, `/ai`, `/tools/binomial`, `/flow` (basic unusual-spikes table), `/calendar` (iframe parity); resurrect intraday delta-projection on `/gex`
@@ -60,10 +60,18 @@ session should pick up.
 - Wrote `docs/UW_PARITY_PLAN.md` + this tracker.
 - Built Phase 0 snapshot engine: `quant_analysis/storage/snapshots.py` (capture → derive → write csv.gz per ticker/day + `daily_metrics.csv`; loaders + `compute_oi_change` + `compute_iv_rank`), CLI `quant_analysis/scripts/snapshot.py`, `snapshots:` config block, daily-cron workflow, tests.
 
+- Scaffolded the FastAPI backend (P1.1): `backend/app/` with TTL cache, Tradier
+  token-bucket rate limit + retry, routers for ticker/gex/skew/ratios, market
+  overview, news, unusual-flow proxy, and history endpoints served from our own
+  snapshot data (`/api/history/{sym}/iv-rank`, `/oi-change`, `/metrics`).
+  Verified: 63 tests green, `uvicorn backend.app.main:app` boots, health +
+  OpenAPI + graceful 404s confirmed live. CI installs backend deps.
+
 **Next up (Session 2):**
-1. P1.1 backend skeleton (see endpoint→function mapping table in the plan).
-2. P1.3 frontend shell scaffold.
-3. Merge this branch early so the snapshot cron starts accruing history on `master` — every unmerged day is lost data.
+1. P1.3 frontend shell scaffold (Next.js + Tailwind + shadcn/ui, dark tokens, SidebarNav/TopBar/TickerSearch, typed API client) — see route map in the plan.
+2. Port first pages against the live backend: `/market`, `/stock/[symbol]` + `/gex`.
+3. Add `ai` router to the backend (port `services/ai_analysis.py` pipeline off Streamlit).
+4. Merge this branch early so the snapshot cron starts accruing history on `master` — every unmerged day is lost data.
 
 **Open items for the human:**
 - Add `TRADIER_TOKEN` as a GitHub Actions repo secret (Settings → Secrets → Actions) so the daily snapshot cron can run.
