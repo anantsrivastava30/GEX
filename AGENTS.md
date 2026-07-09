@@ -22,3 +22,18 @@ This file contains repository-level working notes for OpenAI coding agents.
 - Use clear, short markdown with focused changes.
 - Do not rewrite unrelated content for style.
 - Keep commit messages, PR titles, comments, and docs plain and terse.
+
+## Engineering
+
+- Keep changes small and reversible.
+- Preserve existing public APIs unless the task explicitly asks to change them.
+- Reuse existing `quant_analysis` functions instead of duplicating analytics math.
+- Keep Streamlit legacy behavior stable unless the user asks to modify the legacy app.
+- For the FastAPI and Next.js rebuild, follow `docs/UW_PARITY_PLAN.md`.
+- For long work sessions, update `docs/PROGRESS.md` with what changed and the next step.
+
+## Validation
+
+- Prefer lightweight validation scoped to the files changed.
+- If validation is skipped because it would require tests, say so clearly.
+- Report exact commands run and their results.
