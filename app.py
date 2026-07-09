@@ -6,7 +6,6 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import datetime
-from zoneinfo import ZoneInfo
 from html import escape, unescape
 from textwrap import shorten, dedent
 from quant_analysis.analytics.visualization import (
@@ -19,7 +18,7 @@ from quant_analysis.analytics.visualization import (
     plot_put_call_ratios,
     plot_volume_spikes_stacked,
 )
-from quant_analysis.services.ai_analysis import openai_query, render_model_selection
+from quant_analysis.services.ai_analysis import render_ai_tab
 from quant_analysis.services.market_data import (
     get_expirations,
     get_option_chain,
@@ -37,7 +36,6 @@ from quant_analysis.services.market_data import (
 )
 from quant_analysis.storage.db import (
     init_db,
-    load_analyses,
     load_gamma_gap_history,
     save_gamma_gap_results,
 )
@@ -445,156 +443,326 @@ def render_signal_card(signal: dict):
 
 def render_signal_legend():
     """Display a small legend that explains the Supportive/Neutral/Adverse tiers."""
-    for status, description in SIGNAL_LEGEND:
-        st.markdown(f"- **{status}** — {description}")
+    rows = "".join(
+        f'<div class="legend-row">'
+        f'<span class="legend-chip legend-chip--{status.lower()}">{escape(status)}</span>'
+        f"<span>{escape(description)}</span></div>"
+        for status, description in SIGNAL_LEGEND
+    )
+    st.markdown(f'<div class="legend-card">{rows}</div>', unsafe_allow_html=True)
 
 
 def inject_global_styles():
     st.markdown(
         """
         <style>
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap');
+
+            :root {
+                --bg-0: #060a14;
+                --bg-1: #0b1120;
+                --panel: rgba(17, 25, 43, 0.72);
+                --border: rgba(148, 163, 184, 0.14);
+                --border-strong: rgba(129, 140, 248, 0.45);
+                --text: #e2e8f0;
+                --muted: #8b9bb4;
+                --accent: #818cf8;
+                --accent-2: #38bdf8;
+                --radius: 16px;
+            }
+
             html, body, [data-testid="stAppViewContainer"] {
-                background: radial-gradient(circle at 20% 20%, #1e293b 0%, #0f172a 40%, #020617 100%) !important;
-                color: #e2e8f0;
+                font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif !important;
+                color: var(--text);
+                background:
+                    radial-gradient(1000px 620px at 85% -10%, rgba(99, 102, 241, 0.16), transparent 60%),
+                    radial-gradient(900px 520px at -10% 12%, rgba(14, 165, 233, 0.12), transparent 55%),
+                    linear-gradient(180deg, var(--bg-1) 0%, var(--bg-0) 100%) !important;
             }
 
-            .stApp {
-                background: transparent;
-                color: #e2e8f0;
-            }
+            .stApp { background: transparent; color: var(--text); }
 
-            [data-testid="stDecoration"], [data-testid="stToolbar"] {
-                background: transparent !important;
-            }
+            h1, h2, h3, h4, h5 { letter-spacing: -0.02em; }
+
+            [data-testid="stDecoration"], [data-testid="stToolbar"] { background: transparent !important; }
 
             [data-testid="stHeader"] {
-                background: linear-gradient(135deg, rgba(15, 23, 42, 0.85), rgba(30, 64, 175, 0.75));
-                border-bottom: 1px solid rgba(148, 163, 184, 0.18);
-                box-shadow: 0 10px 30px rgba(2, 6, 23, 0.45);
-                backdrop-filter: blur(16px);
+                background: rgba(6, 10, 20, 0.55);
+                border-bottom: 1px solid var(--border);
+                backdrop-filter: blur(14px);
             }
 
             [data-testid="stSidebar"] {
-                background: rgba(15, 23, 42, 0.72) !important;
-                backdrop-filter: blur(20px);
+                background: rgba(9, 14, 26, 0.88) !important;
+                border-right: 1px solid var(--border);
+                backdrop-filter: blur(18px);
             }
 
             .main .block-container {
-                padding-top: 1.5rem;
-                padding-bottom: 2.5rem;
-                max-width: 1400px;
+                padding-top: 1.2rem;
+                padding-bottom: 3rem;
+                max-width: 1440px;
             }
 
-            .stTabs [role="tablist"] button {
-                border-radius: 12px;
-                background: rgba(15, 23, 42, 0.45);
+            /* ── Tabs: pill navigation (covers baseweb + react-aria markup) ── */
+            .stTabs [data-baseweb="tab-list"],
+            .stTabs [role="tablist"] {
+                gap: 0.35rem;
+                padding: 0.35rem;
+                background: rgba(15, 23, 42, 0.55);
+                border: 1px solid var(--border);
+                border-radius: 14px;
+                flex-wrap: wrap;
+                display: flex;
+            }
+
+            .stTabs [data-baseweb="tab-list"] button,
+            .stTabs [role="tablist"] [role="tab"] {
+                border-radius: 10px;
+                padding: 0.5rem 1.05rem;
+                background: transparent;
+                color: var(--muted);
                 border: 0;
-                color: #cbd5f5;
-                padding: 0.75rem 1.3rem;
-                margin-right: 0.65rem;
-                transition: all 0.2s ease-in-out;
+                transition: all 0.18s ease;
+                cursor: pointer;
             }
 
-            .stTabs [role="tablist"] button:hover {
-                filter: brightness(1.15);
+            .stTabs [role="tablist"] [role="tab"] p {
+                color: inherit !important;
+                font-weight: 600;
             }
 
-            .stTabs [role="tablist"] button[aria-selected="true"] {
+            .stTabs [data-baseweb="tab-list"] button:hover,
+            .stTabs [role="tablist"] [role="tab"]:hover {
+                color: var(--text);
+                background: rgba(129, 140, 248, 0.12);
+            }
+
+            .stTabs [data-baseweb="tab-list"] button[aria-selected="true"],
+            .stTabs [role="tablist"] [role="tab"][aria-selected="true"] {
                 background: linear-gradient(135deg, #6366f1, #0ea5e9);
                 color: #ffffff;
-                box-shadow: 0 12px 30px rgba(14, 165, 233, 0.25);
+                box-shadow: 0 8px 24px rgba(79, 70, 229, 0.35);
             }
 
-            .metric-card {
-                background: rgba(15, 23, 42, 0.6);
-                border-radius: 18px;
-                padding: 1.2rem 1.5rem;
-                border: 1px solid rgba(148, 163, 184, 0.18);
-                box-shadow: 0 18px 38px rgba(2, 6, 23, 0.35);
-                height: 100%;
+            .stTabs [data-baseweb="tab-highlight"],
+            .stTabs [data-baseweb="tab-border"],
+            .stTabs .react-aria-SelectionIndicator { display: none !important; }
+
+            /* ── Hero banner ───────────────────────────────────────── */
+            .app-hero {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                gap: 1.5rem;
+                flex-wrap: wrap;
+                padding: 1.5rem 1.9rem;
+                margin-bottom: 1.1rem;
+                background: linear-gradient(135deg, rgba(99, 102, 241, 0.16), rgba(14, 165, 233, 0.08) 55%, rgba(15, 23, 42, 0.4));
+                border: 1px solid rgba(129, 140, 248, 0.25);
+                border-radius: 20px;
+                box-shadow: 0 24px 60px rgba(2, 6, 23, 0.45);
             }
+
+            .app-hero__title {
+                font-size: 2rem;
+                font-weight: 800;
+                margin: 0;
+                background: linear-gradient(90deg, #c7d2fe, #7dd3fc);
+                -webkit-background-clip: text;
+                background-clip: text;
+                color: transparent;
+            }
+
+            .app-hero__sub { margin: 0.3rem 0 0; color: var(--muted); font-size: 0.95rem; }
+
+            .app-hero__chips { display: flex; gap: 0.7rem; flex-wrap: wrap; }
+
+            .hero-chip {
+                display: flex;
+                flex-direction: column;
+                gap: 0.15rem;
+                min-width: 108px;
+                padding: 0.6rem 1rem;
+                background: rgba(9, 14, 26, 0.55);
+                border: 1px solid var(--border);
+                border-radius: 14px;
+            }
+
+            .hero-chip__label {
+                font-size: 0.66rem;
+                text-transform: uppercase;
+                letter-spacing: 0.1em;
+                color: var(--muted);
+            }
+
+            .hero-chip__value {
+                font-size: 1.12rem;
+                font-weight: 700;
+                color: var(--text);
+                font-family: 'JetBrains Mono', monospace;
+            }
+
+            /* ── Sidebar branding ──────────────────────────────────── */
+            .sidebar-brand {
+                display: flex;
+                gap: 0.75rem;
+                align-items: center;
+                padding: 0.4rem 0 1rem;
+                border-bottom: 1px solid var(--border);
+                margin-bottom: 0.8rem;
+            }
+
+            .sidebar-brand__logo { font-size: 1.7rem; filter: drop-shadow(0 4px 14px rgba(56, 189, 248, 0.45)); }
+            .sidebar-brand__title { font-weight: 800; font-size: 1.05rem; }
+            .sidebar-brand__sub { font-size: 0.72rem; color: var(--muted); }
+
+            .active-symbol-chip {
+                display: inline-flex;
+                align-items: center;
+                gap: 0.35rem;
+                margin: 0.2rem 0 0.6rem;
+                padding: 0.35rem 0.85rem;
+                border-radius: 999px;
+                font-size: 0.85rem;
+                background: linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(14, 165, 233, 0.18));
+                border: 1px solid var(--border-strong);
+                color: var(--text);
+            }
+
+            /* ── Cards ─────────────────────────────────────────────── */
+            .metric-card {
+                position: relative;
+                background: var(--panel);
+                border-radius: var(--radius);
+                padding: 1.1rem 1.3rem;
+                border: 1px solid var(--border);
+                box-shadow: 0 14px 34px rgba(2, 6, 23, 0.35);
+                height: 100%;
+                overflow: hidden;
+                transition: transform 0.18s ease, border-color 0.18s ease;
+            }
+
+            .metric-card::before {
+                content: "";
+                position: absolute;
+                inset: 0 0 auto 0;
+                height: 2px;
+                background: linear-gradient(90deg, #6366f1, #0ea5e9, transparent);
+                opacity: 0.8;
+            }
+
+            .metric-card:hover { transform: translateY(-2px); border-color: var(--border-strong); }
 
             .metric-card h3 {
-                font-size: 0.9rem;
+                font-size: 0.72rem;
                 text-transform: uppercase;
-                letter-spacing: 0.08em;
-                color: #94a3b8;
-                margin-bottom: 0.4rem;
+                letter-spacing: 0.09em;
+                color: var(--muted);
+                font-weight: 600;
+                margin-bottom: 0.45rem;
             }
 
             .metric-card p {
-                font-size: 1.65rem;
-                font-weight: 700;
+                font-size: 1.55rem;
+                font-weight: 750;
                 color: #f8fafc;
-                margin-bottom: 0.3rem;
-            }
-
-            .metric-delta {
-                font-size: 0.9rem;
-                color: #38bdf8;
                 margin-bottom: 0.25rem;
             }
 
-            .metric-footnote {
-                font-size: 0.75rem;
-                color: #cbd5f5;
-                opacity: 0.85;
-                margin: 0;
+            .metric-delta { font-size: 0.85rem; color: var(--accent-2); margin-bottom: 0.25rem; }
+
+            .metric-footnote { font-size: 0.75rem; color: #b6c2dd; opacity: 0.85; margin: 0; }
+
+            .soft-card {
+                background: var(--panel);
+                border-radius: var(--radius);
+                padding: 1.25rem 1.4rem;
+                border: 1px solid var(--border);
+                box-shadow: 0 14px 34px rgba(2, 6, 23, 0.35);
             }
 
+            .soft-card h4 { color: #cbd5f5; margin-bottom: 0.5rem; }
+
+            /* ── Signal legend chips ───────────────────────────────── */
             .legend-card {
-                background: rgba(15, 23, 42, 0.55);
+                background: var(--panel);
                 border-radius: 14px;
                 padding: 0.9rem 1.1rem;
-                border: 1px solid rgba(148, 163, 184, 0.18);
-                margin-top: 0.75rem;
+                border: 1px solid var(--border);
+                margin: 0.5rem 0 0.9rem;
             }
 
             .legend-row {
                 display: flex;
                 align-items: center;
-                gap: 0.6rem;
-                font-size: 0.8rem;
+                gap: 0.7rem;
+                font-size: 0.82rem;
                 color: #cbd5f5;
-                margin-bottom: 0.45rem;
+                margin-bottom: 0.5rem;
             }
 
-            .legend-row:last-child {
-                margin-bottom: 0;
-            }
+            .legend-row:last-child { margin-bottom: 0; }
 
             .legend-chip {
                 display: inline-flex;
                 align-items: center;
                 justify-content: center;
-                padding: 0.18rem 0.7rem;
+                min-width: 88px;
+                padding: 0.2rem 0.75rem;
                 border-radius: 999px;
                 font-weight: 600;
                 font-size: 0.75rem;
-                border: 1px solid rgba(148, 163, 184, 0.45);
-                background: rgba(30, 64, 175, 0.16);
+                border: 1px solid var(--border);
             }
 
-            .soft-card {
-                background: rgba(15, 23, 42, 0.58);
-                border-radius: 18px;
-                padding: 1.5rem;
-                border: 1px solid rgba(148, 163, 184, 0.18);
-                box-shadow: 0 18px 38px rgba(2, 6, 23, 0.35);
+            .legend-chip--supportive { color: #34d399; border-color: rgba(52, 211, 153, 0.4); background: rgba(52, 211, 153, 0.12); }
+            .legend-chip--neutral { color: #fbbf24; border-color: rgba(251, 191, 36, 0.4); background: rgba(251, 191, 36, 0.1); }
+            .legend-chip--adverse { color: #fb923c; border-color: rgba(251, 146, 60, 0.4); background: rgba(251, 146, 60, 0.12); }
+
+            /* ── Status pills (AI page) ────────────────────────────── */
+            .status-pill {
+                display: flex;
+                align-items: center;
+                gap: 0.65rem;
+                padding: 0.75rem 1rem;
+                border-radius: 14px;
+                background: var(--panel);
+                border: 1px solid var(--border);
             }
 
-            .soft-card h4 {
-                color: #cbd5f5;
-                margin-bottom: 0.5rem;
+            .status-pill__dot {
+                width: 9px;
+                height: 9px;
+                border-radius: 50%;
+                background: #fb923c;
+                box-shadow: 0 0 10px rgba(251, 146, 60, 0.8);
+                flex-shrink: 0;
             }
 
+            .status-pill--ok .status-pill__dot { background: #34d399; box-shadow: 0 0 10px rgba(52, 211, 153, 0.8); }
+
+            .status-pill__label {
+                font-size: 0.66rem;
+                text-transform: uppercase;
+                letter-spacing: 0.09em;
+                color: var(--muted);
+                margin: 0;
+            }
+
+            .status-pill__value { font-weight: 600; font-size: 0.92rem; margin: 0; }
+
+            .page-title h2 { margin-bottom: 0.15rem; }
+            .page-title p { color: var(--muted); margin-top: 0; }
+
+            /* ── Featured chart shell ──────────────────────────────── */
             .hero-chart {
                 position: relative;
-                border-radius: 22px;
-                padding: 1.75rem 1.6rem 1.4rem;
-                background: linear-gradient(135deg, rgba(30, 64, 175, 0.35), rgba(8, 145, 178, 0.18));
-                border: 1px solid rgba(125, 211, 252, 0.28);
-                box-shadow: 0 28px 55px rgba(13, 148, 136, 0.28);
+                border-radius: 20px;
+                padding: 1.6rem 1.5rem 1.3rem;
+                background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(8, 145, 178, 0.1));
+                border: 1px solid rgba(125, 211, 252, 0.24);
+                box-shadow: 0 24px 55px rgba(2, 6, 23, 0.4);
                 overflow: hidden;
             }
 
@@ -603,69 +771,62 @@ def inject_global_styles():
                 position: absolute;
                 inset: 0;
                 pointer-events: none;
-                border-radius: 22px;
-                background: radial-gradient(circle at 85% 20%, rgba(56, 189, 248, 0.22), transparent 55%);
+                border-radius: 20px;
+                background: radial-gradient(circle at 85% 20%, rgba(56, 189, 248, 0.18), transparent 55%);
             }
 
-            .hero-chart__title {
-                position: relative;
-                font-size: 1.35rem;
-                font-weight: 700;
-                margin-bottom: 0.35rem;
-                color: #f8fafc;
-            }
+            .hero-chart__title { position: relative; font-size: 1.3rem; font-weight: 700; margin-bottom: 0.3rem; color: #f8fafc; }
+            .hero-chart__caption { position: relative; color: rgba(226, 232, 240, 0.8); font-size: 0.9rem; margin-bottom: 1rem; }
 
-            .hero-chart__caption {
-                position: relative;
-                color: rgba(226, 232, 240, 0.82);
-                font-size: 0.9rem;
-                margin-bottom: 1rem;
-            }
-
+            /* ── News cards ────────────────────────────────────────── */
             .article-card {
-                background: rgba(15, 23, 42, 0.6);
-                border-radius: 16px;
+                background: var(--panel);
+                border-radius: var(--radius);
                 padding: 1.1rem 1.2rem;
-                border: 1px solid rgba(148, 163, 184, 0.18);
-                box-shadow: 0 15px 32px rgba(2, 6, 23, 0.32);
+                border: 1px solid var(--border);
+                box-shadow: 0 14px 30px rgba(2, 6, 23, 0.32);
                 height: 100%;
+                transition: transform 0.18s ease, border-color 0.18s ease;
             }
 
-            .article-card h5 {
-                font-size: 1.05rem;
-                color: #f8fafc;
-                margin-bottom: 0.5rem;
+            .article-card:hover { transform: translateY(-2px); border-color: var(--border-strong); }
+            .article-card h5 { font-size: 1rem; color: #f8fafc; margin-bottom: 0.5rem; }
+            .article-card h5 a { color: #e0e7ff; text-decoration: none; }
+            .article-card h5 a:hover { color: var(--accent-2); }
+            .article-card p { font-size: 0.85rem; color: #b6c2dd; line-height: 1.5; }
+
+            /* ── Native widget polish ──────────────────────────────── */
+            .stButton > button, [data-testid="stFormSubmitButton"] > button {
+                border-radius: 12px;
+                font-weight: 600;
+                transition: all 0.15s ease;
             }
 
-            .article-card p {
-                font-size: 0.85rem;
-                color: #cbd5f5;
-                line-height: 1.5;
+            .stButton > button:hover, [data-testid="stFormSubmitButton"] > button:hover {
+                transform: translateY(-1px);
             }
 
-            .article-card a {
-                color: #38bdf8;
-            }
-
-            .stExpander {
-                background: rgba(15, 23, 42, 0.55);
+            [data-testid="stMetric"] {
+                background: var(--panel);
+                border: 1px solid var(--border);
                 border-radius: 14px;
-                border: 1px solid rgba(148, 163, 184, 0.18);
+                padding: 0.9rem 1rem;
+            }
+
+            .stExpander, [data-testid="stExpander"] details {
+                background: var(--panel);
+                border-radius: 14px;
+                border: 1px solid var(--border);
                 overflow: hidden;
             }
 
-            .stExpander > div:first-child {
-                background: rgba(30, 41, 59, 0.55);
-                color: #f8fafc;
-            }
+            .stTable, .stDataFrame { background: transparent !important; border-radius: 12px; }
 
-            .stExpander .streamlit-expanderContent {
-                background: rgba(2, 6, 23, 0.3);
-            }
+            hr { border-color: var(--border); }
 
-            .stTable, .stDataFrame {
-                background: transparent !important;
-            }
+            ::-webkit-scrollbar { width: 9px; height: 9px; }
+            ::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.28); border-radius: 999px; }
+            ::-webkit-scrollbar-track { background: transparent; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -1036,13 +1197,30 @@ init_db()
 articles: list[dict] = ensure_news_cache()
 
 # ---------------- Streamlit Config ----------------
-st.set_page_config(layout="wide", page_title="Options Analytics Dashboard")
+st.set_page_config(
+    layout="wide",
+    page_title="GEX · Options Analytics",
+    page_icon="📊",
+    initial_sidebar_state="expanded",
+)
 
 inject_global_styles()
-st.title("📊 Options Analytics Dashboard")
 
 # --- Sidebar Inputs ---
 _initialise_symbol_state()
+
+st.sidebar.markdown(
+    """
+    <div class="sidebar-brand">
+        <div class="sidebar-brand__logo">📊</div>
+        <div>
+            <div class="sidebar-brand__title">GEX Analytics</div>
+            <div class="sidebar-brand__sub">Dealer positioning terminal</div>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 st.sidebar.selectbox(
     "Watchlist symbols",
@@ -1059,7 +1237,10 @@ st.sidebar.text_input(
 )
 
 ticker = (st.session_state.get("active_ticker") or "").upper()
-st.sidebar.markdown(f"**Active symbol:** `{ticker}`")
+st.sidebar.markdown(
+    f'<div class="active-symbol-chip">Active · <strong>{escape(ticker) or "—"}</strong></div>',
+    unsafe_allow_html=True,
+)
 
 expirations = []
 if ticker:
@@ -1079,6 +1260,32 @@ for exp in expirations:
         exp_pairs.append((exp, datetime.strptime(exp, "%Y-%m-%d").date()))
     except Exception:
         continue
+
+spot = None
+if ticker:
+    try:
+        spot = get_stock_quote(ticker, st.secrets.get("TRADIER_TOKEN"))
+    except Exception:
+        st.sidebar.error("Error fetching spot price.")
+
+# --- Hero banner ---
+spot_display = f"${spot:,.2f}" if spot is not None else "—"
+st.markdown(
+    f"""
+    <div class="app-hero">
+        <div>
+            <h1 class="app-hero__title">Options Analytics</h1>
+            <p class="app-hero__sub">Dealer gamma, flow, and volatility intelligence in one terminal.</p>
+        </div>
+        <div class="app-hero__chips">
+            <div class="hero-chip"><span class="hero-chip__label">Symbol</span><span class="hero-chip__value">{escape(ticker) or "—"}</span></div>
+            <div class="hero-chip"><span class="hero-chip__label">Spot</span><span class="hero-chip__value">{spot_display}</span></div>
+            <div class="hero-chip"><span class="hero-chip__label">Expirations</span><span class="hero-chip__value">{len(exp_pairs)}</span></div>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 picker_col, picker_info_col = st.columns([1, 2], gap="small")
 with picker_col:
@@ -1101,13 +1308,8 @@ with picker_info_col:
     st.caption(f"{selected_count} dates selected. Charts and algos use this list.")
 
 selected_exps = selected_state
-spot = None
-if ticker:
-    try:
-        spot = get_stock_quote(ticker,  st.secrets.get("TRADIER_TOKEN"))
-        st.sidebar.markdown(f"**Spot Price:** ***{spot:.2f}***")
-    except Exception:
-        st.sidebar.error("Error fetching spot price.")
+if spot is not None:
+    st.sidebar.markdown(f"**Spot Price:** ***{spot:,.2f}***")
 
 recommended_offset = _recommended_strike_offset(ticker, spot)
 offset_max = _strike_slider_max(ticker, recommended_offset)
@@ -1132,16 +1334,16 @@ enable_ai = st.sidebar.checkbox("Enable AI Analysis", value=True)
 
 # --- Tabs ---
 tab_names = [
-    "Overview Metrics",
-    "Options Positioning",
-    "Gamma Gap Radar",
-    "Binomial Tree",
-    "Market Sentiment",
-    "Market News"
+    "📈 Overview",
+    "🎯 Positioning",
+    "🧲 Gamma Gap",
+    "🧮 Binomial Tree",
+    "🌅 Sentiment",
+    "📰 News",
 ]
 if enable_ai:
-    tab_names.append("AI Analysis")
-tab_names.append("Economic Calendar")
+    tab_names.append("🤖 AI Analysis")
+tab_names.append("📅 Calendar")
 tabs = st.tabs(tab_names)
 tab1 = tabs[0]
 tab2 = tabs[1]
@@ -2433,55 +2635,14 @@ with calender_tab:
 # --- Tab 7: AI Analysis ---
 if enable_ai and ai_tab:
     with ai_tab:
-        st.header("🤖 AI Analysis")
-        st.write(
-            "Prepare the AI request to review the data packet, estimated token usage, and confirm before sending."
+        render_ai_tab(
+            ticker=ticker,
+            expirations=selected_exps,
+            articles=articles,
+            df=globals().get("df"),
+            iv_skew_df=globals().get("iv_skew_df"),
+            vol_ratio=globals().get("vol_ratio"),
+            oi_ratio=globals().get("oi_ratio"),
+            spot=spot,
+            offset=offset,
         )
-        if "want_ai" not in st.session_state:
-            st.session_state.want_ai = False
-
-        openai_creds, selected_model = render_model_selection(ticker, selected_exps)
-
-        if st.button("Prepare AI Analysis"):
-            st.session_state.want_ai = True
-
-        if st.session_state.want_ai:
-            if st.button("Cancel AI Preparation", key="cancel_ai_preparation"):
-                st.session_state.want_ai = False
-            elif any(
-                name not in globals() for name in ("df", "iv_skew_df", "vol_ratio", "oi_ratio")
-            ):
-                st.warning(
-                    "Positioning data is not loaded yet. Pick a ticker, expirations, and make sure "
-                    "the Overview Metrics and Options Positioning tabs have data before running AI analysis."
-                )
-            else:
-                openai_query(
-                    df,
-                    iv_skew_df,
-                    vol_ratio,
-                    oi_ratio,
-                    articles,
-                    spot,
-                    offset,
-                    ticker,
-                    selected_exps,
-                    selected_model,
-                    openai_creds,
-                )
-
-        st.markdown("---")
-        st.header("📚 Past AI Analyses")
-        hist = load_analyses(limit=10)
-
-        # format however you like, e.g. 24h
-        for rec in hist:
-            ts_utc = datetime.fromisoformat(rec["ts"]).replace(tzinfo=ZoneInfo("UTC"))
-            ts_la  = ts_utc.astimezone(ZoneInfo("America/Los_Angeles"))
-            label = ts_la.strftime("%Y-%m-%d %H:%M %Z")
-            with st.expander(f"{label} — {rec['ticker']}"):
-                st.markdown("**Payload:**")
-                # st.json(rec["payload"])
-                st.markdown(rec["token_count"])
-                st.markdown("**Response:**")
-                st.markdown(rec["response"])

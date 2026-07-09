@@ -3,6 +3,7 @@ import os
 import textwrap
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -17,7 +18,7 @@ from quant_analysis.services.market_data import (
     get_price_stats,
     get_vix_info,
 )
-from quant_analysis.storage.db import save_analysis
+from quant_analysis.storage.db import load_analyses, save_analysis
 
 
 # ── Credentials ─────────────────────────────────────────────────────────────
@@ -429,20 +430,15 @@ def create_data_packet(ticker: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def estimate_token_count(data_packet, model_name):
-    tokens = None
     try:
         enc = tiktoken.encoding_for_model(model_name)
     except Exception:
         enc = tiktoken.get_encoding("cl100k_base")
 
     try:
-        tokens = sum(len(enc.encode(m["content"])) for m in data_packet["messages"])
-        st.write(f"Estimated prompt tokens for `{model_name}`: **{tokens}**")
-    except Exception as e:
-        print(f"Token estimation error: {e}")
-        tokens = None
-
-    return tokens
+        return sum(len(enc.encode(m["content"])) for m in data_packet["messages"])
+    except Exception:
+        return None
 
 
 def call_openai_api(data_packet, creds, model_name: str):
@@ -466,82 +462,225 @@ def _build_ai_form_key(label: str, ticker: str, exp: Optional[Sequence[str]]) ->
     return f"{label}_{ticker}_{exp_fragment}" if exp_fragment else f"{label}_{ticker}"
 
 
-def openai_query(
-    df_net,
-    iv_skew_df,
-    vol_ratio,
-    oi_ratio,
-    articles,
-    spot,
-    offset,
-    ticker,
-    exp,
-    selected_model,
-    openai_creds,
-):
-    api_key = openai_creds.get("api_key") if isinstance(openai_creds, dict) else None
-    if not api_key:
-        st.error("OpenAI API key is not configured.")
+def _status_pill(label: str, value: str, ok: bool) -> None:
+    state = "status-pill--ok" if ok else "status-pill--warn"
+    st.markdown(
+        f"""
+        <div class="status-pill {state}">
+            <span class="status-pill__dot"></span>
+            <div>
+                <p class="status-pill__label">{label}</p>
+                <p class="status-pill__value">{value}</p>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _format_history_label(index: int, record: Dict[str, Any]) -> str:
+    try:
+        ts_utc = datetime.fromisoformat(record["ts"]).replace(tzinfo=ZoneInfo("UTC"))
+        ts_local = ts_utc.astimezone(ZoneInfo("America/Los_Angeles"))
+        stamp = ts_local.strftime("%b %d, %Y · %H:%M %Z")
+    except Exception:
+        stamp = str(record.get("ts", ""))[:16]
+    return f"#{index} · {record.get('ticker', '?')} — {stamp}"
+
+
+def _render_history(limit: int = 15) -> None:
+    st.markdown("#### 📚 Past analyses")
+    try:
+        history = load_analyses(limit=limit)
+    except Exception:
+        history = []
+
+    if not history:
+        st.caption("No saved analyses yet — your first run will appear here.")
         return
 
-    if not selected_model:
-        st.error("Select an OpenAI model before preparing the analysis.")
-        return
+    labels = [_format_history_label(len(history) - idx, rec) for idx, rec in enumerate(history)]
+    choice = st.selectbox("Browse saved analyses", labels, key="ai_history_choice")
+    record = history[labels.index(choice)]
 
-    if df_net is not None and not df_net.empty:
-        df_net = df_net[(df_net["strike"] >= spot - offset) & (df_net["strike"] <= spot + offset)]
+    with st.container(border=True):
+        st.markdown(record.get("response") or "_No response stored for this run._")
 
-    with st.spinner("Building compact data packet…"):
-        payload = build_analysis_payload(
-            df_net, iv_skew_df, vol_ratio, oi_ratio, articles, spot, offset, ticker, exp
+    with st.expander("Stored data packet"):
+        payload = record.get("payload")
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except Exception:
+                pass
+        if isinstance(payload, (dict, list)):
+            st.json(payload)
+        else:
+            st.code(str(payload))
+
+
+def render_ai_tab(
+    *,
+    ticker: str,
+    expirations: Optional[Sequence[str]],
+    articles: Optional[Sequence[dict]],
+    df: Optional[pd.DataFrame] = None,
+    iv_skew_df: Optional[pd.DataFrame] = None,
+    vol_ratio: Optional[float] = None,
+    oi_ratio: Optional[float] = None,
+    spot: Optional[float] = None,
+    offset: Optional[float] = None,
+) -> None:
+    """Render the AI Analysis page as a guided three-step flow."""
+
+    st.markdown(
+        """
+        <div class="page-title">
+            <h2>🤖 AI Trade Analysis</h2>
+            <p>Build a compact positioning snapshot, review exactly what the model sees, then send.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    openai_creds = resolve_openai_credentials()
+    api_ready = bool(isinstance(openai_creds, dict) and openai_creds.get("api_key"))
+    data_ready = (
+        df is not None
+        and not df.empty
+        and spot is not None
+        and offset is not None
+        and vol_ratio is not None
+        and oi_ratio is not None
+    )
+
+    packet_state = st.session_state.get("ai_packet")
+    packet_fresh = bool(packet_state and packet_state.get("ticker") == ticker)
+
+    s1, s2, s3 = st.columns(3)
+    with s1:
+        _status_pill("OpenAI key", "Configured" if api_ready else "Missing", ok=api_ready)
+    with s2:
+        _status_pill(
+            "Market data",
+            f"{ticker} · {len(expirations or [])} expirations" if data_ready else "Not loaded",
+            ok=data_ready,
         )
-    data_packet = create_data_packet(ticker, payload)
-
-    with st.expander("Data packet (exactly what the model will see)"):
-        st.json(payload)
-
-    tokens = estimate_token_count(data_packet, selected_model)
-
-    form_key = _build_ai_form_key("ai_confirmation", ticker, exp)
-    with st.form(form_key):
-        proceed = st.checkbox("I reviewed the packet and want to send the request.")
-        pin_entry = st.text_input("Enter security PIN", type="password")
-        submitted = st.form_submit_button("Send to OpenAI", use_container_width=True)
-
-    if not submitted:
-        return
-
-    if not proceed:
-        st.warning("Confirmation required before the request can be sent.")
-        return
-
-    pin_expected = st.secrets.get("AI_PIN")
-    if not pin_expected:
-        st.error("AI_PIN secret is not configured. Set it in Streamlit secrets to continue.")
-        return
-
-    if pin_entry != str(pin_expected):
-        st.error("❌ Incorrect PIN, try again.")
-        return
-
-    with st.spinner(f"Asking `{selected_model}`…"):
-        try:
-            analysis = call_openai_api(data_packet, openai_creds, selected_model)
-        except ValueError as exc:
-            st.error(str(exc))
-            return
-
-    if analysis:
-        st.markdown(f"### AI Trade Analysis\n{analysis}")
-        save_analysis(
-            ticker=ticker,
-            expirations=exp,
-            payload=payload,
-            response=analysis,
-            token_count=tokens or 0,
+    with s3:
+        _status_pill(
+            "Data packet",
+            f"Built {packet_state.get('built_at', '')}" if packet_fresh else "Not built",
+            ok=packet_fresh,
         )
-        st.success("✅ Analysis saved.")
-        st.session_state.want_ai = False
+
+    st.write("")
+
+    if not api_ready:
+        st.error("Add `OPENAI_API_KEY` to Streamlit secrets to enable this page.")
+        return
+
+    left, right = st.columns([2, 3], gap="large")
+
+    with left:
+        st.markdown("##### 1 · Choose a model")
+        openai_creds, selected_model = render_model_selection(ticker, expirations, openai_creds)
+
+        st.markdown("##### 2 · Build the data packet")
+        if not data_ready:
+            st.info(
+                "Load market data first: pick a ticker and expirations, and make sure the "
+                "Overview tab shows charts."
+            )
+        else:
+            if st.button("⚡ Build data packet", type="primary", use_container_width=True):
+                with st.spinner("Aggregating positioning, flow, and macro context…"):
+                    work_df = df[(df["strike"] >= spot - offset) & (df["strike"] <= spot + offset)]
+                    payload = build_analysis_payload(
+                        work_df, iv_skew_df, vol_ratio, oi_ratio, articles,
+                        spot, offset, ticker, expirations,
+                    )
+                packet = create_data_packet(ticker, payload)
+                st.session_state["ai_packet"] = {
+                    "ticker": ticker,
+                    "payload": payload,
+                    "packet": packet,
+                    "tokens": estimate_token_count(packet, selected_model or "gpt-4o"),
+                    "built_at": datetime.now(timezone.utc).strftime("%H:%M UTC"),
+                }
+                packet_state = st.session_state["ai_packet"]
+                packet_fresh = True
+            st.caption("Rebuild whenever you change ticker, expirations, or strike range.")
+
+        if packet_state and not packet_fresh:
+            st.warning(
+                f"The stored packet is for **{packet_state.get('ticker')}** — rebuild it for {ticker}."
+            )
+
+    with right:
+        st.markdown("##### 3 · Review & send")
+        if not packet_fresh:
+            st.info("Build a data packet to unlock the review panel.")
+        else:
+            payload = packet_state["payload"]
+            positioning = payload.get("positioning", {})
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Prompt tokens", f"{packet_state.get('tokens') or '—'}")
+            magnet = positioning.get("magnet_strike")
+            m2.metric("Magnet strike", f"{magnet:g}" if magnet is not None else "—")
+            m3.metric("Flip zones", len(positioning.get("gamma_flip_zones", [])))
+
+            with st.expander("Inspect the full JSON payload"):
+                st.json(payload)
+
+            with st.form("ai_send_form"):
+                pin_entry = st.text_input(
+                    "Security PIN",
+                    type="password",
+                    help="Set AI_PIN in Streamlit secrets. Prevents accidental API spend.",
+                )
+                sent = st.form_submit_button(
+                    f"🚀 Send to {selected_model or 'model'}",
+                    type="primary",
+                    use_container_width=True,
+                )
+
+            if sent:
+                pin_expected = st.secrets.get("AI_PIN")
+                if not selected_model:
+                    st.error("Select a model first.")
+                elif not pin_expected:
+                    st.error("AI_PIN secret is not configured. Set it in Streamlit secrets to continue.")
+                elif pin_entry != str(pin_expected):
+                    st.error("❌ Incorrect PIN, try again.")
+                else:
+                    with st.spinner(f"Asking `{selected_model}`…"):
+                        analysis = call_openai_api(
+                            packet_state["packet"], openai_creds, selected_model
+                        )
+                    if analysis:
+                        save_analysis(
+                            ticker=ticker,
+                            expirations=list(expirations or []),
+                            payload=payload,
+                            response=analysis,
+                            token_count=packet_state.get("tokens") or 0,
+                        )
+                        st.session_state["ai_last_analysis"] = {
+                            "ticker": ticker,
+                            "model": selected_model,
+                            "response": analysis,
+                        }
+                        st.success("✅ Analysis saved.")
+
+    last = st.session_state.get("ai_last_analysis")
+    if last:
+        st.divider()
+        st.markdown(f"#### 📜 Latest analysis — {last['ticker']} · `{last['model']}`")
+        with st.container(border=True):
+            st.markdown(last["response"])
+
+    st.divider()
+    _render_history()
 
 
 def main() -> int:
