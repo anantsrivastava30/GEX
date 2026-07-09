@@ -367,9 +367,9 @@ def evaluate_sentiment_signal(ticker: str, articles: list[dict], vix: Optional[d
 
     counts = Counter()
     for art in relevant:
-        title = art.get("title", "").lower()
-        bull = any(term in title for term in BULLISH_TERMS)
-        bear = any(term in title for term in BEARISH_TERMS)
+        headline = art.get("title", "").lower()
+        bull = any(term in headline for term in BULLISH_TERMS)
+        bear = any(term in headline for term in BEARISH_TERMS)
         if bull and not bear:
             counts["bull"] += 1
         elif bear and not bull:
@@ -2375,7 +2375,7 @@ with news_tab:
     if st.button("Refresh headlines", key="refresh_headlines"):
         try:
             st.session_state["cached_articles"] = fetch_and_filter_rss(limit_per_feed=30)
-            st.experimental_rerun()
+            st.rerun()
         except Exception as e:
             st.error(f"Error refreshing news: {e}")
 
@@ -2444,6 +2444,13 @@ if enable_ai and ai_tab:
         if st.session_state.want_ai:
             if st.button("Cancel AI Preparation", key="cancel_ai_preparation"):
                 st.session_state.want_ai = False
+            elif any(
+                name not in globals() for name in ("df", "iv_skew_df", "vol_ratio", "oi_ratio")
+            ):
+                st.warning(
+                    "Positioning data is not loaded yet. Pick a ticker, expirations, and make sure "
+                    "the Overview Metrics and Options Positioning tabs have data before running AI analysis."
+                )
             else:
                 openai_query(
                     df,

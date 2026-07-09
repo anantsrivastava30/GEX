@@ -35,7 +35,7 @@ MANIFEST
 
 # PyInstaller
 *.manifest
-*.
+*.spec
 
 # Additional ignores
 *.pyc
@@ -43,3 +43,11 @@ MANIFEST
 *.db
 .idea/
 .vscode/
+
+# Streamlit secrets — never commit API keys
+.streamlit/secrets.toml
+
+# Test / coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
