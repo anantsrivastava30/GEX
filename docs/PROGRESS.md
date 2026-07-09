@@ -26,7 +26,7 @@ session should pick up.
 ### Phase 1 — UW-style shell + port (look & feel milestone)
 - [x] P1.1 Backend skeleton: `backend/` FastAPI (config, deps w/ tenacity retry, `cache.py` TTL layer, `ratelimit.py` token bucket), routers `ticker` (snapshot/expirations/gex/skew/ratios), `market`, `news`, `flow` (unusual proxy), `history` (iv-rank/oi-change/metrics from our snapshots), pydantic schemas, TestClient tests w/ faked Tradier. *Still to add: `ai` router (port `render_ai_tab` pipeline), split exposure router when vanna/charm lands.*
 - [ ] P1.2 Scheduler jobs in backend (APScheduler) calling the same snapshot engine intraday (gamma-gap every 30 min)
-- [x] P1.3 Frontend shell: Next.js 16 + Tailwind v4 in `frontend/`, dark theme tokens (`globals.css`), `SidebarNav`/`TopBar` w/ ticker search, typed API client (`src/lib/api.ts`), `/api` rewrite to backend :8000. First pages live: `/market` (VIX/yields/futures), `/stock/[symbol]` (quote, expiration chips, net-GEX table, gamma-gap signal card, interpretation), `/news`, `/flow` placeholder. *Still to add: shadcn/ui + TanStack Table for dense tables, lightweight-charts + ECharts chart components (load the `dataviz` skill first), remaining pages.*
+- [x] P1.3 Frontend shell: Next.js 16 + Tailwind v4 in `frontend/`, dark theme tokens (`globals.css`), `SidebarNav`/`TopBar` w/ ticker search, typed API client (`src/lib/api.ts`), `/api` rewrite to backend :8000. First pages live: `/market` (VIX/yields/futures), `/stock/[symbol]` (quote, expiration chips, net-GEX chart + table, gamma-gap signal card, interpretation), `/news`, `/flow` (live). *Still to add: shadcn/ui + TanStack Table for dense tables, more chart components, remaining pages.*
 - [ ] P1.4 Page ports (one PR each): `/market`, `/stock/[symbol]` (+`/gex`, `/vol`), `/news`, `/ai`, `/tools/binomial`, `/flow` (basic unusual-spikes table), `/calendar` (iframe parity); resurrect intraday delta-projection on `/gex`
 - [ ] P1.5 Legacy freeze: move `app.py` → `legacy/app.py`, `docker-compose.yml`, CI matrix (quant_analysis pytest + backend pytest + frontend build/Playwright), README update
 
@@ -88,3 +88,52 @@ session should pick up.
 **Open items for the human:**
 - Add `TRADIER_TOKEN` as a GitHub Actions repo secret (Settings → Secrets → Actions) so the daily snapshot cron can run.
 - Merge PR for this branch promptly to start data accrual.
+
+### Session 2 — 2026-07-09
+**Free deployment (no-cost hosting):** chose Hugging Face Spaces (Docker) for the
+backend + Vercel Hobby for the frontend + the existing GitHub Actions cron for
+snapshots. All $0; container cold starts are the only tradeoff.
+- Root `Dockerfile` (+ `.dockerignore`): builds the FastAPI backend, listens on
+  `${PORT:-7860}` (works on HF Spaces, Cloud Run, any Docker host). Installs the
+  full root requirements because the shared `quant_analysis` lib hard-imports the
+  scientific/plotting stack. Verified all COPY paths exist; the local Docker
+  daemon was unavailable so the image was not run here.
+- `deploy/huggingface/README.md` (Space config card) + `.github/workflows/deploy-hf.yml`
+  (auto-push to the Space on `master`, needs `HF_TOKEN`/`HF_SPACE` secrets).
+- `deploy/DEPLOY.md`: full step-by-step for all three pieces + local dev/docker.
+- Added tracked `data/snapshots/` placeholder so the image builds before the cron
+  has committed any history.
+
+**Frontend (resumed Session-2 "Next up"):**
+- **Root-cause fix:** `frontend/src/lib/api.ts` was silently gitignored (root
+  `.gitignore` had an unanchored Python `lib/` rule matching `frontend/src/lib/`),
+  so the typed API client from Session 1 was never committed and the frontend did
+  not build. Anchored the rule to `/lib/` `/lib64/` and committed the client.
+- Restored/typed `src/lib/api.ts` against the real backend schemas (ticker,
+  gex, skew, ratios, flow/unusual, market, news, history/iv-rank).
+- Added `components/charts/GexStrikeChart.tsx`: dependency-free horizontal
+  diverging bar chart of net GEX by strike (polarity by both bar direction and
+  color, centered zero baseline, spot marker, per-bar hover value). Loaded the
+  `dataviz` skill first; reuses the app's positive/negative tokens.
+- `/stock/[symbol]`: chart replaces the raw table (table kept behind a "Table
+  view" details for accessibility).
+- `/flow`: wired to `/api/flow/unusual` (symbol input → nearest 4 expirations →
+  dense vol/OI table), replacing the placeholder.
+
+**Verified:** `npm run build` clean (was broken before). Rendered the chart with
+mock data via headless Chromium and eyeballed it (diverging bars, spot highlight,
+hover value all correct). No backend code changed this session.
+
+**Next up (Session 3):**
+1. P1.2 APScheduler intraday jobs in the backend (gamma-gap every 30 min reusing
+   the snapshot engine) — best-effort on HF Spaces since the container sleeps.
+2. Port the `ai` router (`quant_analysis/services/ai_analysis.py`) — decouple from
+   `st.secrets`, read `OPENAI_API_KEY` from env.
+3. Stat-tile components for `/market` + `/stock` quote metrics; IV-rank tile.
+4. TanStack Table + filter chips on `/flow`.
+
+**Open items for the human:**
+- Create a Hugging Face **Docker** Space and add repo secrets `HF_TOKEN` +
+  `HF_SPACE`, then set `TRADIER_TOKEN` (and `OPENAI_API_KEY`) as Space secrets.
+- On Vercel, import the repo with Root Directory = `frontend` and env
+  `BACKEND_URL` = the Space URL. See `deploy/DEPLOY.md`.

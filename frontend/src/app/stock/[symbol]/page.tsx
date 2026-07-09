@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { use, useEffect, useState } from "react";
 import { api, GexProfile, TickerSnapshot } from "@/lib/api";
+import GexStrikeChart from "@/components/charts/GexStrikeChart";
 
 export default function StockPage({
   params,
@@ -84,30 +85,36 @@ export default function StockPage({
             <h2 className="mb-3 text-sm font-medium text-muted">
               Net GEX by strike — {gex.expiration} (spot {gex.spot.toFixed(2)})
             </h2>
-            <div className="max-h-96 overflow-y-auto">
-              <table className="w-full text-sm">
-                <thead className="text-left text-xs text-muted">
-                  <tr>
-                    <th className="py-1">Strike</th>
-                    <th className="py-1 text-right">Net GEX</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {gex.profile.map((point) => (
-                    <tr key={point.strike} className="border-t border-border">
-                      <td className="py-1 font-mono">{point.strike.toFixed(1)}</td>
-                      <td
-                        className={`py-1 text-right font-mono ${
-                          point.net_gex >= 0 ? "text-positive" : "text-negative"
-                        }`}
-                      >
-                        {Math.round(point.net_gex).toLocaleString()}
-                      </td>
+            <GexStrikeChart profile={gex.profile} spot={gex.spot} />
+            <details className="mt-3 text-xs text-muted">
+              <summary className="cursor-pointer select-none hover:text-foreground">
+                Table view
+              </summary>
+              <div className="mt-2 max-h-72 overflow-y-auto">
+                <table className="w-full text-sm">
+                  <thead className="text-left text-xs text-muted">
+                    <tr>
+                      <th className="py-1">Strike</th>
+                      <th className="py-1 text-right">Net GEX</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {gex.profile.map((point) => (
+                      <tr key={point.strike} className="border-t border-border">
+                        <td className="py-1 font-mono">{point.strike.toFixed(1)}</td>
+                        <td
+                          className={`py-1 text-right font-mono ${
+                            point.net_gex >= 0 ? "text-positive" : "text-negative"
+                          }`}
+                        >
+                          {Math.round(point.net_gex).toLocaleString()}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
           </section>
 
           <section className="space-y-4">
