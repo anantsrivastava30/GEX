@@ -69,9 +69,31 @@ pytest
 
 CI (`.github/workflows/ci.yml`) runs the test suite on every push and pull request to `master`.
 
+## Daily Data Snapshots (own-data history)
+
+The project accumulates its own market history so that history-dependent
+features (IV rank, OI-change tracking, historical GEX, gamma-gap track record)
+don't require paid data APIs:
+
+```bash
+python -m quant_analysis.scripts.snapshot            # config.yaml watchlist
+python -m quant_analysis.scripts.snapshot --tickers SPY,QQQ --expirations 4
+```
+
+Each run writes per-contract chain snapshots to `data/snapshots/YYYY-MM-DD/{TICKER}.csv.gz`
+plus derived per-day metrics (ATM IV, put/call ratios, net GEX, gamma-gap score)
+to `data/snapshots/daily_metrics.csv`. `.github/workflows/snapshot.yml` runs this
+every weekday after the close and commits the results — add a `TRADIER_TOKEN`
+repository secret to enable it. Consumers live in `quant_analysis/storage/snapshots.py`
+(`compute_oi_change`, `compute_iv_rank`, `load_contract_history`).
+
 ## Roadmap
 
-See [docs/MONETIZATION_AND_EXPANSION_PLAN.md](docs/MONETIZATION_AND_EXPANSION_PLAN.md) for the product expansion and monetization strategy.
+The project is being rebuilt into an Unusual Whales–style platform (FastAPI +
+Next.js). See [docs/UW_PARITY_PLAN.md](docs/UW_PARITY_PLAN.md) for the
+architecture and phases, and [docs/PROGRESS.md](docs/PROGRESS.md) for
+cross-session progress tracking. The original monetization strategy is in
+[docs/MONETIZATION_AND_EXPANSION_PLAN.md](docs/MONETIZATION_AND_EXPANSION_PLAN.md).
 
 ## Disclaimer
 

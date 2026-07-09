@@ -45,3 +45,25 @@ news:
 database:
   sqlite_db: "ai_analysis.db"
   supabase_table: "ai_analysis"
+
+# Daily own-data history collection (see docs/UW_PARITY_PLAN.md).
+# Keep the universe small enough that one run stays inside Tradier's
+# rate limit: each ticker costs 2 + num_expirations requests.
+snapshots:
+  dir: "data/snapshots"
+  num_expirations: 4
+  strike_offset: 35
+  tickers:
+    - SPY
+    - QQQ
+    - IWM
+    - DIA
+    - AAPL
+    - MSFT
+    - NVDA
+    - TSLA
+    - AMZN
+    - GOOGL
+    - META
+    - AMD
+    - NFLX
