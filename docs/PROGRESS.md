@@ -26,7 +26,7 @@ session should pick up.
 ### Phase 1 — UW-style shell + port (look & feel milestone)
 - [x] P1.1 Backend skeleton: `backend/` FastAPI (config, deps w/ tenacity retry, `cache.py` TTL layer, `ratelimit.py` token bucket), routers `ticker` (snapshot/expirations/gex/skew/ratios), `market`, `news`, `flow` (unusual proxy), `history` (iv-rank/oi-change/metrics from our snapshots), pydantic schemas, TestClient tests w/ faked Tradier. *Still to add: `ai` router (port `render_ai_tab` pipeline), split exposure router when vanna/charm lands.*
 - [ ] P1.2 Scheduler jobs in backend (APScheduler) calling the same snapshot engine intraday (gamma-gap every 30 min)
-- [ ] P1.3 Frontend shell: Next.js + Tailwind + shadcn/ui, dark theme tokens, SidebarNav / TopBar / TickerSearch, typed API client, DataTable + chart wrappers (lightweight-charts candles, ECharts strike profiles)
+- [x] P1.3 Frontend shell: Next.js 16 + Tailwind v4 in `frontend/`, dark theme tokens (`globals.css`), `SidebarNav`/`TopBar` w/ ticker search, typed API client (`src/lib/api.ts`), `/api` rewrite to backend :8000. First pages live: `/market` (VIX/yields/futures), `/stock/[symbol]` (quote, expiration chips, net-GEX table, gamma-gap signal card, interpretation), `/news`, `/flow` placeholder. *Still to add: shadcn/ui + TanStack Table for dense tables, lightweight-charts + ECharts chart components (load the `dataviz` skill first), remaining pages.*
 - [ ] P1.4 Page ports (one PR each): `/market`, `/stock/[symbol]` (+`/gex`, `/vol`), `/news`, `/ai`, `/tools/binomial`, `/flow` (basic unusual-spikes table), `/calendar` (iframe parity); resurrect intraday delta-projection on `/gex`
 - [ ] P1.5 Legacy freeze: move `app.py` → `legacy/app.py`, `docker-compose.yml`, CI matrix (quant_analysis pytest + backend pytest + frontend build/Playwright), README update
 
@@ -67,11 +67,23 @@ session should pick up.
   Verified: 63 tests green, `uvicorn backend.app.main:app` boots, health +
   OpenAPI + graceful 404s confirmed live. CI installs backend deps.
 
+- Built the frontend shell (P1.3): Next.js 16 + Tailwind v4, dark UW-style
+  theme, sidebar nav + ticker search, `/market`, `/stock/[symbol]` (net-GEX
+  table + gamma-gap card + interpretation), `/news`, `/flow` placeholder.
+  Verified end-to-end: `npm run build` clean; `next start` + uvicorn smoke
+  test shows / → /market redirect, page render, and `/api` rewrite proxying
+  the backend.
+
 **Next up (Session 2):**
-1. P1.3 frontend shell scaffold (Next.js + Tailwind + shadcn/ui, dark tokens, SidebarNav/TopBar/TickerSearch, typed API client) — see route map in the plan.
-2. Port first pages against the live backend: `/market`, `/stock/[symbol]` + `/gex`.
+1. Charts: load the `dataviz` skill, then add lightweight-charts candles on `/stock/[symbol]` and an ECharts horizontal strike-profile chart replacing the net-GEX table; stat-tile components for VIX/quote metrics.
+2. Dense tables: TanStack Table wrapper; wire `/flow` to `/api/flow/unusual` with filter chips.
 3. Add `ai` router to the backend (port `services/ai_analysis.py` pipeline off Streamlit).
-4. Merge this branch early so the snapshot cron starts accruing history on `master` — every unmerged day is lost data.
+4. P1.2 APScheduler jobs in the backend (intraday gamma-gap scoring reusing the snapshot engine).
+5. Merge this branch early so the snapshot cron starts accruing history on `master` — every unmerged day is lost data.
+
+**Dev run (current state):**
+- Backend: `uvicorn backend.app.main:app --reload --port 8000` (needs `TRADIER_TOKEN` env for live data; degrades gracefully without).
+- Frontend: `cd frontend && npm install && npm run dev` → http://localhost:3000.
 
 **Open items for the human:**
 - Add `TRADIER_TOKEN` as a GitHub Actions repo secret (Settings → Secrets → Actions) so the daily snapshot cron can run.
