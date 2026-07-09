@@ -395,6 +395,40 @@ def get_vix_info():
         "5d_return": float(ret_5d)
     }
 
+def get_price_stats(ticker, token, days=30):
+    """Return recent returns and RSI(14) for a ticker from daily history."""
+
+    api = TradierAPI(token, API_URL)
+    today = datetime.utcnow().date()
+    start = today - timedelta(days=days)
+    hist = api.history(ticker, interval="daily", start=start.isoformat(), end=today.isoformat())
+    df_hist = pd.DataFrame(hist)
+    if df_hist.empty or "close" not in df_hist.columns:
+        return {}
+
+    closes = (
+        df_hist.assign(date=pd.to_datetime(df_hist["date"]))
+        .sort_values("date")["close"]
+        .astype(float)
+        .reset_index(drop=True)
+    )
+
+    stats = {}
+    if len(closes) >= 2:
+        stats["return_1d_pct"] = float((closes.iloc[-1] / closes.iloc[-2] - 1) * 100)
+    if len(closes) >= 6:
+        stats["return_5d_pct"] = float((closes.iloc[-1] / closes.iloc[-6] - 1) * 100)
+    if len(closes) >= 15:
+        delta = closes.diff()
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        rs = gain.rolling(14).mean() / loss.rolling(14).mean()
+        rsi = 100 - (100 / (1 + rs))
+        if pd.notna(rsi.iloc[-1]):
+            stats["rsi14"] = float(rsi.iloc[-1])
+    return stats
+
+
 def get_market_snapshot(tradier_token, ticker, expirations, offset=20):
     api = TradierAPI(tradier_token, API_URL)
 

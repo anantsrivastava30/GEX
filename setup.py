@@ -3,15 +3,23 @@ from setuptools import setup, find_packages
 setup(
     name="quant_analysis",
     version="0.1.0",
-    packages=find_packages(),
+    packages=find_packages(exclude=["tests", "tests.*"]),
+    python_requires=">=3.10",
     install_requires=[
         "requests",
         "openai",
         "tiktoken",
         "streamlit",
         "pandas",
+        "numpy",
+        "plotly",
+        "matplotlib",
+        "seaborn",
+        "yfinance",
+        "feedparser",
         "supabase",
-        "pyyaml",
+        "PyYAML",
+        "tabulate",
     ],
     entry_points={
         "console_scripts": [

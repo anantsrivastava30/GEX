@@ -1,8 +1,11 @@
+import json
 import os
 import textwrap
-from html import escape
-from typing import Dict, List, Optional, Sequence, Tuple
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+from zoneinfo import ZoneInfo
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 import tiktoken
@@ -10,14 +13,15 @@ from openai import OpenAI
 
 from quant_analysis.config import CONFIG
 from quant_analysis.services.market_data import (
-    augment_payload_with_extras,
-    get_market_snapshot,
+    compute_unusual_spikes,
+    get_bond_yield_info,
+    get_price_stats,
+    get_vix_info,
 )
-from quant_analysis.storage.db import get_total_token_usage, save_analysis
+from quant_analysis.storage.db import load_analyses, save_analysis
 
 
-# New helper functions for modularized markdown building
-
+# ── Credentials ─────────────────────────────────────────────────────────────
 
 def _resolve_secret(*names):
     for name in names:
@@ -54,6 +58,17 @@ def resolve_openai_credentials() -> Dict[str, Optional[str]]:
         "project": project,
     }
 
+
+def _client_from_creds(creds: Dict[str, Optional[str]]) -> OpenAI:
+    client_kwargs = {"api_key": creds.get("api_key")}
+    if creds.get("organization"):
+        client_kwargs["organization"] = creds["organization"]
+    if creds.get("project"):
+        client_kwargs["project"] = creds["project"]
+    return OpenAI(**client_kwargs)
+
+
+# ── Model discovery (opt-in, shown in a collapsed expander) ─────────────────
 
 def _is_model_excluded(model_id: str) -> bool:
     """Return True when the model clearly does not support text advice."""
@@ -94,17 +109,6 @@ def _score_model(model_id: str) -> Tuple[float, List[str]]:
             score += weight
             reasons.append(reason)
 
-    finance_rules = [
-        ("finance", 3, "Finance-tuned variant"),
-        ("market", 2, "Market or trading focused naming"),
-        ("analysis", 1, "Optimised for analytical tasks"),
-        ("research", 1, "Research oriented variant"),
-    ]
-    for token, weight, reason in finance_rules:
-        if token in lowered:
-            score += weight
-            reasons.append(reason)
-
     if "mini" in lowered:
         score -= 1
         reasons.append("Cost-efficient mini tier")
@@ -118,556 +122,31 @@ def _score_model(model_id: str) -> Tuple[float, List[str]]:
 def discover_financial_models(creds: Dict[str, Optional[str]]) -> Tuple[List[Dict[str, object]], Optional[str]]:
     """Return OpenAI models ranked for financial analysis tasks."""
 
-    api_key = creds.get("api_key") if isinstance(creds, dict) else None
-    if not api_key:
+    if not (isinstance(creds, dict) and creds.get("api_key")):
         return [], "Missing API key"
 
-    client_kwargs = {"api_key": api_key}
-    organization = creds.get("organization") if isinstance(creds, dict) else None
-    project = creds.get("project") if isinstance(creds, dict) else None
-    if organization:
-        client_kwargs["organization"] = organization
-    if project:
-        client_kwargs["project"] = project
-
     try:
-        client = OpenAI(**client_kwargs)
-        response = client.models.list()
+        response = _client_from_creds(creds).models.list()
     except Exception as exc:
         return [], str(exc)
 
     models: List[Dict[str, object]] = []
     for item in getattr(response, "data", []):
         model_id = getattr(item, "id", None)
-        if not model_id:
-            continue
-        if _is_model_excluded(model_id):
+        if not model_id or _is_model_excluded(model_id):
             continue
         score, reasons = _score_model(model_id)
-        models.append(
-            {
-                "id": model_id,
-                "score": score,
-                "reasons": reasons,
-            }
-        )
+        models.append({"id": model_id, "score": score, "reasons": reasons})
 
     models.sort(key=lambda entry: (entry["score"], entry["id"]), reverse=True)
     return models, None
 
-def build_header(payload):
-    m = []
-    m.append(f"**Snapshot Date:** {payload['payload_date']}  ")
-    m.append(f"**Timestamp (UTC):** {payload['timestamp']}  ")
-    m.append(f"**Spot Price:** {payload['spot']:.2f}  ")
-    m.append("")
-    return m
 
-def build_returns_section(payload):
-    m = []
-    returns = payload.get("returns", {})
-    if returns:
-        m.append("### Returns")
-        m.append("| Period | Return (%) |")
-        m.append("|---|---:|")
-        for period, pct in returns.items():
-            m.append(f"| {period} | {pct:.2f} |")
-        m.append("")
-    return m
-
-def build_technical_section(payload):
-    m = []
-    m.append("### Technical Indicators")
-    tech = payload.get("technical", {})
-    for name, val in tech.items():
-        m.append(f"- **{name}**: {val:.2f}")
-    m.append("")
-    return m
-
-def build_vix_section(payload):
-    m = []
-    m.append("### VIX (CBOE Volatility Index)")
-    vix = payload.get("vix", {})
-    if vix:
-        m.append(f"- **Spot**: {vix['spot']:.2f}")
-        m.append(f"- **1-Day Return**: {vix['1d_return']:.2f}%")
-        m.append(f"- **5-Day Return**: {vix['5d_return']:.2f}%")
-        m.append("")
-    return m
-
-def build_iv_skew_section(payload):
-    m = []
-    iv_skew = payload.get("iv_skew", [])
-    if iv_skew:
-        m.append("### IV Skew by Strike")
-        df_skew = pd.DataFrame(iv_skew)
-        m.append(df_skew.to_markdown(index=False))
-        m.append("")
-    return m
-
-def build_greek_exposures_section(payload):
-    m = []
-    m.append("### Greek Exposures (±10 strikes around spot)")
-    for greek, recs in payload.get("greek_exposures", {}).items():
-        m.append(f"#### {greek}")
-        dfg = pd.DataFrame(recs)
-        m.append(dfg.to_markdown(index=False))
-        m.append("")
-    return m
-
-def build_vol_spikes_section(payload):
-    m = []
-    spikes = payload.get("vol_oi_spikes", [])
-    if spikes:
-        m.append("### Top Volume/OI Spikes by Strike")
-        df_sp = pd.DataFrame(spikes)
-        m.append(df_sp.to_markdown(index=False))
-        m.append("")
-    return m
-
-def build_events_section(payload):
-    m = []
-    events = payload.get("events", [])
-    if events:
-        m.append("### Upcoming Events")
-        for ev in events:
-            m.append(f"- **{ev['name']}**: {ev['date']}")
-        m.append("")
-    return m
-
-def build_extended_snapshot_section(payload, ticker, exp, offset):
-    # Augment payload with extras
-    payload = augment_payload_with_extras(payload, st.secrets["TRADIER_TOKEN"], ticker, exp, offset, payload['spot'])
-    user_md = f"""
-    ## Market Snapshot (extended)
-
-    **Spot:** {payload['spot']:.2f}  
-    **1-Day Return:** {payload['returns']['1d']:.2f}%  
-    **RSI14:** {payload['technical']['RSI14']:.2f}  
-
-    **Risk Reversal (25Δ):** {payload['risk_reversal_25']:.2f}  
-    **Butterfly Skew:** {payload['butterfly_skew']:.2f}  
-    **Avg Bid-Ask Spread:** {payload['avg_bid_ask_spread']*100:.2f}%  
-    """
-    return [user_md]
-
-def build_headlines_section(payload):
-    m = []
-    headlines = payload.get("headlines", [])
-    if headlines:
-        m.append("### Recent Headlines")
-        for art in headlines:
-            title = art.get("title", art)
-            src   = art.get("source", "")
-            date  = art.get("date", "")
-            line = f"- {date} {title}"
-            if src:
-                line += f" _(via {src})_"
-            m.append(line)
-        m.append("")
-    return m
-
-def build_treasury_section(payload):
-    md = []
-    # … prior sections …
-
-    # Bond Yields
-    md.append("### Key Treasury Yields")
-    for key, info in payload.get("bond_yields", {}).items():
-        md.append(
-            f"- **{key.upper()}** ({info['symbol']}): {info['spot']:.2f}%  "
-            f"1d: {info['1d_return']:.2f}%, 5d: {info['5d_return']:.2f}%"
-        )
-    md.append("")
-    return md
-
-# Updated modularized payload_to_markdown function
-def payload_to_markdown(payload, ticker=None, exp=None, offset=None):
-    """
-    Convert the market‐snapshot payload into Markdown using modular helper functions.
-    """
-    md = []
-    md.extend(build_header(payload))
-    md.extend(build_returns_section(payload))
-    md.extend(build_technical_section(payload))
-    md.extend(build_greek_exposures_section(payload))
-    md.extend(build_vix_section(payload))
-    md.extend(build_treasury_section(payload))
-    md.extend(build_iv_skew_section(payload))
-    md.extend(build_vol_spikes_section(payload))
-    md.extend(build_events_section(payload))
-    if ticker is not None and exp is not None and offset is not None:
-        md.extend(build_extended_snapshot_section(payload, ticker, exp, offset))
-    md.extend(build_headlines_section(payload))
-    return "\n".join(md)
-
-# New helper function to build the data packet (prompt messages)
-def create_data_packet(ticker, overview_summary, pos_summary, iv_summary, ratios_summary, news_summary, snap_summary, open_interest_summary=None, vol_oi_spikes=None):
-    system_msg = {
-        "role": "system",
-        "content": (
-            "You are an experienced volatility and macro strategist. "
-            "Combine dealer positioning, volatility structure, and broad market context "
-            "to craft actionable option trade ideas."
-        ),
-    }
-    user_msg = {
-        "role": "user",
-        "content": textwrap.dedent(
-            f"""
-            Ticker: {ticker}
-            Overview Metrics: {overview_summary}
-            Positioning data gamma and delta exposure:
-            {pos_summary}
-            IV Skew: {iv_summary}
-            Ratios: {ratios_summary}
-            Open Interest (by strike): {open_interest_summary}
-            Top Vol/OI Spikes: {vol_oi_spikes}
-            News Headlines: {news_summary}
-            Snapshot Summary: {snap_summary}
-
-            Please:
-            - Summarise expected dealer hedging behaviour and current positioning drivers.
-            - Discuss the state of overall market health/regime before recommending trades.
-            - Only recommend structures where I buy calls or puts (no spreads, straddles, or other multi-leg trades).
-            - Deliver concrete ideas for three horizons: 1-2 weeks, 1-2 months, and 6-12 months (0.5-1 year).
-            - Explicitly link every idea to broader market health or macro positioning context.
-            - Reference data beyond the stated horizons when it materially improves risk context.
-            - Provide a trade confidence score (1-100) for each recommendation.
-            - Identify max-pain, key supports, and resistances.
-            """
-        ).strip(),
-    }
-    return {"messages": [system_msg, user_msg]}
-
-# Helper function to estimate token count
-def estimate_token_count(data_packet, model_name):
-    tokens = None
-    try:
-        enc = tiktoken.encoding_for_model(model_name)
-    except Exception:
-        enc = tiktoken.get_encoding("cl100k_base")
-
-    try:
-        tokens = sum(len(enc.encode(m["content"])) for m in data_packet["messages"])
-        st.write(f"Estimated prompt tokens for `{model_name}`: **{tokens}**")
-    except Exception as e:
-        print(f"Token estimation error: {e}")
-        tokens = None
-
-    return tokens
-
-
-
-# Helper function to call OpenAI API and return response analysis
-def dummy_response_decorator(func):
-    def wrapper(*args, **kwargs):
-        # Return a dummy response without querying the API
-        return """
-        
-        Dealer Gamma/Delta Hedging Summary v2
-
-        Around spot (≈592.8) dealers are net long gamma (net positive GEX from roughly 585-600 strikes). That means:
-        • On an uptick they will be selling futures/ETF to stay hedged (‐ve delta adjustments).
-        • On a downtick they will be buying futures/ETF to stay hedged (+ve delta adjustments).
-        → In practice this creates a mean-reversion pinning effect in the 590-595 zone during the day.
-        Beyond roughly ±10 points (~<582 or >602), dealers become net short gamma, so rapid moves beyond those levels tend to accelerate (sharp breakouts or breakdowns).
-
-        Max-Pain and Key Option Barriers
-
-        Max-Pain ≈592-593 (highest combined OI on calls and puts, and volume spikes).
-        Resistance: 595 (very heavy call gamma/oi), then 600 (clustered call strikes).
-        Support: 590 (put gamma/oi concentration), then 585 (next big put block around 580-585).
-
-        Suggested Trades (you can only buy calls or puts)
-
-        A. Intraday (0-DTE)
-        Trade: Buy SPY May 21 expiration 590 put (nearest strike)
-        Rationale: Overbought RSI, dealers long gamma will buy into any dip toward 590; if you hit 590 quickly you get favorable dealer gamma squeeze.
-        Size: small, due to high theta.
-        Confidence: 50/100
-
-        B. Short-Term (Weekly expiry May 23)
-        Trade: Buy SPY May 23 590 put
-        Rationale: Dealers’ positive gamma pegs 592-595, so a drop back into that area will squeeze front-week vols higher. Vega is still relatively low (≈15% on ATM), so buying puts gets vol kicker if realized vol ticks up.
-        Confidence: 65/100
-
-        C. Swing (2-4 weeks)
-        Trade: Buy SPY June 20 580 put
-        Rationale: A broader pullback into the strong put-gamma wall at 585-580 will accelerate if the fence breaks. Gives time for any Fed/rate headlines to drag SPY lower.
-        Confidence: 55/100
-
-        D. Optional Bull-Breakout (Weekly expiry May 23)
-        Trade: Buy SPY May 23 600 call
-        Rationale: If SPY breaks >595 (dealer pin), gamma flips short above ~600, fueling a squeeze. A small runner if you see a sustained break.
-        Confidence: 40/100
-
-        Positioning Risk & Execution Notes
-
-        Keep very tight stops on 0DTE (large theta burn).
-        For weekly/swing, size for a 1-2% move; your breakeven is vol-driven.
-        Watch printed dealer hedges: quick take-profits if you see futures selling into your move (tells you dealers are hedging).
-
-        Support/Resistance Levels Recap
-
-        Near-term support: 590, then 585
-        Near-term resistance: 595, then 600
-
-        Final Comment
-        Dealers’ long gamma in the 590-595 zone will work against trend extensions within that band, so your best odds come from trades that either fade rallies into 595 or catch a breakdown through 590-585.
-
-        """
-    return wrapper
-
-# @dummy_response_decorator
-def call_openai_api(data_packet, creds, model_name: str):
-    api_key = creds.get("api_key") if isinstance(creds, dict) else None
-    if not api_key:
-        raise ValueError("OpenAI API key is missing; cannot send request.")
-
-    client_kwargs = {"api_key": api_key}
-    organization = creds.get("organization") if isinstance(creds, dict) else None
-    project = creds.get("project") if isinstance(creds, dict) else None
-    if organization:
-        client_kwargs["organization"] = organization
-    if project:
-        client_kwargs["project"] = project
-
-    client = OpenAI(**client_kwargs)
-    st.write("Model used:", model_name)
-    try:
-        completion = client.chat.completions.create(
-            model=model_name,
-            messages=data_packet["messages"],
-        )
-        return completion.choices[0].message.content
-    except Exception as e:
-        print(f"OpenAI API error: {e}")
-        return None
-
-# Refactored openai_query function
-def _build_ai_form_key(label: str, ticker: str, exp: Optional[Sequence[str]]) -> str:
-    exp_fragment = "-".join(exp) if isinstance(exp, (list, tuple)) else (str(exp) if exp else "")
-    return f"{label}_{ticker}_{exp_fragment}" if exp_fragment else f"{label}_{ticker}"
-
-
-def _render_model_discovery_table(models: Sequence[Dict[str, object]]) -> str:
-    """Return HTML for a stylised model discovery table."""
-
-    table_style = """
-    <style>
-        .model-discovery-card {
-            margin-top: 0.85rem;
-            border-radius: 18px;
-            padding: 1rem 1.25rem 0.75rem;
-            background: rgba(15, 23, 42, 0.6);
-            border: 1px solid rgba(148, 163, 184, 0.22);
-            box-shadow: 0 20px 42px rgba(2, 6, 23, 0.42);
-        }
-
-        .model-discovery-card__table {
-            max-height: 320px;
-            overflow-y: auto;
-            margin: 0 -0.5rem;
-            padding: 0 0.5rem;
-        }
-
-        .model-discovery-card__table::-webkit-scrollbar {
-            width: 6px;
-        }
-
-        .model-discovery-card__table::-webkit-scrollbar-thumb {
-            background: rgba(148, 163, 184, 0.35);
-            border-radius: 999px;
-        }
-
-        .model-discovery-card table {
-            width: 100%;
-            border-collapse: collapse;
-            min-width: 100%;
-        }
-
-        .model-discovery-card thead th {
-            position: sticky;
-            top: 0;
-            text-transform: uppercase;
-            font-size: 0.72rem;
-            letter-spacing: 0.08em;
-            color: #a5b4fc;
-            padding: 0.65rem 0.75rem;
-            text-align: left;
-            border-bottom: 1px solid rgba(148, 163, 184, 0.18);
-            background: rgba(15, 23, 42, 0.96);
-            backdrop-filter: blur(6px);
-        }
-
-        .model-discovery-card tbody td {
-            padding: 0.85rem 0.75rem;
-            font-size: 0.92rem;
-            color: #e2e8f0;
-            border-bottom: 1px solid rgba(148, 163, 184, 0.12);
-        }
-
-        .model-discovery-card tbody tr:last-child td {
-            border-bottom: none;
-        }
-
-        .model-discovery-card__table::-webkit-scrollbar-track {
-            background: transparent;
-        }
-
-        .model-discovery-card .model-rank {
-            width: 3.25rem;
-            font-weight: 600;
-            color: #94a3b8;
-        }
-
-        .model-discovery-card .model-id {
-            font-family: "JetBrains Mono", "Fira Code", "SFMono-Regular", monospace;
-            font-size: 0.95rem;
-            font-weight: 600;
-        }
-
-        .model-discovery-card .model-score {
-            font-weight: 600;
-            color: #38bdf8;
-        }
-
-        .model-discovery-card .model-strengths {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.35rem;
-        }
-
-        .model-discovery-card .model-strength {
-            display: inline-flex;
-            align-items: center;
-            padding: 0.2rem 0.55rem;
-            border-radius: 999px;
-            background: rgba(59, 130, 246, 0.18);
-            border: 1px solid rgba(96, 165, 250, 0.35);
-            font-size: 0.75rem;
-            color: #bfdbfe;
-            white-space: nowrap;
-        }
-
-        .model-discovery-card tr.model-row--top td {
-            position: relative;
-            background: linear-gradient(135deg, rgba(56, 189, 248, 0.18), rgba(14, 165, 233, 0.12));
-            border-bottom-color: rgba(56, 189, 248, 0.26);
-        }
-
-        .model-discovery-card tr.model-row--top td:first-child {
-            border-top-left-radius: 12px;
-        }
-
-        .model-discovery-card tr.model-row--top td:last-child {
-            border-top-right-radius: 12px;
-        }
-
-        @media (max-width: 768px) {
-            .model-discovery-card table,
-            .model-discovery-card tbody,
-            .model-discovery-card tr,
-            .model-discovery-card td,
-            .model-discovery-card thead {
-                display: block;
-            }
-
-            .model-discovery-card thead {
-                display: none;
-            }
-
-            .model-discovery-card__table {
-                max-height: none;
-                margin: 0;
-                padding: 0;
-            }
-
-            .model-discovery-card tbody td {
-                border-bottom: none;
-                padding: 0.45rem 0;
-            }
-
-            .model-discovery-card tbody tr {
-                padding: 0.65rem 0;
-                border-bottom: 1px solid rgba(148, 163, 184, 0.12);
-            }
-
-            .model-discovery-card .model-strengths {
-                margin-top: 0.4rem;
-            }
-        }
-    </style>
-    """
-
-    row_template = (
-        "<tr class=\"{row_class}\">\n"
-        "  <td class=\"model-rank\">#{rank:02d}</td>\n"
-        "  <td class=\"model-id\">{model_id}</td>\n"
-        "  <td class=\"model-score\">{score}</td>\n"
-        "  <td>\n"
-        "    <div class=\"model-strengths\">{strengths}</div>\n"
-        "  </td>\n"
-        "</tr>"
-    )
-
-    rows_html: List[str] = []
-    for index, entry in enumerate(models, start=1):
-        model_id = escape(str(entry.get("id", "")))
-        raw_score = entry.get("score", "")
-        if isinstance(raw_score, (int, float)):
-            score = f"{raw_score:.1f}"
-        else:
-            score = escape(str(raw_score))
-
-        reasons = entry.get("reasons") or []
-        badges = "".join(
-            f'<span class="model-strength">{escape(str(reason))}</span>'
-            for reason in reasons
-        )
-
-        row_class = "model-row model-row--top" if index == 1 else "model-row"
-        if not badges:
-            badges = '<span class="model-strength">General purpose</span>'
-
-        rows_html.append(
-            row_template.format(
-                row_class=row_class,
-                rank=index,
-                model_id=model_id,
-                score=score,
-                strengths=badges,
-            )
-        )
-
-    rows_markup = "\n".join(rows_html)
-    rows_section = f"{rows_markup}\n" if rows_markup else ""
-    table_html = (
-        "<div class=\"model-discovery-card\">\n"
-        "<div class=\"model-discovery-card__table\">\n"
-        "<table>\n"
-        "<thead>\n"
-        "<tr>\n"
-        "<th>Rank</th>\n"
-        "<th>Model</th>\n"
-        "<th>Score</th>\n"
-        "<th>Highlights</th>\n"
-        "</tr>\n"
-        "</thead>\n"
-        "<tbody>\n"
-        f"{rows_section}"
-        "</tbody>\n"
-        "</table>\n"
-        "</div>\n"
-        "</div>"
-    )
-
-    return textwrap.dedent(table_style) + table_html
+CURATED_MODELS = ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "o4-mini"]
 
 
 def render_model_selection(ticker: str, exp, creds: Optional[Dict[str, Optional[str]]] = None):
-    """Render model discovery and selection UI, returning creds and chosen model."""
+    """Render a compact model picker, returning creds and the chosen model."""
 
     openai_creds = creds or resolve_openai_credentials()
     api_key = openai_creds.get("api_key") if isinstance(openai_creds, dict) else None
@@ -675,191 +154,533 @@ def render_model_selection(ticker: str, exp, creds: Optional[Dict[str, Optional[
         st.error("OpenAI API key is not configured.")
         return openai_creds, None
 
-    st.subheader("Model Discovery")
-    models, discovery_error = discover_financial_models(openai_creds)
-    if discovery_error:
-        st.warning(
-            "Unable to enumerate OpenAI models automatically — falling back to configured defaults.\n"
-            f"Details: {discovery_error}"
+    configured = CONFIG.get("openai", {}).get("model")
+    options: List[str] = []
+    for model_id in [configured, *CURATED_MODELS]:
+        if model_id and model_id not in options:
+            options.append(model_id)
+
+    previous = st.session_state.get("ai_selected_model")
+    if previous and previous not in options:
+        options.append(previous)
+
+    default_index = options.index(previous) if previous in options else 0
+    chosen_model = st.selectbox("Model", options, index=default_index)
+
+    with st.expander("Advanced: browse account models or use a custom ID"):
+        custom_model = st.text_input(
+            "Custom model ID",
+            key="ai_custom_model",
+            help="Overrides the dropdown selection when set.",
         )
+        if st.button("List models available on this account"):
+            models, discovery_error = discover_financial_models(openai_creds)
+            if discovery_error:
+                st.warning(f"Could not list models: {discovery_error}")
+            st.session_state["ai_model_catalog"] = models
+        catalog = st.session_state.get("ai_model_catalog")
+        if catalog:
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "Model": entry["id"],
+                            "Score": entry["score"],
+                            "Highlights": ", ".join(map(str, entry["reasons"])),
+                        }
+                        for entry in catalog
+                    ]
+                ),
+                use_container_width=True,
+                hide_index=True,
+                height=240,
+            )
 
-    if models:
-        st.markdown(_render_model_discovery_table(models), unsafe_allow_html=True)
-    else:
-        st.info(
-            "Using fallback model suggestions because no suitable models were returned."
-        )
+    custom_model = (st.session_state.get("ai_custom_model") or "").strip()
+    if custom_model:
+        chosen_model = custom_model
 
-    candidate_ids = [entry["id"] for entry in models] if models else []
-    fallback_pool = [
-        CONFIG.get("openai", {}).get("model", "gpt-4o"),
-        "gpt-4o-mini",
-        "gpt-4.1",
-        "o4-mini",
-    ]
-    options = candidate_ids or fallback_pool
-    seen = set()
-    unique_options = []
-    for model_id in options:
-        if model_id and model_id not in seen:
-            seen.add(model_id)
-            unique_options.append(model_id)
-
-    if not unique_options:
-        st.error("No OpenAI models are available to select.")
-        return openai_creds, None
-
-    default_model = st.session_state.get(
-        "ai_selected_model",
-        CONFIG.get("openai", {}).get("model", unique_options[0]),
-    )
-    if default_model not in unique_options:
-        default_model = unique_options[0]
-
-    selection_key = _build_ai_form_key("ai_model_select", ticker, exp)
-    if selection_key not in st.session_state:
-        st.session_state[selection_key] = default_model
-
-    chosen_model = st.selectbox(
-        "Select an OpenAI model for the financial analysis",
-        unique_options,
-        key=selection_key,
-    )
     st.session_state["ai_selected_model"] = chosen_model
-    st.caption(
-        "Models are ranked heuristically based on reasoning strength, finance-focused naming, and cost tier."
-    )
-
+    st.caption(f"Requests will use `{chosen_model}`.")
     return openai_creds, chosen_model
 
 
-def openai_query(
-    df_net,
-    iv_skew_df,
-    vol_ratio,
-    oi_ratio,
-    articles,
-    spot,
-    offset,
-    ticker,
-    exp,
-    selected_model,
-    openai_creds,
-):
-    api_key = openai_creds.get("api_key") if isinstance(openai_creds, dict) else None
-    if not api_key:
-        st.error("OpenAI API key is not configured.")
-        return
+# ── Compact analysis payload ────────────────────────────────────────────────
 
-    if not selected_model:
-        st.error("Select an OpenAI model before preparing the analysis.")
-        return
-
-    st.markdown(f"**Using model:** `{selected_model}`")
-
-    if not df_net.empty:
-        df_net = df_net[(df_net['strike'] >= spot-offset) & (df_net['strike'] <= spot+offset)]
-        # Select only columns displayed in the chart
-        pos_df = df_net[['strike','DTE','option_type','GammaExposure', 'DeltaExposure']]
-        pos_summary = pos_df.to_markdown(index=False)
-    else:
-        pos_summary = "No positioning data"
-        
-    overview_summary = f"Net GEX (±{offset} around {spot:.1f}):"
-    iv_summary = iv_skew_df.to_markdown(index=False) if 'iv_skew_df' in locals() else ""
-    ratios_summary = f"Put/Call Vol Ratio: {vol_ratio:.2f}, OI Ratio: {oi_ratio:.2f}"
-    headlines = []
-    # reuse articles list from tab3
+def _round(value, ndigits: int = 3):
     try:
-        for art in articles[:15]:
-            headlines.append(f"- {art['date'][:10]}: {art['title']}")
-    except:
-        pass
-    news_summary = "\n".join(headlines)
-    
-    snapshot = get_market_snapshot(
-        tradier_token=st.secrets["TRADIER_TOKEN"],
-        ticker=ticker,
-        expirations=exp,
-        offset=offset
-    )
-    snap_summary = payload_to_markdown(snapshot)
-    
-    # Build a simple open interest summary: top N strikes with put/call OI
-    oi_summary = None
-    try:
-        spikes = snapshot.get('vol_oi_spikes', []) if isinstance(snapshot, dict) else []
-        if spikes:
-            lines = []
-            for s in spikes[:10]:
-                strike = s.get('strike')
-                poi = s.get('open_interest_put', 0)
-                coi = s.get('open_interest_call', 0)
-                lines.append(f"{strike}: put_OI={int(poi)}, call_OI={int(coi)}")
-            oi_summary = "; ".join(lines)
-    except Exception:
-        oi_summary = None
+        return round(float(value), ndigits)
+    except (TypeError, ValueError):
+        return None
 
-    data_packet = create_data_packet(
-        ticker,
-        overview_summary,
-        pos_summary,
-        iv_summary,
-        ratios_summary,
-        news_summary,
-        snap_summary,
-        open_interest_summary=oi_summary,
-        vol_oi_spikes=snapshot.get('vol_oi_spikes') if isinstance(snapshot, dict) else None,
-    )
-    st.subheader("Data Packet JSON")
-    st.json(data_packet)
 
-    tokens = estimate_token_count(data_packet, selected_model)
+def _summarise_positioning(df: Optional[pd.DataFrame], spot: float, top_n: int = 8) -> Dict[str, Any]:
+    """Reduce the per-contract chain to the strike levels a model actually needs."""
 
-    st.info("Review the prepared data packet and estimated usage before proceeding.")
+    if df is None or df.empty or "strike" not in df.columns:
+        return {}
 
-    form_key = _build_ai_form_key("ai_confirmation", ticker, exp)
-    with st.form(form_key):
-        proceed = st.checkbox("I have reviewed the packet and wish to proceed with the OpenAI request.")
-        pin_entry = st.text_input("Enter security PIN", type="password")
-        submitted = st.form_submit_button("Send to OpenAI")
+    work = df.copy()
+    for col in ("GammaExposure", "DeltaExposure", "open_interest", "volume"):
+        if col not in work.columns:
+            work[col] = 0.0
+        work[col] = work[col].fillna(0.0)
 
-    if not submitted:
-        st.info("Submit the confirmation form to continue or adjust the inputs above.")
-        return
+    net_gamma = work.groupby("strike")["GammaExposure"].sum().sort_index()
+    summary: Dict[str, Any] = {
+        "net_gamma_exposure_total_m": _round(net_gamma.sum() / 1e6),
+        "net_delta_exposure_total_m": _round(work["DeltaExposure"].sum() / 1e6),
+    }
 
-    if not proceed:
-        st.warning("Confirmation required before the request can be sent.")
-        return
+    if not net_gamma.empty:
+        summary["magnet_strike"] = _round(net_gamma.idxmax(), 2)
+        summary["magnet_gamma_m"] = _round(net_gamma.max() / 1e6)
+        summary["most_negative_gamma_strike"] = _round(net_gamma.idxmin(), 2)
 
-    pin_expected = st.secrets.get("AI_PIN")
-    if not pin_expected:
-        st.error("AI_PIN secret is not configured. Set it in Streamlit secrets to continue.")
-        return
+        top = net_gamma.reindex(
+            net_gamma.abs().sort_values(ascending=False).index[:top_n]
+        ).sort_index()
+        summary["net_gamma_by_strike_m"] = {
+            f"{strike:g}": _round(value / 1e6) for strike, value in top.items()
+        }
 
-    if pin_entry != str(pin_expected):
-        st.error("❌ Incorrect PIN, try again.")
-        return
+        nonzero = net_gamma[net_gamma != 0]
+        strikes = nonzero.index.tolist()
+        values = nonzero.values
+        flips = [
+            [_round(strikes[i - 1], 2), _round(strikes[i], 2)]
+            for i in range(1, len(values))
+            if values[i - 1] * values[i] < 0
+        ]
+        summary["gamma_flip_zones"] = flips
 
-    st.markdown(f"**Selected model:** `{selected_model}`")
+    if "option_type" in work.columns:
+        for side in ("call", "put"):
+            side_gamma = (
+                work[work["option_type"] == side]
+                .groupby("strike")["GammaExposure"]
+                .sum()
+                .abs()
+            )
+            if not side_gamma.empty:
+                summary[f"{side}_gamma_peak"] = {
+                    "strike": _round(side_gamma.idxmax(), 2),
+                    "abs_gamma_m": _round(side_gamma.max() / 1e6),
+                }
 
-    st.success("PIN accepted — running AI…")
-    try:
-        analysis = call_openai_api(data_packet, openai_creds, selected_model)
-    except ValueError as exc:
-        st.error(str(exc))
-        return
-    if analysis:
-        st.markdown(f"### AI Trade Analysis\n{analysis}")
-        save_analysis(
-            ticker=ticker,
-            expirations=exp,  # replaced selected_exps with exp
-            payload=snapshot,
-            response=analysis,  # replaced response variable with analysis
-            token_count=tokens or 0,
+        oi = (
+            work.pivot_table(
+                index="strike", columns="option_type", values="open_interest", aggfunc="sum"
+            )
+            .fillna(0)
         )
-        st.success("✅ Analysis saved.")
-        st.session_state.want_ai = False
+        if not oi.empty:
+            oi["total"] = oi.sum(axis=1)
+            summary["top_open_interest_strikes"] = [
+                {
+                    "strike": _round(strike, 2),
+                    "call_oi": int(row.get("call", 0)),
+                    "put_oi": int(row.get("put", 0)),
+                }
+                for strike, row in oi.sort_values("total", ascending=False).head(5).iterrows()
+            ]
+
+    return summary
+
+
+def _summarise_iv_skew(iv_skew_df: Optional[pd.DataFrame], spot: float) -> Dict[str, Any]:
+    if iv_skew_df is None or iv_skew_df.empty:
+        return {}
+
+    skew_col = "IV Skew" if "IV Skew" in iv_skew_df.columns else "iv_skew"
+    if skew_col not in iv_skew_df.columns or "strike" not in iv_skew_df.columns:
+        return {}
+
+    work = iv_skew_df.dropna(subset=["strike", skew_col])
+    if work.empty:
+        return {}
+
+    atm = work.loc[(work["strike"] - spot).abs().idxmin()]
+    peak = work.loc[work[skew_col].idxmax()]
+    trough = work.loc[work[skew_col].idxmin()]
+
+    summary = {
+        "atm_strike": _round(atm["strike"], 2),
+        "atm_skew": _round(atm[skew_col], 4),
+        "peak_skew": {"strike": _round(peak["strike"], 2), "skew": _round(peak[skew_col], 4)},
+        "trough_skew": {"strike": _round(trough["strike"], 2), "skew": _round(trough[skew_col], 4)},
+    }
+    if "iv_call" in work.columns and "iv_put" in work.columns:
+        summary["atm_call_iv"] = _round(atm.get("iv_call"), 4)
+        summary["atm_put_iv"] = _round(atm.get("iv_put"), 4)
+    if len(work) >= 2:
+        slope = np.polyfit(work["strike"].astype(float), work[skew_col].astype(float), 1)[0]
+        summary["skew_slope_per_strike"] = _round(slope, 6)
+    return summary
+
+
+def build_analysis_payload(
+    df: Optional[pd.DataFrame],
+    iv_skew_df: Optional[pd.DataFrame],
+    vol_ratio: float,
+    oi_ratio: float,
+    articles: Optional[Sequence[dict]],
+    spot: float,
+    offset: float,
+    ticker: str,
+    expirations: Optional[Sequence[str]],
+) -> Dict[str, Any]:
+    """Assemble a compact, structured snapshot for the model prompt."""
+
+    tradier_token = st.secrets.get("TRADIER_TOKEN")
+
+    payload: Dict[str, Any] = {
+        "ticker": ticker,
+        "as_of_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "spot": _round(spot, 2),
+        "strike_window": {"low": _round(spot - offset, 2), "high": _round(spot + offset, 2)},
+        "expirations_analysed": list(expirations or []),
+        "flow": {
+            "put_call_volume_ratio": _round(vol_ratio),
+            "put_call_oi_ratio": _round(oi_ratio),
+        },
+        "positioning": _summarise_positioning(df, spot),
+        "iv_skew": _summarise_iv_skew(iv_skew_df, spot),
+    }
+
+    try:
+        payload["price_stats"] = {
+            key: _round(value, 2) for key, value in get_price_stats(ticker, tradier_token).items()
+        }
+    except Exception:
+        payload["price_stats"] = {}
+
+    try:
+        payload["vix"] = {key: _round(value, 2) for key, value in get_vix_info().items()}
+    except Exception:
+        payload["vix"] = {}
+
+    try:
+        ten = get_bond_yield_info("^TNX")
+        payload["treasury_10y"] = {
+            "yield_pct": _round(ten.get("spot"), 2),
+            "return_1d_pct": _round(ten.get("1d_return"), 2),
+        }
+    except Exception:
+        payload["treasury_10y"] = {}
+
+    try:
+        if df is not None and not df.empty:
+            spikes = compute_unusual_spikes(df, top_n=5)
+            payload["flow"]["top_vol_oi_spikes"] = json.loads(
+                spikes.round(3).to_json(orient="records")
+            )
+    except Exception:
+        pass
+
+    headlines = []
+    for art in (articles or [])[:10]:
+        date = str(art.get("date", ""))[:10]
+        title = art.get("title", "")
+        source = art.get("source", "")
+        if title:
+            headlines.append(f"{date} — {title}" + (f" ({source})" if source else ""))
+    payload["headlines"] = headlines
+
+    return payload
+
+
+def create_data_packet(ticker: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Wrap the compact payload into chat messages for the model."""
+
+    system_msg = {
+        "role": "system",
+        "content": (
+            "You are an experienced volatility and macro strategist. You will receive a compact "
+            "JSON snapshot of options dealer positioning, volatility structure, order flow, and "
+            "macro context for a single ticker. Exposure figures with an _m suffix are in "
+            "millions of dollars. Combine dealer positioning, volatility structure, and market "
+            "context to craft actionable option trade ideas."
+        ),
+    }
+
+    instructions = textwrap.dedent(
+        f"""
+        Analyse the market snapshot for {ticker} below and respond with these sections:
+
+        1. **Dealer positioning** — expected hedging behaviour around the magnet and flip zones.
+        2. **Market regime** — what price stats, VIX, rates, and headlines imply for risk appetite.
+        3. **Trade ideas** — long calls or long puts ONLY (no spreads or multi-leg structures).
+           One idea per horizon: 1-2 weeks, 1-2 months, 6-12 months. For each give strike,
+           expiration, entry trigger, invalidation level, and a confidence score (1-100).
+        4. **Key levels** — max-pain estimate, supports, and resistances derived from the data.
+
+        Market snapshot JSON:
+        """
+    ).strip()
+
+    user_msg = {
+        "role": "user",
+        "content": instructions
+        + "\n```json\n"
+        + json.dumps(payload, indent=2, default=str)
+        + "\n```",
+    }
+    return {"messages": [system_msg, user_msg]}
+
+
+def estimate_token_count(data_packet, model_name):
+    try:
+        enc = tiktoken.encoding_for_model(model_name)
+    except Exception:
+        enc = tiktoken.get_encoding("cl100k_base")
+
+    try:
+        return sum(len(enc.encode(m["content"])) for m in data_packet["messages"])
+    except Exception:
+        return None
+
+
+def call_openai_api(data_packet, creds, model_name: str):
+    if not (isinstance(creds, dict) and creds.get("api_key")):
+        raise ValueError("OpenAI API key is missing; cannot send request.")
+
+    client = _client_from_creds(creds)
+    try:
+        completion = client.chat.completions.create(
+            model=model_name,
+            messages=data_packet["messages"],
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        st.error(f"OpenAI API error: {e}")
+        return None
+
+
+def _build_ai_form_key(label: str, ticker: str, exp: Optional[Sequence[str]]) -> str:
+    exp_fragment = "-".join(exp) if isinstance(exp, (list, tuple)) else (str(exp) if exp else "")
+    return f"{label}_{ticker}_{exp_fragment}" if exp_fragment else f"{label}_{ticker}"
+
+
+def _status_pill(label: str, value: str, ok: bool) -> None:
+    state = "status-pill--ok" if ok else "status-pill--warn"
+    st.markdown(
+        f"""
+        <div class="status-pill {state}">
+            <span class="status-pill__dot"></span>
+            <div>
+                <p class="status-pill__label">{label}</p>
+                <p class="status-pill__value">{value}</p>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _format_history_label(index: int, record: Dict[str, Any]) -> str:
+    try:
+        ts_utc = datetime.fromisoformat(record["ts"]).replace(tzinfo=ZoneInfo("UTC"))
+        ts_local = ts_utc.astimezone(ZoneInfo("America/Los_Angeles"))
+        stamp = ts_local.strftime("%b %d, %Y · %H:%M %Z")
+    except Exception:
+        stamp = str(record.get("ts", ""))[:16]
+    return f"#{index} · {record.get('ticker', '?')} — {stamp}"
+
+
+def _render_history(limit: int = 15) -> None:
+    st.markdown("#### 📚 Past analyses")
+    try:
+        history = load_analyses(limit=limit)
+    except Exception:
+        history = []
+
+    if not history:
+        st.caption("No saved analyses yet — your first run will appear here.")
+        return
+
+    labels = [_format_history_label(len(history) - idx, rec) for idx, rec in enumerate(history)]
+    choice = st.selectbox("Browse saved analyses", labels, key="ai_history_choice")
+    record = history[labels.index(choice)]
+
+    with st.container(border=True):
+        st.markdown(record.get("response") or "_No response stored for this run._")
+
+    with st.expander("Stored data packet"):
+        payload = record.get("payload")
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except Exception:
+                pass
+        if isinstance(payload, (dict, list)):
+            st.json(payload)
+        else:
+            st.code(str(payload))
+
+
+def render_ai_tab(
+    *,
+    ticker: str,
+    expirations: Optional[Sequence[str]],
+    articles: Optional[Sequence[dict]],
+    df: Optional[pd.DataFrame] = None,
+    iv_skew_df: Optional[pd.DataFrame] = None,
+    vol_ratio: Optional[float] = None,
+    oi_ratio: Optional[float] = None,
+    spot: Optional[float] = None,
+    offset: Optional[float] = None,
+) -> None:
+    """Render the AI Analysis page as a guided three-step flow."""
+
+    st.markdown(
+        """
+        <div class="page-title">
+            <h2>🤖 AI Trade Analysis</h2>
+            <p>Build a compact positioning snapshot, review exactly what the model sees, then send.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    openai_creds = resolve_openai_credentials()
+    api_ready = bool(isinstance(openai_creds, dict) and openai_creds.get("api_key"))
+    data_ready = (
+        df is not None
+        and not df.empty
+        and spot is not None
+        and offset is not None
+        and vol_ratio is not None
+        and oi_ratio is not None
+    )
+
+    packet_state = st.session_state.get("ai_packet")
+    packet_fresh = bool(packet_state and packet_state.get("ticker") == ticker)
+
+    s1, s2, s3 = st.columns(3)
+    with s1:
+        _status_pill("OpenAI key", "Configured" if api_ready else "Missing", ok=api_ready)
+    with s2:
+        _status_pill(
+            "Market data",
+            f"{ticker} · {len(expirations or [])} expirations" if data_ready else "Not loaded",
+            ok=data_ready,
+        )
+    with s3:
+        _status_pill(
+            "Data packet",
+            f"Built {packet_state.get('built_at', '')}" if packet_fresh else "Not built",
+            ok=packet_fresh,
+        )
+
+    st.write("")
+
+    if not api_ready:
+        st.error("Add `OPENAI_API_KEY` to Streamlit secrets to enable this page.")
+        return
+
+    left, right = st.columns([2, 3], gap="large")
+
+    with left:
+        st.markdown("##### 1 · Choose a model")
+        openai_creds, selected_model = render_model_selection(ticker, expirations, openai_creds)
+
+        st.markdown("##### 2 · Build the data packet")
+        if not data_ready:
+            st.info(
+                "Load market data first: pick a ticker and expirations, and make sure the "
+                "Overview tab shows charts."
+            )
+        else:
+            if st.button("⚡ Build data packet", type="primary", use_container_width=True):
+                with st.spinner("Aggregating positioning, flow, and macro context…"):
+                    work_df = df[(df["strike"] >= spot - offset) & (df["strike"] <= spot + offset)]
+                    payload = build_analysis_payload(
+                        work_df, iv_skew_df, vol_ratio, oi_ratio, articles,
+                        spot, offset, ticker, expirations,
+                    )
+                packet = create_data_packet(ticker, payload)
+                st.session_state["ai_packet"] = {
+                    "ticker": ticker,
+                    "payload": payload,
+                    "packet": packet,
+                    "tokens": estimate_token_count(packet, selected_model or "gpt-4o"),
+                    "built_at": datetime.now(timezone.utc).strftime("%H:%M UTC"),
+                }
+                packet_state = st.session_state["ai_packet"]
+                packet_fresh = True
+            st.caption("Rebuild whenever you change ticker, expirations, or strike range.")
+
+        if packet_state and not packet_fresh:
+            st.warning(
+                f"The stored packet is for **{packet_state.get('ticker')}** — rebuild it for {ticker}."
+            )
+
+    with right:
+        st.markdown("##### 3 · Review & send")
+        if not packet_fresh:
+            st.info("Build a data packet to unlock the review panel.")
+        else:
+            payload = packet_state["payload"]
+            positioning = payload.get("positioning", {})
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Prompt tokens", f"{packet_state.get('tokens') or '—'}")
+            magnet = positioning.get("magnet_strike")
+            m2.metric("Magnet strike", f"{magnet:g}" if magnet is not None else "—")
+            m3.metric("Flip zones", len(positioning.get("gamma_flip_zones", [])))
+
+            with st.expander("Inspect the full JSON payload"):
+                st.json(payload)
+
+            with st.form("ai_send_form"):
+                pin_entry = st.text_input(
+                    "Security PIN",
+                    type="password",
+                    help="Set AI_PIN in Streamlit secrets. Prevents accidental API spend.",
+                )
+                sent = st.form_submit_button(
+                    f"🚀 Send to {selected_model or 'model'}",
+                    type="primary",
+                    use_container_width=True,
+                )
+
+            if sent:
+                pin_expected = st.secrets.get("AI_PIN")
+                if not selected_model:
+                    st.error("Select a model first.")
+                elif not pin_expected:
+                    st.error("AI_PIN secret is not configured. Set it in Streamlit secrets to continue.")
+                elif pin_entry != str(pin_expected):
+                    st.error("❌ Incorrect PIN, try again.")
+                else:
+                    with st.spinner(f"Asking `{selected_model}`…"):
+                        analysis = call_openai_api(
+                            packet_state["packet"], openai_creds, selected_model
+                        )
+                    if analysis:
+                        save_analysis(
+                            ticker=ticker,
+                            expirations=list(expirations or []),
+                            payload=payload,
+                            response=analysis,
+                            token_count=packet_state.get("tokens") or 0,
+                        )
+                        st.session_state["ai_last_analysis"] = {
+                            "ticker": ticker,
+                            "model": selected_model,
+                            "response": analysis,
+                        }
+                        st.success("✅ Analysis saved.")
+
+    last = st.session_state.get("ai_last_analysis")
+    if last:
+        st.divider()
+        st.markdown(f"#### 📜 Latest analysis — {last['ticker']} · `{last['model']}`")
+        with st.container(border=True):
+            st.markdown(last["response"])
+
+    st.divider()
+    _render_history()
 
 
 def main() -> int:
