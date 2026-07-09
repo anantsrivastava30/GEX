@@ -136,18 +136,29 @@ SIGNAL_LEGEND = [
 
 
 def _initialise_symbol_state() -> None:
-    """Ensure ticker-related session state survives reruns during rebase conflict fixes."""
+    """Seed ticker-related session state on first load."""
 
-    default_symbol = DEFAULT_WATCHLIST[0]
     state = st.session_state
-    state.setdefault("active_ticker", default_symbol)
-    state.setdefault("manual_ticker", state["active_ticker"])
-    state.setdefault(
-        "watchlist_choice",
-        state["active_ticker"] if state["active_ticker"] in DEFAULT_WATCHLIST else default_symbol,
-    )
+    state.setdefault("watchlist_choice", DEFAULT_WATCHLIST[0])
     if state["watchlist_choice"] not in DEFAULT_WATCHLIST:
-        state["watchlist_choice"] = default_symbol
+        state["watchlist_choice"] = DEFAULT_WATCHLIST[0]
+    state.setdefault("manual_ticker", "")
+    state.setdefault("active_ticker", state["manual_ticker"] or state["watchlist_choice"])
+
+
+def _on_watchlist_select() -> None:
+    """User picked from the watchlist: make it active and clear the manual override."""
+
+    st.session_state["active_ticker"] = st.session_state["watchlist_choice"]
+    st.session_state["manual_ticker"] = ""
+
+
+def _on_manual_ticker() -> None:
+    """User typed a symbol: it stays active across reruns until cleared."""
+
+    symbol = st.session_state["manual_ticker"].strip().upper()
+    st.session_state["manual_ticker"] = symbol
+    st.session_state["active_ticker"] = symbol or st.session_state["watchlist_choice"]
 
 
 def _format_expiration_option(expiration: str) -> str:
@@ -1033,32 +1044,23 @@ st.title("📊 Options Analytics Dashboard")
 # --- Sidebar Inputs ---
 _initialise_symbol_state()
 
-watch_choice = st.sidebar.selectbox(
+st.sidebar.selectbox(
     "Watchlist symbols",
     options=DEFAULT_WATCHLIST,
     key="watchlist_choice",
+    on_change=_on_watchlist_select,
 )
 
-if watch_choice != st.session_state["active_ticker"]:
-    st.session_state["active_ticker"] = watch_choice
-    st.session_state["manual_ticker"] = watch_choice
-
-manual_symbol_input = st.sidebar.text_input(
-    "Or type a symbol",
+st.sidebar.text_input(
+    "Or type any symbol",
     key="manual_ticker",
+    on_change=_on_manual_ticker,
+    help="Overrides the watchlist pick and stays active until cleared. Press Enter to apply.",
 )
-manual_symbol = manual_symbol_input.strip().upper()
 
-if manual_symbol:
-    if manual_symbol != st.session_state["manual_ticker"]:
-        st.session_state["manual_ticker"] = manual_symbol
-    if manual_symbol != st.session_state["active_ticker"]:
-        st.session_state["active_ticker"] = manual_symbol
-else:
-    st.session_state["manual_ticker"] = ""
-    st.session_state["active_ticker"] = watch_choice
+ticker = (st.session_state.get("active_ticker") or "").upper()
+st.sidebar.markdown(f"**Active symbol:** `{ticker}`")
 
-ticker = st.session_state["active_ticker"].upper()
 expirations = []
 if ticker:
     try:
@@ -1067,6 +1069,8 @@ if ticker:
             st.secrets.get("TRADIER_TOKEN"),
             include_all_roots=True
         )
+        if not expirations:
+            st.sidebar.warning(f"No listed options found for {ticker}. Check the symbol.")
     except Exception:
         st.sidebar.error("Error fetching expirations.")
 exp_pairs = []
