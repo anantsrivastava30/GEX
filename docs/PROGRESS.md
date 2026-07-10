@@ -137,3 +137,28 @@ hover value all correct). No backend code changed this session.
   `HF_SPACE`, then set `TRADIER_TOKEN` (and `OPENAI_API_KEY`) as Space secrets.
 - On Vercel, import the repo with Root Directory = `frontend` and env
   `BACKEND_URL` = the Space URL. See `deploy/DEPLOY.md`.
+
+### Session 2b — 2026-07-09 (UW look-and-feel pass)
+Goal from the human: reach UW-style look and feel before deploying.
+- Refined theme tokens (`globals.css`): near-black canvas, layered surfaces
+  (`surface`/`surface-2`), `border-strong`, `faint` ink, `warning`, blue accent,
+  14px base, thin scrollbars, selection color.
+- Icon set `components/layout/icons.tsx`: inline feather-style SVGs (no dep).
+- Reusable primitives: `components/ui/Panel.tsx` (titled card), `StatTile.tsx`
+  (KPI with signed arrow delta), `Tabs.tsx` (underlined tab strip).
+- `SidebarNav`: grouped into Markets/Research sections, SVG icons, whale logo mark.
+- `TopBar`: search with leading icon + live US market-open/closed status + ET clock.
+- `/market`: KPI stat-tile grid (VIX accent tile, 10Y, futures) with loading
+  skeletons, replacing the two plain tables.
+- `/stock/[symbol]`: ticker header (price, change badge, bid/ask/vol/52w strip),
+  Overview/GEX/Volatility(soon)/Flow(soon) tabs, gamma-gap zone badge, panelized
+  interpretation.
+
+**Verified:** `npm run build` clean; captured the full shell (sidebar, top bar,
+ticker header, stat tiles, GEX chart, gamma-gap + interpretation panels) and the
+`/flow` page via headless Chromium at 1280px and eyeballed both — reads like a
+UW-style terminal. Temp preview route removed before commit. No backend changes.
+
+**Next up (Session 3):** unchanged from above (APScheduler, `ai` router,
+TanStack Table + filter chips on `/flow`, IV-rank tile) plus: candlestick price
+chart on `/stock` Overview, and port `/news` + `/flow` blocks onto `Panel`.

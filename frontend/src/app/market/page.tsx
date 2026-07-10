@@ -2,16 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { api, MarketOverview } from "@/lib/api";
+import StatTile from "@/components/ui/StatTile";
 
-function pct(value: number | null | undefined) {
-  if (value == null) return "—";
-  const sign = value > 0 ? "+" : "";
-  return `${sign}${value.toFixed(2)}%`;
-}
-
-function changeClass(value: number | null | undefined) {
-  if (value == null) return "text-muted";
-  return value >= 0 ? "text-positive" : "text-negative";
+function num(value: number | null | undefined) {
+  return typeof value === "number" ? value : null;
 }
 
 export default function MarketPage() {
@@ -22,9 +16,17 @@ export default function MarketPage() {
     api.marketOverview().then(setOverview).catch((e) => setError(String(e.message ?? e)));
   }, []);
 
+  const vixSpot = num(overview?.vix?.spot);
+  const vixRet = num(overview?.vix?.["1d_return"]);
+  const yldSpot = num(overview?.yields?.spot);
+  const yldRet = num(overview?.yields?.["1d_return"]);
+
   return (
     <div className="space-y-6">
-      <h1 className="text-lg font-semibold">Market Overview</h1>
+      <div>
+        <h1 className="text-lg font-semibold">Market Overview</h1>
+        <p className="text-sm text-muted">Volatility, rates, and futures at a glance.</p>
+      </div>
 
       {error && (
         <p className="rounded-md border border-border bg-surface px-4 py-3 text-sm text-muted">
@@ -33,66 +35,38 @@ export default function MarketPage() {
         </p>
       )}
 
-      {!overview && !error && <p className="text-sm text-muted">Loading…</p>}
+      {!overview && !error && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="h-20 animate-pulse rounded-lg border border-border bg-surface" />
+          ))}
+        </div>
+      )}
 
       {overview && (
-        <div className="grid gap-4 lg:grid-cols-2">
-          <section className="rounded-lg border border-border bg-surface p-4">
-            <h2 className="mb-3 text-sm font-medium text-muted">Volatility & Rates</h2>
-            <table className="w-full text-sm">
-              <tbody>
-                <tr className="border-b border-border">
-                  <td className="py-2">VIX</td>
-                  <td className="py-2 text-right font-mono">
-                    {overview.vix?.spot?.toFixed(2) ?? "—"}
-                  </td>
-                  <td className={`py-2 text-right font-mono ${changeClass(overview.vix?.["1d_return"])}`}>
-                    {pct(overview.vix?.["1d_return"])}
-                  </td>
-                </tr>
-                <tr>
-                  <td className="py-2">10Y Treasury</td>
-                  <td className="py-2 text-right font-mono">
-                    {typeof overview.yields?.spot === "number"
-                      ? overview.yields.spot.toFixed(2)
-                      : "—"}
-                  </td>
-                  <td
-                    className={`py-2 text-right font-mono ${changeClass(
-                      typeof overview.yields?.["1d_return"] === "number"
-                        ? overview.yields["1d_return"]
-                        : null,
-                    )}`}
-                  >
-                    {pct(
-                      typeof overview.yields?.["1d_return"] === "number"
-                        ? overview.yields["1d_return"]
-                        : null,
-                    )}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </section>
-
-          <section className="rounded-lg border border-border bg-surface p-4">
-            <h2 className="mb-3 text-sm font-medium text-muted">Futures</h2>
-            <table className="w-full text-sm">
-              <tbody>
-                {Object.entries(overview.futures).map(([symbol, quote]) => (
-                  <tr key={symbol} className="border-b border-border last:border-0">
-                    <td className="py-2 font-mono">{symbol}</td>
-                    <td className="py-2 text-right font-mono">
-                      {quote.last?.toFixed(2) ?? "—"}
-                    </td>
-                    <td className={`py-2 text-right font-mono ${changeClass(quote.change_pct)}`}>
-                      {pct(quote.change_pct)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </section>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+          <StatTile
+            label="VIX"
+            value={vixSpot != null ? vixSpot.toFixed(2) : "—"}
+            delta={vixRet}
+            accent
+            sub="Implied volatility"
+          />
+          <StatTile
+            label="10Y Treasury"
+            value={yldSpot != null ? `${yldSpot.toFixed(2)}%` : "—"}
+            delta={yldRet}
+            sub="Benchmark yield"
+          />
+          {Object.entries(overview.futures).map(([symbol, quote]) => (
+            <StatTile
+              key={symbol}
+              label={symbol}
+              value={num(quote.last) != null ? (quote.last as number).toFixed(2) : "—"}
+              delta={num(quote.change_pct)}
+              sub="Futures"
+            />
+          ))}
         </div>
       )}
     </div>
