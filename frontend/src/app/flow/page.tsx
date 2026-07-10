@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { api, UnusualResponse } from "@/lib/api";
+import { useMemo, useState } from "react";
+import { api, UnusualResponse, UnusualRow } from "@/lib/api";
+import Panel from "@/components/ui/Panel";
 
 // Free-data proxy for a flow feed: strikes ranked by volume/open-interest
 // anomaly across the nearest expirations. A true trade-tape feed slots in
@@ -15,11 +16,23 @@ function fmt(value: number | null | undefined, digits = 2) {
   });
 }
 
+type SortKey = keyof UnusualRow;
+const COLUMNS: { key: SortKey; label: string; digits: number; strong?: boolean }[] = [
+  { key: "strike", label: "Strike", digits: 1 },
+  { key: "vol_oi_call", label: "Call vol/OI", digits: 2 },
+  { key: "vol_oi_put", label: "Put vol/OI", digits: 2 },
+  { key: "open_interest_call", label: "Call OI", digits: 0 },
+  { key: "open_interest_put", label: "Put OI", digits: 0 },
+  { key: "total_vol_oi", label: "Total vol/OI", digits: 2, strong: true },
+];
+
 export default function FlowPage() {
   const [symbol, setSymbol] = useState("SPY");
   const [data, setData] = useState<UnusualResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [sortKey, setSortKey] = useState<SortKey>("total_vol_oi");
+  const [asc, setAsc] = useState(false);
 
   async function scan(sym: string) {
     const upper = sym.trim().toUpperCase();
@@ -38,6 +51,24 @@ export default function FlowPage() {
       setLoading(false);
     }
   }
+
+  function toggleSort(key: SortKey) {
+    if (key === sortKey) setAsc((v) => !v);
+    else {
+      setSortKey(key);
+      setAsc(false);
+    }
+  }
+
+  const rows = useMemo(() => {
+    if (!data) return [];
+    const factor = asc ? 1 : -1;
+    return [...data.rows].sort((a, b) => {
+      const av = a[sortKey] ?? -Infinity;
+      const bv = b[sortKey] ?? -Infinity;
+      return (Number(av) - Number(bv)) * factor;
+    });
+  }, [data, sortKey, asc]);
 
   return (
     <div className="space-y-4">
@@ -77,44 +108,63 @@ export default function FlowPage() {
       )}
 
       {data && (
-        <section className="rounded-lg border border-border bg-surface p-4">
-          <h2 className="mb-3 text-sm font-medium text-muted">
-            {data.symbol} · {data.expirations.length} expiration
-            {data.expirations.length === 1 ? "" : "s"} · {data.rows.length} strikes
-          </h2>
+        <Panel
+          title={`${data.symbol} · unusual strikes`}
+          right={
+            <span className="font-mono text-xs text-muted">
+              {data.expirations.length} exp · {rows.length} rows
+            </span>
+          }
+          bodyClassName="p-0"
+        >
           <div className="max-h-[32rem] overflow-auto">
             <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-surface text-left text-xs text-muted">
+              <thead className="sticky top-0 bg-surface-2 text-left text-xs text-muted">
                 <tr>
-                  <th className="py-1.5">Strike</th>
-                  <th className="py-1.5 text-right">Call vol/OI</th>
-                  <th className="py-1.5 text-right">Put vol/OI</th>
-                  <th className="py-1.5 text-right">Call OI</th>
-                  <th className="py-1.5 text-right">Put OI</th>
-                  <th className="py-1.5 text-right">Total vol/OI</th>
+                  {COLUMNS.map((col) => {
+                    const active = col.key === sortKey;
+                    return (
+                      <th
+                        key={col.key}
+                        onClick={() => toggleSort(col.key)}
+                        className={`cursor-pointer select-none px-4 py-2 font-medium hover:text-foreground ${
+                          col.key === "strike" ? "text-left" : "text-right"
+                        } ${active ? "text-foreground" : ""}`}
+                      >
+                        <span className="inline-flex items-center gap-1">
+                          {col.key !== "strike" && <span className="flex-1" />}
+                          {col.label}
+                          <span className="w-2 text-accent">
+                            {active ? (asc ? "▲" : "▼") : ""}
+                          </span>
+                        </span>
+                      </th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
-                {data.rows.map((row) => (
-                  <tr key={row.strike} className="border-t border-border">
-                    <td className="py-1.5 font-mono">{row.strike.toFixed(1)}</td>
-                    <td className="py-1.5 text-right font-mono">{fmt(row.vol_oi_call)}</td>
-                    <td className="py-1.5 text-right font-mono">{fmt(row.vol_oi_put)}</td>
-                    <td className="py-1.5 text-right font-mono">
-                      {fmt(row.open_interest_call, 0)}
-                    </td>
-                    <td className="py-1.5 text-right font-mono">
-                      {fmt(row.open_interest_put, 0)}
-                    </td>
-                    <td className="py-1.5 text-right font-mono text-foreground">
-                      {fmt(row.total_vol_oi)}
-                    </td>
+                {rows.map((row) => (
+                  <tr
+                    key={row.strike}
+                    className="border-t border-border hover:bg-surface-hover"
+                  >
+                    {COLUMNS.map((col) => (
+                      <td
+                        key={col.key}
+                        className={`px-4 py-1.5 font-mono ${
+                          col.key === "strike" ? "text-left" : "text-right"
+                        } ${col.strong ? "text-foreground" : "text-muted"}`}
+                      >
+                        {fmt(row[col.key] as number | null | undefined, col.digits)}
+                      </td>
+                    ))}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        </section>
+        </Panel>
       )}
     </div>
   );

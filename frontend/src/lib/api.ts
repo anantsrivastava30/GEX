@@ -43,6 +43,15 @@ export interface GexProfile {
   gamma_gap?: GammaGap | null;
 }
 
+export interface Candle {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number | null;
+}
+
 export interface SkewPoint {
   strike: number;
   iv_call?: number | null;
@@ -137,6 +146,9 @@ export const api = {
     getJSON<GexProfile>(
       `/api/ticker/${symbol}/gex${qs({ expiration, offset })}`,
     ),
+
+  candles: (symbol: string, days = 120) =>
+    getJSON<Candle[]>(`/api/ticker/${symbol}/candles${qs({ days })}`),
 
   skew: (symbol: string, expiration: string) =>
     getJSON<SkewResponse>(`/api/ticker/${symbol}/skew${qs({ expiration })}`),

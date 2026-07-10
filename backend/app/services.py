@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -35,6 +36,7 @@ TTL_CHAIN = 60
 TTL_EXPIRATIONS = 24 * 3600
 TTL_MACRO = 300
 TTL_NEWS = 600
+TTL_HISTORY = 3600
 
 
 def _quote(symbol: str) -> Dict[str, Any]:
@@ -159,6 +161,37 @@ def get_ratios(symbol: str, expirations: List[str]) -> Dict[str, Any]:
         "pc_volume_ratio": float(vol_ratio),
         "pc_oi_ratio": float(oi_ratio),
     }
+
+
+def get_candles(symbol: str, days: int) -> List[Dict[str, Any]]:
+    """Daily OHLC bars from Tradier for the candlestick chart."""
+
+    api = get_tradier()
+    end = date.today()
+    start = end - timedelta(days=days)
+
+    def compute() -> List[Dict[str, Any]]:
+        rows = tradier_call(
+            api.history, symbol, "daily", start.isoformat(), end.isoformat()
+        )
+        out: List[Dict[str, Any]] = []
+        for r in rows or []:
+            try:
+                out.append(
+                    {
+                        "date": str(r["date"]),
+                        "open": float(r["open"]),
+                        "high": float(r["high"]),
+                        "low": float(r["low"]),
+                        "close": float(r["close"]),
+                        "volume": int(r.get("volume") or 0),
+                    }
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        return out
+
+    return cache.get_or_compute(f"candles:{symbol}:{days}", TTL_HISTORY, compute)
 
 
 def get_unusual(symbol: str, expirations: List[str], top_n: int) -> Dict[str, Any]:

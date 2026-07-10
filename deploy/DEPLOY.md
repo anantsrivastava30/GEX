@@ -1,16 +1,39 @@
 # Free deployment guide
 
-Zero-cost hosting for the rebuilt stack:
+Zero-cost hosting for the legacy Streamlit app **and** the new stack, all from
+one repo. The three products never share a runtime — only source and snapshot
+data — so each can be developed and shipped independently.
 
-| Piece | Host | Cost |
-| --- | --- | --- |
-| Backend (FastAPI) | Hugging Face Spaces (Docker) | Free — 2 vCPU / 16 GB RAM, sleeps after ~48h idle |
-| Frontend (Next.js) | Vercel Hobby | Free |
-| Daily snapshot cron | GitHub Actions | Free |
+| Piece | Host | Deploys from | Cost |
+| --- | --- | --- | --- |
+| Legacy Streamlit (`app.py`) | Streamlit Community Cloud | `streamlit-prod` branch | Free |
+| Backend (FastAPI) | Hugging Face Spaces (Docker) | `master` (path-filtered) | Free — 2 vCPU / 16 GB RAM, sleeps after ~48h idle |
+| Frontend (Next.js) | Vercel Hobby | `master`, root dir `frontend/` | Free |
+| Daily snapshot cron | GitHub Actions | `master` | Free |
 
 The frontend calls the backend server-side through the Next.js rewrite
 (`/api/:path*` → `BACKEND_URL`), so the browser only ever talks to the Vercel
 origin. That keeps CORS a non-issue for normal use.
+
+## Keeping the two products separate
+
+Everything lives on `master` (one shared `quant_analysis/`, no analytics drift).
+Separation is enforced at the deploy layer:
+
+- **Streamlit** deploys from a dedicated **`streamlit-prod`** branch, not
+  `master`. New-stack pushes to `master` therefore never restart the Streamlit
+  app. Ship a legacy release only when you intend to:
+  `git checkout streamlit-prod && git merge --ff-only master && git push`.
+  (`app.py` also stays frozen per the UW plan, so its output does not change.)
+- **Backend Space** rebuilds only when its own files change — `deploy-hf.yml`
+  is path-filtered to `backend/`, `quant_analysis/`, `Dockerfile`,
+  `requirements.txt`, `config.yaml`. A frontend-only push does not touch it.
+- **Frontend** on Vercel uses an *Ignored Build Step* so it rebuilds only when
+  `frontend/` changes (command below).
+
+Active development continues on feature branches → PR → `master`. `master` is
+the integration branch for the new stack; `streamlit-prod` is the legacy
+release pointer.
 
 ---
 
@@ -49,6 +72,10 @@ Verify once the build turns green:
 3. Add an environment variable:
    - `BACKEND_URL` = `https://<space-subdomain>.hf.space`
 4. Deploy. Vercel auto-detects Next.js; the rewrite proxies `/api/*` to the Space.
+5. Optional isolation — **Settings → Git → Ignored Build Step**, command:
+   `git diff --quiet HEAD^ HEAD -- .` (run from root dir `frontend/`) so Vercel
+   only rebuilds when `frontend/` changed.
+6. Set the **Production Branch** to `master`.
 
 > Note: Vercel Hobby is licensed for non-commercial use. When you start
 > charging (Phase 3), move the frontend to Cloudflare Pages or a Vercel Pro
@@ -65,6 +92,23 @@ accrual starts once this work merges to `master`.
 
 The backend reads that committed history for IV rank, OI change, and historical
 GEX. Each Space rebuild picks up the latest committed snapshots automatically.
+
+---
+
+## 4. Legacy Streamlit on Streamlit Community Cloud
+
+1. At https://share.streamlit.io create an app from this repo.
+2. **Branch:** `streamlit-prod` · **Main file path:** `app.py`.
+3. Add `TRADIER_TOKEN` / `OPENAI_API_KEY` under the app's **Secrets**.
+
+Because it deploys from `streamlit-prod` (not `master`), day-to-day new-stack
+work never disturbs it. Cut a legacy release intentionally:
+
+```bash
+git checkout streamlit-prod
+git merge --ff-only master     # only pulls in already-reviewed master history
+git push origin streamlit-prod
+```
 
 ---
 

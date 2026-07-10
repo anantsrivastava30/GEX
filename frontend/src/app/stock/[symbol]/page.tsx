@@ -1,8 +1,9 @@
 "use client";
 
 import { use, useEffect, useState } from "react";
-import { api, GexProfile, TickerSnapshot } from "@/lib/api";
+import { api, Candle, GexProfile, TickerSnapshot } from "@/lib/api";
 import GexStrikeChart from "@/components/charts/GexStrikeChart";
+import CandlestickChart from "@/components/charts/CandlestickChart";
 import Panel from "@/components/ui/Panel";
 import StatTile from "@/components/ui/StatTile";
 import Tabs, { Tab } from "@/components/ui/Tabs";
@@ -31,11 +32,14 @@ export default function StockPage({
   const [expirations, setExpirations] = useState<string[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [gex, setGex] = useState<GexProfile | null>(null);
+  const [candles, setCandles] = useState<Candle[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setError(null);
+    setCandles(null);
     api.tickerSnapshot(upper).then(setSnapshot).catch((e) => setError(e.message));
+    api.candles(upper).then(setCandles).catch(() => setCandles([]));
     api
       .expirations(upper)
       .then((exps) => {
@@ -122,6 +126,28 @@ export default function StockPage({
 
       {tab === "overview" && (
         <div className="grid gap-4 lg:grid-cols-3">
+          <div className="lg:col-span-3">
+            <Panel
+              title="Price — daily"
+              right={
+                candles && candles.length > 0 ? (
+                  <span className="font-mono text-xs text-muted">
+                    {candles.length} sessions
+                  </span>
+                ) : null
+              }
+            >
+              {candles == null ? (
+                <div className="h-56 animate-pulse rounded bg-surface-2" />
+              ) : candles.length === 0 ? (
+                <p className="py-8 text-center text-sm text-muted">
+                  No price history available.
+                </p>
+              ) : (
+                <CandlestickChart candles={candles} />
+              )}
+            </Panel>
+          </div>
           <div className="grid grid-cols-2 gap-3 lg:col-span-1">
             <StatTile label="Last" value={fmt(snapshot?.last)} delta={chg} accent />
             <StatTile

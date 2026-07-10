@@ -13,6 +13,17 @@ name: Deploy backend to Hugging Face Space
 on:
   push:
     branches: [master]
+    # Only redeploy the backend Space when its own inputs change, so a
+    # frontend-only or docs-only push to master leaves the Space untouched.
+    paths:
+      - "backend/**"
+      - "quant_analysis/**"
+      - "config.yaml"
+      - "requirements.txt"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "deploy/huggingface/**"
+      - ".github/workflows/deploy-hf.yml"
   workflow_dispatch:
 
 concurrency:

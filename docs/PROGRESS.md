@@ -162,3 +162,31 @@ UW-style terminal. Temp preview route removed before commit. No backend changes.
 **Next up (Session 3):** unchanged from above (APScheduler, `ai` router,
 TanStack Table + filter chips on `/flow`, IV-rank tile) plus: candlestick price
 chart on `/stock` Overview, and port `/news` + `/flow` blocks onto `Panel`.
+
+### Session 2c — 2026-07-09 (deploy isolation + charts)
+Goal from the human: keep legacy Streamlit and the new stack hosted separately,
+then keep building Phase 1.
+- **Deploy isolation (a + b):** path-filtered `deploy-hf.yml` so the backend
+  Space only rebuilds on `backend/`/`quant_analysis/`/`Dockerfile`/deps changes;
+  created the `streamlit-prod` branch (Streamlit Cloud deploys from it, so
+  master pushes never restart the legacy app). Strategy + steps documented in
+  `deploy/DEPLOY.md` (one repo, one `quant_analysis`, separation at the deploy
+  layer; Vercel Ignored Build Step for `frontend/`).
+- **Candlestick chart:** new backend endpoint `GET /api/ticker/{sym}/candles`
+  (`Candle` schema + `services.get_candles` reusing `TradierAPI.history`, cached
+  1h). Dependency-free `CandlestickChart.tsx` (SVG OHLC candles, price
+  gridlines, dashed last-close line, date axis, per-candle hover tooltip) on the
+  `/stock` Overview tab.
+- **Sortable flow table:** `/flow` rebuilt on `Panel` with click-to-sort columns
+  (default Total vol/OI desc) and hover rows.
+- `api.ts`: added `Candle` type + `api.candles()`.
+
+**Verified:** `npm run build` clean; backend files `py_compile` clean (full
+backend still not boot-tested here — heavy deps + no local Docker daemon).
+Rendered the Overview candlestick + sortable flow table via headless Chromium at
+1280px and eyeballed — reads like a UW ticker page. Temp preview removed. The
+only console warning was preview-only (module-level `Math.random` mock data).
+
+**Next up (Session 3, updated):** APScheduler intraday jobs; `ai` router (env
+key, no `st.secrets`); IV-rank tile on `/stock` from `/api/history`; filter
+chips on `/flow`; wire live candles once the backend runs on the Space.

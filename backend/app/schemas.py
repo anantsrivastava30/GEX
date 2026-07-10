@@ -60,6 +60,15 @@ class SkewResponse(BaseModel):
     points: List[SkewPoint]
 
 
+class Candle(BaseModel):
+    date: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: Optional[int] = None
+
+
 class RatiosResponse(BaseModel):
     symbol: str
     expirations: List[str]
