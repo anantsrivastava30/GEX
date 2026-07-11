@@ -27,7 +27,7 @@ session should pick up.
 - [x] P1.1 Backend skeleton: `backend/` FastAPI (config, deps w/ tenacity retry, `cache.py` TTL layer, `ratelimit.py` token bucket), routers `ticker` (snapshot/expirations/gex/skew/ratios/max-pain/term-structure), `exposure` (vanna/charm), `market`, `news`, `flow` (unusual proxy), `history` (iv-rank/oi-change/metrics/gamma-gap from our own data), `ai` (analyze/analyses/status), pydantic schemas, TestClient tests w/ faked Tradier.
 - [x] P1.2 Scheduler jobs in backend (APScheduler): intraday snapshot + gamma-gap scoring every 30 min during market hours (`backend/app/jobs.py`, `SCHEDULER_ENABLED`, on by default in compose)
 - [x] P1.3 Frontend shell: Next.js 16 + Tailwind v4 in `frontend/`, dark theme tokens (`globals.css`), `SidebarNav`/`TopBar` w/ ticker search, typed API client (`src/lib/api.ts`), `/api` rewrite to backend :8000. First pages live: `/market` (VIX/yields/futures), `/stock/[symbol]` (quote, expiration chips, net-GEX chart + table, gamma-gap signal card, interpretation), `/news`, `/flow` (live). *Still to add: shadcn/ui + TanStack Table for dense tables, more chart components, remaining pages.*
-- [x] P1.4 Page ports: `/market`, `/stock/[symbol]` (Overview/GEX/Volatility tabs), `/news`, `/ai`, `/tools/binomial`, `/flow` (cached proxy feed), `/calendar` (iframe parity), `/track-record` — *intraday delta-projection on `/gex` still pending*
+- [x] P1.4 Page ports: `/market`, `/stock/[symbol]` (Overview/GEX/Volatility tabs incl. intraday delta-projection), `/news`, `/ai`, `/tools/binomial`, `/flow` (cached proxy feed), `/calendar` (iframe parity), `/track-record`
 - [x] P1.5 Legacy freeze: `app.py` → `legacy/app.py`, `docker-compose.yml`, path-filtered CI matrix (analytics pytest + backend pytest + frontend build/Playwright e2e), README update
 
 ### Phase 2 — Close the UW feature gap (free data)
@@ -38,7 +38,7 @@ session should pick up.
 - [x] Full proxy flow feed + hottest chains (`/api/flow/feed` + `/api/flow/hottest-chains` ranking vol/OI + OI Δ + IV Δ from snapshots; filters on `/flow`)
 - [ ] Congress trades (Senate eFD / House Clerk daily job)
 - [ ] Native earnings/economic calendar (iframe parity shipped; native version pending)
-- [ ] Screener (presets + custom), server-persisted watchlists, alerts (in-app/Discord/email) — *snapshot-backed screener API with three presets shipped; frontend page, custom filters, watchlists, alerts pending*
+- [ ] Screener (presets + custom), server-persisted watchlists, alerts (in-app/Discord/email) — *screener API + `/screener` page with three presets and threshold filters shipped; custom filter builder, watchlists, alerts pending*
 
 ### Phase 3 — Monetization
 - [ ] Supabase Auth + entitlements (replaces AI PIN)
@@ -406,3 +406,61 @@ headless Chrome against the live backend.
   (IV rank, OI Δ, flow feed, and the track record all depend on it).
 - `docker compose up --build` on the box picks up the scheduler for intraday
   accrual.
+
+### Session 6 — 2026-07-11 (screener page, realized track record, delta projection)
+Closed the remaining P1.4 item and two Phase 2 items.
+
+**`/screener` page:** preset chips (High Vol/OI, Unusually Bullish, Gamma
+Squeeze Candidates), min vol/OI + min OI threshold filters, per-preset table
+layouts (contract rows vs gamma-candidate rows), staleness/unavailability
+banners, backend methodology string displayed under the table. Sidebar nav
+unflagged. E2e coverage added.
+
+**Gamma-gap realized outcomes (the hero differentiator):**
+- `quant_analysis/analytics/track_record.py`: pure
+  `evaluate_gamma_gap_outcome` (hit = magnet strike traded low<=magnet<=high
+  within N sessions AFTER the signal date; the signal-day bar never counts;
+  short histories stay pending, never miss) + `summarize_outcomes` (hit rate
+  over decided signals only, avg sessions-to-hit, score-bucket breakdown).
+  7 unit tests.
+- `GET /api/history/gamma-gap/outcomes`: joins the signal log with cached
+  Tradier daily candles per ticker and returns per-signal outcomes plus the
+  summary. Endpoint test with faked candles.
+- `/track-record` now shows the realized hit rate, decided counts, avg
+  sessions to hit, score-bucket chips, and a per-signal Hit/Miss/Pending
+  badge column. Live run against the 42 logged legacy signals: 57.1% hit
+  rate, hits tagging the magnet in 1.4 sessions on average.
+
+**Intraday delta projection (last P1.4 item):**
+- Fixed the dead legacy pipeline: extracted pure
+  `compute_delta_exposure_series` (one chain snapshot, exposure window
+  sliding along the intraday path) from `get_delta_exposure_at_times`,
+  which previously re-fetched the same chain for every bar; public
+  signature preserved.
+- `GET /api/ticker/{sym}/delta-projection`: yfinance 30-min bars (prev close
+  prefixed, cached 5 min) + cached chain + linear exposure trend projected
+  to the 16:00 close.
+- `DeltaProjectionChart` on the GEX tab: two stacked charts sharing one
+  slot-indexed time axis (price line above, exposure bars below - never a
+  dual-axis chart), dashed trend extension to a hollow projected-close
+  marker, per-bar tooltip.
+- Fixed two `react-hooks/set-state-in-effect` lint errors by moving state
+  resets into event handlers.
+
+**Verified:** lint clean; `npm run build` clean (new `/screener` route);
+Playwright 5/5 (new screener + delta-projection assertions); pytest 102/103
+(known local-.env failure only); live against Tradier: outcomes endpoint
+scored all 42 real signals in 2.6s, delta projection returned 13 Friday bars
+with an EOD projection; screener + track-record + delta-projection chart all
+rendered and eyeballed via headless Chrome.
+
+**Next up (Session 7):**
+1. Custom screener filter builder; server-persisted watchlists; alerts
+   (in-app + Discord webhook + email) with an alert-evaluation job.
+2. Congress trades daily job (Senate eFD / House Clerk, staleness flags).
+3. Native earnings/econ calendar (yfinance earnings + FRED releases).
+4. Public track-record page polish once intraday scheduler data accrues
+   (top-bucket hit rates are the marketing asset).
+
+**Open items for the human:** unchanged (merge to `main`; run compose with
+the scheduler).

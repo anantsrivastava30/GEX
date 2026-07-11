@@ -5,6 +5,7 @@ from fastapi import APIRouter, Query
 from backend.app import services
 from backend.app.schemas import (
     Candle,
+    DeltaProjectionResponse,
     GexProfile,
     MaxPainResponse,
     RatiosResponse,
@@ -54,6 +55,17 @@ def put_call_ratios(
     expirations: List[str] = Query(..., description="One or more expirations"),
 ):
     return services.get_ratios(symbol.upper(), expirations)
+
+
+@router.get("/{symbol}/delta-projection", response_model=DeltaProjectionResponse)
+def delta_projection(
+    symbol: str,
+    expiration: str = Query(..., description="Expiration date YYYY-MM-DD"),
+    offset: int = Query(35, ge=1, le=500, description="Strike range around spot"),
+):
+    """Intraday net dealer delta exposure along today's price path."""
+
+    return services.get_delta_projection(symbol.upper(), expiration, offset)
 
 
 @router.get("/{symbol}/max-pain", response_model=MaxPainResponse)

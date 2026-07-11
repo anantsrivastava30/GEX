@@ -38,6 +38,16 @@ class FakeTradier:
     def quote(self, symbol):
         return {"last": 100.0, "bid": 99.9, "ask": 100.1, "volume": 1_000_000}
 
+    def history(self, symbol, interval, start, end):
+        # Five sessions after 2026-07-10; magnet 104 first trades on 07-15.
+        return [
+            {"date": "2026-07-13", "open": 100, "high": 102, "low": 99, "close": 101, "volume": 10},
+            {"date": "2026-07-14", "open": 101, "high": 103, "low": 100, "close": 102, "volume": 10},
+            {"date": "2026-07-15", "open": 102, "high": 104.5, "low": 101, "close": 104, "volume": 10},
+            {"date": "2026-07-16", "open": 104, "high": 105, "low": 103, "close": 104, "volume": 10},
+            {"date": "2026-07-17", "open": 104, "high": 106, "low": 103, "close": 105, "volume": 10},
+        ]
+
     def option_chain(self, symbol, expiration, greeks="true", include_all_roots=True):
         # Distinct IV per expiration so the term structure has a slope.
         return make_chain(mid_iv=0.22 if expiration == "2026-08-21" else 0.26)
@@ -271,6 +281,71 @@ def test_gamma_gap_history_endpoint(client, monkeypatch):
     assert len(body) == 1
     assert body[0]["ticker"] == "SPY"
     assert "payload" not in body[0]
+
+
+def test_delta_projection_endpoint(client, monkeypatch):
+    import pandas as pd
+
+    idx = pd.DatetimeIndex(
+        [
+            "2026-07-10 16:00",  # prev close
+            "2026-07-11 09:30",
+            "2026-07-11 10:00",
+            "2026-07-11 10:30",
+        ],
+        tz="America/New_York",
+    )
+    prices = pd.Series([99.5, 100.0, 100.5, 101.0], index=idx, name="Close")
+    monkeypatch.setattr(
+        services, "get_intraday_prices_with_prev_close", lambda symbol: prices
+    )
+
+    resp = client.get(
+        "/api/ticker/SPY/delta-projection",
+        params={"expiration": "2026-08-21", "offset": 35},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["prev_close"]["price"] == 99.5
+    assert len(body["bars"]) == 3  # prev close excluded
+    # Chain deltas are ±0.5 with call OI double put OI, so exposure is positive.
+    assert all(bar["delta_exposure"] > 0 for bar in body["bars"])
+    assert body["projection_ts"].startswith("2026-07-11T16:00")
+    assert isinstance(body["projection_exposure"], float)
+
+
+def test_gamma_gap_outcomes_endpoint(client, monkeypatch):
+    rows = [
+        # Magnet 104 trades on 2026-07-15, three sessions after this signal.
+        {"ts": "2026-07-10T14:00:00", "ticker": "SPY", "expiration": "2026-08-21",
+         "dte": None, "spot": 100.0, "magnet_strike": 104.0, "magnet_gex": 1.0,
+         "distance": 4.0, "score": 90.0, "positive_zone": 1, "payload": "{}"},
+        # Magnet 95 never trades in the five available sessions.
+        {"ts": "2026-07-10T14:00:00", "ticker": "SPY", "expiration": "2026-08-21",
+         "dte": None, "spot": 100.0, "magnet_strike": 95.0, "magnet_gex": 1.0,
+         "distance": -5.0, "score": 30.0, "positive_zone": 0, "payload": "{}"},
+        # Signal after the last candle: no post-signal sessions -> pending.
+        {"ts": "2026-07-17T14:00:00", "ticker": "SPY", "expiration": "2026-08-21",
+         "dte": None, "spot": 105.0, "magnet_strike": 110.0, "magnet_gex": 1.0,
+         "distance": 5.0, "score": 70.0, "positive_zone": 1, "payload": "{}"},
+    ]
+    monkeypatch.setattr(services, "load_gamma_gap_history", lambda limit: rows)
+
+    resp = client.get("/api/history/gamma-gap/outcomes")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["horizon_sessions"] == 5
+
+    outcomes = {row["magnet_strike"]: row for row in body["rows"]}
+    assert outcomes[104.0]["outcome"] == "hit"
+    assert outcomes[104.0]["sessions_to_hit"] == 3
+    assert outcomes[95.0]["outcome"] == "miss"
+    assert outcomes[110.0]["outcome"] == "pending"
+
+    summary = body["summary"]
+    assert summary["decided"] == 2
+    assert summary["pending"] == 1
+    assert summary["hit_rate"] == pytest.approx(0.5)
 
 
 def test_ai_status_endpoint(client, monkeypatch):

@@ -288,6 +288,72 @@ class GammaGapHistoryRow(BaseModel):
     positive_zone: Optional[int] = None
 
 
+class PricePoint(BaseModel):
+    ts: str
+    price: float
+
+
+class DeltaProjectionBar(BaseModel):
+    ts: str
+    price: float
+    delta_exposure: float
+
+
+class DeltaProjectionResponse(BaseModel):
+    """Intraday spot path with net dealer delta exposure per bar.
+
+    The projection extrapolates the exposure trend to the 16:00 ET close
+    with a linear fit; null when fewer than two bars exist.
+    """
+
+    symbol: str
+    expiration: str
+    offset: int
+    prev_close: PricePoint
+    bars: List[DeltaProjectionBar]
+    projection_ts: Optional[str] = None
+    projection_exposure: Optional[float] = None
+
+
+class GammaGapOutcomeRow(GammaGapHistoryRow):
+    outcome: Literal["hit", "miss", "pending"]
+    sessions_to_hit: Optional[int] = None
+    evaluated_sessions: int
+
+
+class GammaGapScoreBucket(BaseModel):
+    score_min: float
+    score_max: float
+    signals: int
+    decided: int
+    hits: int
+    hit_rate: Optional[float] = None
+
+
+class GammaGapOutcomeSummary(BaseModel):
+    signals: int
+    decided: int
+    hits: int
+    misses: int
+    pending: int
+    hit_rate: Optional[float] = None
+    avg_sessions_to_hit: Optional[float] = None
+    by_score: List[GammaGapScoreBucket]
+
+
+class GammaGapOutcomesResponse(BaseModel):
+    """Realized outcomes for logged gamma-gap signals.
+
+    Hit = the magnet strike traded within the horizon of sessions AFTER the
+    signal date (the signal day never counts). The hit rate covers decided
+    signals only; pending signals are shown but excluded.
+    """
+
+    horizon_sessions: int
+    summary: GammaGapOutcomeSummary
+    rows: List[GammaGapOutcomeRow]
+
+
 class AIAnalyzeRequest(BaseModel):
     symbol: str = Field(min_length=1, max_length=12, pattern=r"^[A-Za-z0-9.^-]+$")
     expirations: Optional[List[str]] = Field(default=None, max_length=8)

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 import math
+
+import numpy as np
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -15,11 +17,17 @@ from quant_analysis.analytics.greeks import (
     compute_vanna_charm_exposures,
     get_risk_free_rate,
 )
+from quant_analysis.analytics.track_record import (
+    evaluate_gamma_gap_outcome,
+    summarize_outcomes,
+)
 from quant_analysis.analytics.visualization import (
+    compute_delta_exposure_series,
     compute_gamma_gap_metrics,
     compute_net_gamma_exposure,
     describe_gamma_gap,
     generate_binomial_tree,
+    get_intraday_prices_with_prev_close,
     interpret_net_gex,
 )
 from quant_analysis.services.market_data import (
@@ -573,6 +581,116 @@ def get_gamma_gap_history(ticker: Optional[str], limit: int) -> List[Dict[str, A
     for row in rows:
         row.pop("payload", None)
     return rows
+
+
+def get_delta_projection(symbol: str, expiration: str, offset: int) -> Dict[str, Any]:
+    """Intraday spot path + per-bar net dealer delta exposure + EOD trend.
+
+    Resurrects the legacy ``plot_price_and_delta_projection`` data pipeline:
+    yfinance 30-minute bars (prev close prefixed) and ONE cached chain
+    snapshot, with the exposure window sliding along the price path.
+    """
+
+    def load_prices():
+        return get_intraday_prices_with_prev_close(symbol)
+
+    try:
+        prices = cache.get_or_compute(f"intraday:{symbol}", TTL_MACRO, load_prices)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Intraday prices unavailable for {symbol}."
+        ) from exc
+    if prices is None or len(prices) < 2:
+        raise HTTPException(
+            status_code=404, detail=f"No intraday bars for {symbol} yet."
+        )
+
+    chain = _chain(symbol, expiration)
+    if not chain:
+        raise HTTPException(status_code=404, detail=f"No chain for {symbol} {expiration}")
+
+    delta_series = compute_delta_exposure_series(chain, prices, offset)
+    if delta_series.empty:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No delta exposure computable for {symbol} {expiration}.",
+        )
+
+    projection_ts = None
+    projection_exposure = None
+    if len(delta_series) >= 2:
+        from datetime import datetime as dt_type, time as time_type
+
+        hours = [
+            (ts - delta_series.index[0]).total_seconds() / 3600
+            for ts in delta_series.index
+        ]
+        slope, intercept = np.polyfit(hours, delta_series.values, 1)
+        last_ts = delta_series.index[-1]
+        end_ts = dt_type.combine(last_ts.date(), time_type(16, 0)).replace(
+            tzinfo=last_ts.tzinfo
+        )
+        end_hour = (end_ts - delta_series.index[0]).total_seconds() / 3600
+        projection_ts = end_ts.isoformat()
+        projection_exposure = float(slope * end_hour + intercept)
+
+    return {
+        "symbol": symbol.upper(),
+        "expiration": expiration,
+        "offset": offset,
+        "prev_close": {
+            "ts": prices.index[0].isoformat(),
+            "price": float(prices.iloc[0]),
+        },
+        "bars": [
+            {
+                "ts": ts.isoformat(),
+                "price": float(prices[ts]),
+                "delta_exposure": float(value),
+            }
+            for ts, value in delta_series.items()
+        ],
+        "projection_ts": projection_ts,
+        "projection_exposure": projection_exposure,
+    }
+
+
+def get_gamma_gap_outcomes(
+    ticker: Optional[str], horizon: int, limit: int
+) -> Dict[str, Any]:
+    """Logged signals scored against realized daily ranges.
+
+    A hit means the magnet strike traded (low <= magnet <= high) within
+    ``horizon`` sessions AFTER the signal date; the signal day itself never
+    counts. Signals whose candle history cannot be fetched stay "pending"
+    with zero evaluated sessions rather than being dropped or guessed.
+    """
+
+    signals = get_gamma_gap_history(ticker, limit)
+    candles_by_ticker: Dict[str, List[Dict[str, Any]]] = {}
+    rows: List[Dict[str, Any]] = []
+
+    for signal in signals:
+        symbol = str(signal.get("ticker", "")).upper()
+        magnet = signal.get("magnet_strike")
+        ts = str(signal.get("ts", ""))
+        if not symbol or magnet is None or not ts:
+            continue
+        if symbol not in candles_by_ticker:
+            try:
+                candles_by_ticker[symbol] = get_candles(symbol, 365)
+            except HTTPException:
+                candles_by_ticker[symbol] = []
+        result = evaluate_gamma_gap_outcome(
+            ts[:10], float(magnet), candles_by_ticker[symbol], horizon
+        )
+        rows.append({**signal, **result})
+
+    return {
+        "horizon_sessions": horizon,
+        "summary": summarize_outcomes(rows),
+        "rows": rows,
+    }
 
 
 def get_market_overview() -> Dict[str, Any]:

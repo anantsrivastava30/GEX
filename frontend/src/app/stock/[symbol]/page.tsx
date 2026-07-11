@@ -6,6 +6,7 @@ import {
   APIError,
   Candle,
   DailyMetricsPoint,
+  DeltaProjectionResponse,
   ExposureResponse,
   GexProfile,
   IVRankResponse,
@@ -17,6 +18,7 @@ import {
 import GexStrikeChart from "@/components/charts/GexStrikeChart";
 import StrikeBarChart from "@/components/charts/StrikeBarChart";
 import CandlestickChart from "@/components/charts/CandlestickChart";
+import DeltaProjectionChart from "@/components/charts/DeltaProjectionChart";
 import HistoricalGexChart from "@/components/charts/HistoricalGexChart";
 import SkewChart from "@/components/charts/SkewChart";
 import TermStructureChart from "@/components/charts/TermStructureChart";
@@ -64,6 +66,7 @@ function StockDataPage({ upper }: { upper: string }) {
   const [candles, setCandles] = useState<Candle[] | null>(null);
   const [exposure, setExposure] = useState<ExposureResponse | null>(null);
   const [maxPain, setMaxPain] = useState<MaxPainResponse | null>(null);
+  const [deltaProj, setDeltaProj] = useState<DeltaProjectionResponse | null>(null);
   const [skew, setSkew] = useState<SkewResponse | null | "error">(null);
   const [term, setTerm] = useState<TermStructureResponse | null | "error">(null);
   const [ivRank, setIvRank] = useState<
@@ -148,6 +151,12 @@ function StockDataPage({ upper }: { upper: string }) {
       .then(setSkew)
       .catch((e) => {
         if (e.name !== "AbortError") setSkew("error");
+      });
+    api
+      .deltaProjection(upper, selected, 35, signal)
+      .then(setDeltaProj)
+      .catch((e) => {
+        if (e.name !== "AbortError") setDeltaProj(null);
       });
 
     return () => controller.abort();
@@ -464,6 +473,24 @@ function StockDataPage({ upper }: { upper: string }) {
                 />
               </Panel>
             </div>
+          )}
+
+          {deltaProj && deltaProj.bars.length > 0 && (
+            <Panel
+              title={`Intraday delta projection — ${deltaProj.expiration}`}
+              right={
+                <span className="font-mono text-xs text-muted">
+                  {deltaProj.bars.length} bars · ±{deltaProj.offset} strikes
+                </span>
+              }
+            >
+              <DeltaProjectionChart data={deltaProj} />
+              <p className="mt-2 text-xs text-muted">
+                Net dealer delta exposure of the current chain within ±
+                {deltaProj.offset} of each bar&apos;s spot; the dashed extension is a
+                linear trend projected to the 16:00 close.
+              </p>
+            </Panel>
           )}
 
           <Panel

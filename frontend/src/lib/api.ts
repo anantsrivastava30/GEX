@@ -135,6 +135,84 @@ export interface HottestChainsResponse {
   rows: HottestChainRow[];
 }
 
+export interface DeltaProjectionBar {
+  ts: string;
+  price: number;
+  delta_exposure: number;
+}
+
+export interface DeltaProjectionResponse {
+  symbol: string;
+  expiration: string;
+  offset: number;
+  prev_close: { ts: string; price: number };
+  bars: DeltaProjectionBar[];
+  projection_ts?: string | null;
+  projection_exposure?: number | null;
+}
+
+export type GammaGapOutcome = "hit" | "miss" | "pending";
+
+export interface GammaGapOutcomeRow extends GammaGapHistoryRow {
+  outcome: GammaGapOutcome;
+  sessions_to_hit?: number | null;
+  evaluated_sessions: number;
+}
+
+export interface GammaGapScoreBucket {
+  score_min: number;
+  score_max: number;
+  signals: number;
+  decided: number;
+  hits: number;
+  hit_rate?: number | null;
+}
+
+export interface GammaGapOutcomeSummary {
+  signals: number;
+  decided: number;
+  hits: number;
+  misses: number;
+  pending: number;
+  hit_rate?: number | null;
+  avg_sessions_to_hit?: number | null;
+  by_score: GammaGapScoreBucket[];
+}
+
+export interface GammaGapOutcomesResponse {
+  horizon_sessions: number;
+  summary: GammaGapOutcomeSummary;
+  rows: GammaGapOutcomeRow[];
+}
+
+export type ScreenerPreset = "high_vol_oi" | "unusually_bullish" | "gamma_squeeze";
+
+export interface ScreenerRow {
+  symbol: string;
+  snapshot_date: string;
+  expiration_date?: string | null;
+  strike?: number | null;
+  option_type?: "call" | "put" | null;
+  volume?: number | null;
+  open_interest?: number | null;
+  volume_oi?: number | null;
+  spot?: number | null;
+  net_gex_total?: number | null;
+  gamma_magnet_strike?: number | null;
+  gamma_gap_distance?: number | null;
+  gamma_gap_score?: number | null;
+  gamma_positive_zone?: boolean | null;
+}
+
+export interface ScreenerResponse {
+  preset: ScreenerPreset;
+  as_of?: string | null;
+  stale: boolean;
+  unavailable_symbols: string[];
+  methodology: string;
+  rows: ScreenerRow[];
+}
+
 export interface NewsItem {
   title: string;
   link: string;
@@ -406,6 +484,19 @@ export const api = {
       signal,
     ),
 
+  screener: (
+    preset: ScreenerPreset,
+    filters: { minVolOi?: number; minOpenInterest?: number; limit?: number } = {},
+    signal?: AbortSignal,
+  ) => {
+    const params: Record<string, string | number> = { preset };
+    if (filters.minVolOi != null) params.min_vol_oi = filters.minVolOi;
+    if (filters.minOpenInterest != null)
+      params.min_open_interest = filters.minOpenInterest;
+    if (filters.limit != null) params.limit = filters.limit;
+    return getJSON<ScreenerResponse>(`/api/screener${qs(params)}`, signal);
+  },
+
   marketOverview: () => getJSON<MarketOverview>(`/api/market/overview`),
 
   news: () => getJSON<NewsItem[]>(`/api/news`),
@@ -422,6 +513,19 @@ export const api = {
       signal,
     ),
 
+  gammaGapOutcomes: (
+    ticker?: string,
+    horizon = 5,
+    limit = 250,
+    signal?: AbortSignal,
+  ) =>
+    getJSON<GammaGapOutcomesResponse>(
+      `/api/history/gamma-gap/outcomes${qs(
+        ticker ? { ticker, horizon, limit } : { horizon, limit },
+      )}`,
+      signal,
+    ),
+
   exposure: (
     symbol: string,
     expirations: string[],
@@ -430,6 +534,17 @@ export const api = {
   ) =>
     getJSON<ExposureResponse>(
       `/api/ticker/${symbol}/exposure${qs({ expirations, offset })}`,
+      signal,
+    ),
+
+  deltaProjection: (
+    symbol: string,
+    expiration: string,
+    offset = 35,
+    signal?: AbortSignal,
+  ) =>
+    getJSON<DeltaProjectionResponse>(
+      `/api/ticker/${symbol}/delta-projection${qs({ expiration, offset })}`,
       signal,
     ),
 
