@@ -16,8 +16,16 @@ services:
       PORT: 8000
       TRADIER_TOKEN: ${TRADIER_TOKEN:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      SNAPSHOT_DIR: /app/data/snapshots
+      SQLITE_DB_PATH: /app/data/ai_analysis.db
+      # Intraday snapshot + gamma-gap jobs (every 30 min, market hours).
+      SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-true}
+      # Optional PIN protecting the paid /api/ai/analyze endpoint.
+      AI_PIN: ${AI_PIN:-}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./data:/app/data
     healthcheck:
       test:
         - CMD

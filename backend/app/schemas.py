@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class TickerSnapshot(BaseModel):
@@ -123,3 +123,88 @@ class MarketOverview(BaseModel):
     vix: Optional[Dict[str, Any]] = None
     yields: Optional[Dict[str, Any]] = None
     futures: Dict[str, Dict[str, Any]] = {}
+
+
+class ExposurePoint(BaseModel):
+    strike: float
+    vanna: float
+    charm: float
+
+
+class ExposureResponse(BaseModel):
+    symbol: str
+    expirations: List[str]
+    spot: float
+    offset: int
+    risk_free_rate: float
+    points: List[ExposurePoint]
+
+
+class MaxPainPoint(BaseModel):
+    strike: float
+    call_pain: float
+    put_pain: float
+    total_pain: float
+
+
+class MaxPainResponse(BaseModel):
+    symbol: str
+    expiration: str
+    spot: float
+    max_pain: float
+    curve: List[MaxPainPoint]
+
+
+class TermStructurePoint(BaseModel):
+    expiration: str
+    dte: Optional[int] = None
+    atm_iv: float
+
+
+class TermStructureResponse(BaseModel):
+    symbol: str
+    spot: float
+    points: List[TermStructurePoint]
+
+
+class GammaGapHistoryRow(BaseModel):
+    ts: str
+    ticker: str
+    expiration: Optional[str] = None
+    dte: Optional[int] = None
+    spot: Optional[float] = None
+    magnet_strike: Optional[float] = None
+    magnet_gex: Optional[float] = None
+    distance: Optional[float] = None
+    score: Optional[float] = None
+    positive_zone: Optional[int] = None
+
+
+class AIAnalyzeRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=12, pattern=r"^[A-Za-z0-9.^-]+$")
+    expirations: Optional[List[str]] = Field(default=None, max_length=8)
+    model: Optional[str] = Field(default=None, max_length=100)
+    offset: int = Field(default=35, ge=1, le=100)
+    pin: Optional[str] = Field(default=None, max_length=128)
+
+
+class AIAnalyzeResponse(BaseModel):
+    symbol: str
+    model: str
+    response: str
+    prompt_tokens: Optional[int] = None
+    payload: Dict[str, Any]
+
+
+class AIStatus(BaseModel):
+    openai_configured: bool
+    pin_required: bool
+    default_model: str
+
+
+class AIHistoryItem(BaseModel):
+    ts: Optional[str] = None
+    ticker: Optional[str] = None
+    expirations: Optional[Any] = None
+    response: Optional[str] = None
+    token_count: Optional[Any] = None

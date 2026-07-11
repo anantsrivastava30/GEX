@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -21,7 +22,12 @@ from supabase import create_client
 from quant_analysis.config import CONFIG, PROJECT_ROOT
 
 
-DB_FILE = PROJECT_ROOT / CONFIG.get("database", {}).get("sqlite_db", "ai_analysis.db")
+DB_FILE = Path(
+    os.getenv(
+        "SQLITE_DB_PATH",
+        str(PROJECT_ROOT / CONFIG.get("database", {}).get("sqlite_db", "ai_analysis.db")),
+    )
+)
 
 
 logger = logging.getLogger(__name__)
@@ -55,6 +61,7 @@ except Exception as exc:  # pragma: no cover - defensive logging
 def init_db() -> None:
     """Ensure the local SQLite table exists and has the latest schema."""
 
+    DB_FILE.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(DB_FILE)
     con.execute(
         """

@@ -9,6 +9,11 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 from fastapi import HTTPException
 
+from quant_analysis.analytics.greeks import (
+    compute_max_pain,
+    compute_vanna_charm_exposures,
+    get_risk_free_rate,
+)
 from quant_analysis.analytics.visualization import (
     compute_gamma_gap_metrics,
     compute_net_gamma_exposure,
@@ -18,13 +23,16 @@ from quant_analysis.analytics.visualization import (
 from quant_analysis.services.market_data import (
     compute_iv_skew,
     compute_put_call_ratios,
+    compute_term_structure,
     compute_unusual_spikes,
     fetch_and_filter_rss,
     get_bond_yield_info,
     get_futures_quotes,
     get_vix_info,
+    process_options_data,
 )
 from quant_analysis.storage import snapshots as snapshot_store
+from quant_analysis.storage.db import load_gamma_gap_history
 
 from backend.app.cache import cache
 from backend.app.config import get_settings
@@ -37,6 +45,7 @@ TTL_EXPIRATIONS = 24 * 3600
 TTL_MACRO = 300
 TTL_NEWS = 600
 TTL_HISTORY = 3600
+TTL_RISK_FREE = 6 * 3600
 
 
 def _quote(symbol: str) -> Dict[str, Any]:
@@ -202,6 +211,105 @@ def get_unusual(symbol: str, expirations: List[str], top_n: int) -> Dict[str, An
         "expirations": expirations,
         "rows": spikes.where(pd.notnull(spikes), None).to_dict(orient="records"),
     }
+
+
+def _risk_free_rate() -> float:
+    return cache.get_or_compute("risk_free_rate", TTL_RISK_FREE, get_risk_free_rate)
+
+
+def _positioning_frame(symbol: str, expirations: List[str]) -> pd.DataFrame:
+    """Flattened chain frame with exposures from cached per-expiration chains.
+
+    Copies each contract dict before tagging ``expiration_date`` so the
+    cached chain lists are never mutated.
+    """
+
+    all_opts: List[Dict[str, Any]] = []
+    for expiration in expirations:
+        chain = _chain(symbol, expiration)
+        for opt in chain or []:
+            all_opts.append({**opt, "expiration_date": expiration})
+    df = process_options_data(all_opts)
+    if df.empty:
+        raise HTTPException(
+            status_code=404, detail=f"No option data for {symbol} {expirations}"
+        )
+    return df
+
+
+def get_exposure(symbol: str, expirations: List[str], offset: int) -> Dict[str, Any]:
+    """Per-strike net vanna/charm exposure (locally derived Black-Scholes)."""
+
+    spot = _spot(symbol)
+    df = _positioning_frame(symbol, expirations)
+    rate = _risk_free_rate()
+    out = compute_vanna_charm_exposures(df, spot, r=rate, offset=offset)
+    if out.empty:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No usable IV data for {symbol} within ±{offset} of spot.",
+        )
+    return {
+        "symbol": symbol.upper(),
+        "expirations": expirations,
+        "spot": spot,
+        "offset": offset,
+        "risk_free_rate": rate,
+        "points": [
+            {
+                "strike": float(row["strike"]),
+                "vanna": float(row["vanna_exposure"]),
+                "charm": float(row["charm_exposure"]),
+            }
+            for _, row in out.iterrows()
+        ],
+    }
+
+
+def get_max_pain(symbol: str, expiration: str) -> Dict[str, Any]:
+    spot = _spot(symbol)
+    chain = _chain(symbol, expiration)
+    if not chain:
+        raise HTTPException(status_code=404, detail=f"No chain for {symbol} {expiration}")
+    result = compute_max_pain(pd.DataFrame(chain))
+    if result is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No open interest for {symbol} {expiration} yet.",
+        )
+    return {
+        "symbol": symbol.upper(),
+        "expiration": expiration,
+        "spot": spot,
+        **result,
+    }
+
+
+def get_term_structure(symbol: str, num_expirations: int) -> Dict[str, Any]:
+    spot = _spot(symbol)
+    expirations = get_expirations(symbol)[:num_expirations]
+    chains = {exp: _chain(symbol, exp) for exp in expirations}
+    ts = compute_term_structure(chains, spot)
+    if ts.empty:
+        raise HTTPException(
+            status_code=404, detail=f"No IV data for {symbol} term structure."
+        )
+    ts = ts.where(pd.notnull(ts), None)
+    return {
+        "symbol": symbol.upper(),
+        "spot": spot,
+        "points": ts.to_dict(orient="records"),
+    }
+
+
+def get_gamma_gap_history(ticker: Optional[str], limit: int) -> List[Dict[str, Any]]:
+    rows = load_gamma_gap_history(limit=limit if not ticker else max(limit * 10, limit))
+    if ticker:
+        upper = ticker.upper()
+        rows = [r for r in rows if str(r.get("ticker", "")).upper() == upper][:limit]
+    for row in rows:
+        row.pop("payload", None)
+    return rows
 
 
 def get_market_overview() -> Dict[str, Any]:

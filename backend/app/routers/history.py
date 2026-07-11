@@ -5,9 +5,19 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Query
 
 from backend.app import services
-from backend.app.schemas import IVRankResponse, OIChangeRow
+from backend.app.schemas import GammaGapHistoryRow, IVRankResponse, OIChangeRow
 
 router = APIRouter(prefix="/api/history", tags=["history"])
+
+
+@router.get("/gamma-gap", response_model=List[GammaGapHistoryRow])
+def gamma_gap_history(
+    ticker: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=1000),
+):
+    """Logged gamma-gap scans (the raw material for the track-record page)."""
+
+    return services.get_gamma_gap_history(ticker, limit)
 
 
 @router.get("/{symbol}/iv-rank", response_model=IVRankResponse)

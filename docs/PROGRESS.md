@@ -24,17 +24,17 @@ session should pick up.
 - [x] Tests for the snapshot engine (`tests/test_snapshots.py`)
 
 ### Phase 1 — UW-style shell + port (look & feel milestone)
-- [x] P1.1 Backend skeleton: `backend/` FastAPI (config, deps w/ tenacity retry, `cache.py` TTL layer, `ratelimit.py` token bucket), routers `ticker` (snapshot/expirations/gex/skew/ratios), `market`, `news`, `flow` (unusual proxy), `history` (iv-rank/oi-change/metrics from our snapshots), pydantic schemas, TestClient tests w/ faked Tradier. *Still to add: `ai` router (port `render_ai_tab` pipeline), split exposure router when vanna/charm lands.*
-- [ ] P1.2 Scheduler jobs in backend (APScheduler) calling the same snapshot engine intraday (gamma-gap every 30 min)
+- [x] P1.1 Backend skeleton: `backend/` FastAPI (config, deps w/ tenacity retry, `cache.py` TTL layer, `ratelimit.py` token bucket), routers `ticker` (snapshot/expirations/gex/skew/ratios/max-pain/term-structure), `exposure` (vanna/charm), `market`, `news`, `flow` (unusual proxy), `history` (iv-rank/oi-change/metrics/gamma-gap from our own data), `ai` (analyze/analyses/status), pydantic schemas, TestClient tests w/ faked Tradier.
+- [x] P1.2 Scheduler jobs in backend (APScheduler): intraday snapshot + gamma-gap scoring every 30 min during market hours (`backend/app/jobs.py`, `SCHEDULER_ENABLED`, on by default in compose)
 - [x] P1.3 Frontend shell: Next.js 16 + Tailwind v4 in `frontend/`, dark theme tokens (`globals.css`), `SidebarNav`/`TopBar` w/ ticker search, typed API client (`src/lib/api.ts`), `/api` rewrite to backend :8000. First pages live: `/market` (VIX/yields/futures), `/stock/[symbol]` (quote, expiration chips, net-GEX chart + table, gamma-gap signal card, interpretation), `/news`, `/flow` (live). *Still to add: shadcn/ui + TanStack Table for dense tables, more chart components, remaining pages.*
 - [ ] P1.4 Page ports (one PR each): `/market`, `/stock/[symbol]` (+`/gex`, `/vol`), `/news`, `/ai`, `/tools/binomial`, `/flow` (basic unusual-spikes table), `/calendar` (iframe parity); resurrect intraday delta-projection on `/gex`
 - [ ] P1.5 Legacy freeze: move `app.py` → `legacy/app.py`, `docker-compose.yml`, CI matrix (quant_analysis pytest + backend pytest + frontend build/Playwright), README update
 
 ### Phase 2 — Close the UW feature gap (free data)
-- [ ] Vanna/Charm local Black-Scholes derivation (`quant_analysis/analytics/greeks.py`) + exposure endpoints/charts
-- [ ] Max pain
-- [ ] IV rank / percentile tiles + historical GEX charts (reads `data/snapshots/`)
-- [ ] Term structure (fix disabled `compute_term_structure_slope`)
+- [x] Vanna/Charm local Black-Scholes derivation (`quant_analysis/analytics/greeks.py`) + exposure endpoints/charts
+- [x] Max pain (`compute_max_pain` + endpoint + tile on the GEX tab)
+- [ ] IV rank / percentile tiles + historical GEX charts (reads `data/snapshots/`) — *tiles shipped on `/stock` Overview + Volatility; historical GEX charts still pending*
+- [x] Term structure (pure `compute_term_structure` + fixed `compute_term_structure_slope` + endpoint + chart)
 - [ ] Full proxy flow feed + hottest chains (vol/OI spikes + OI Δ from snapshots + IV move; filter chips)
 - [ ] Congress trades (Senate eFD / House Clerk daily job)
 - [ ] Native earnings/economic calendar
@@ -213,3 +213,107 @@ Docker daemon in this session) — build/run happens on the user's box.
 **Deploy status:** HF Spaces abandoned (now paid). Options documented: self-host
 Docker (primary), or Render free / Cloud Run for cloud. `deploy-hf.yml` +
 `deploy/huggingface/` remain in-tree but unused unless HF PRO.
+
+### Session 3 — 2026-07-11 (P1 close-out + Phase 2 analytics)
+Resumed toward Phase 2 per the plan. All work verified end to end against the
+live backend (real Tradier data) plus mock-data chart previews via headless
+Chrome.
+
+**Phase 2 analytics (new `quant_analysis/analytics/greeks.py`):**
+- Black-Scholes vanna (dDelta/dVol) and charm (dDelta/dTime) with dividend
+  yield support; golden-value tests verify both against central finite
+  differences of `bs_delta` plus a hand-checked ATM value (`tests/test_greeks.py`,
+  23 tests).
+- `compute_vanna_charm_exposures`: per-strike net exposure (calls minus puts,
+  matching the net-GEX convention), `mid_iv` with `smv_vol` fallback, DTE floor
+  of half a day for 0DTE.
+- `compute_max_pain`: pure payout-minimisation over chain OI with the full
+  pain curve for charting.
+- `get_risk_free_rate`: ^IRX via yfinance with a safe default; cached 6h in
+  the backend.
+- `market_data.py`: pure `compute_term_structure` (ATM IV per expiration from
+  pre-fetched chains); `compute_term_structure_slope` fixed (was requesting
+  `greeks="false"` then reading greeks - dead since inception) and rebuilt on
+  the pure function. Extracted `process_options_data` from `load_options_data`
+  so cached-chain callers reuse the same math (public API unchanged).
+
+**Backend:**
+- New endpoints: `GET /api/ticker/{sym}/exposure` (vanna/charm by strike, own
+  `exposure` router), `/max-pain` (strike + pain curve), `/term-structure`,
+  `GET /api/history/gamma-gap` (logged scan rows - raw material for the
+  track-record page).
+- `ai` router (P1 leftover): `POST /api/ai/analyze` reusing the
+  `build_analysis_payload`/`create_data_packet` pipeline headless
+  (`backend/app/services_ai.py`), PIN-gated via `AI_PIN` env, saves to the
+  existing `ai_analysis` store; `GET /api/ai/analyses`, `GET /api/ai/status`.
+  `ai_analysis.build_analysis_payload` gained an optional `tradier_token`
+  param (headless callers pass it; Streamlit behavior unchanged).
+- P1.2 scheduler: `backend/app/jobs.py` (APScheduler BackgroundScheduler),
+  intraday snapshots + gamma-gap rows every 30 min Mon-Fri 9:30-16:00 ET for
+  the configured snapshot tickers, reusing `capture_ticker_snapshot` +
+  `write_snapshot` (upsert) and `save_gamma_gap_results`. Gated by
+  `SCHEDULER_ENABLED` (default off; on in docker-compose). Wired via FastAPI
+  lifespan; `apscheduler` added to backend requirements.
+- 9 new backend tests (exposure/max-pain/term-structure/gamma-gap-history/ai
+  status + PIN gate). 91 tests pass; `test_missing_token_returns_503` fails
+  locally only because a real `.env` exists (pydantic-settings reads the token
+  from the file), passes in CI.
+
+**Frontend:**
+- Generic `StrikeBarChart` extracted from `GexStrikeChart` (now a wrapper);
+  vanna + charm strike charts on the GEX tab with max-pain / gamma-gap-score /
+  risk-free-rate tiles.
+- Volatility tab is live: `SkewChart` (call/put IV by strike, legend + direct
+  labels since green/red sits in the CVD floor band, crosshair tooltip, spot
+  line), `TermStructureChart` (ATM IV per expiration, contango/inverted
+  read), IV rank / percentile / ATM IV / term-slope tiles.
+- IV rank + ATM IV tiles on Overview (graceful "accruing history" state while
+  snapshots build up).
+- `/flow`: UW-style filter chips (side dominance, vol/OI >= 2/5, total OI >=
+  1k/10k) applied client-side on the sortable table.
+- Fixed gamma-gap distance display (backend sends a fraction; UI now
+  multiplies by 100).
+
+**Verified:** `npm run build` clean; 91/92 pytest (see above); live end-to-end
+against Tradier: max pain SPY 750 vs spot 754.95, contango term structure,
+vanna/charm with live ^IRX 3.69%; `/api/ai/status` + `/api/ai/analyses` live;
+scheduler boot + market-hours guard unit-smoked; chart components eyeballed at
+1280px via headless Chrome (dataviz skill loaded; label collision fixed).
+
+**Next up (Session 4):**
+1. Historical GEX charts from `data/snapshots/` (last unchecked half of the
+   IV-rank Phase 2 item) + surface `/api/history/gamma-gap` as a track-record
+   page (hero differentiator).
+2. `/ai` page in the frontend (the backend is ready; port the three-step flow).
+3. Full proxy flow feed + hottest chains (vol/OI spikes + OI change from
+   snapshots + IV move; scan a capped liquid universe instead of one symbol).
+4. P1.4 leftovers: `/tools/binomial`, `/calendar` iframe parity; then P1.5
+   legacy freeze (move `app.py` to `legacy/`, CI matrix, README).
+
+**Open items for the human:**
+- Merge to `main` so the snapshot cron accrues history (every unmerged day is
+  lost data for IV rank).
+- On the self-host box: `docker compose up --build` picks up the scheduler
+  (`SCHEDULER_ENABLED=true` default) - snapshots then also accrue intraday.
+
+### Session 3 recovery - 2026-07-11
+Resumed after the prior session ended during review and corrected the concrete
+site issues it left behind.
+
+- Released a stale local Uvicorn process that was blocking port 8000.
+- Keyed ticker-page state by symbol and added request cancellation so old
+  symbol, expiration, and flow responses cannot overwrite newer selections.
+- Added distinct unavailable states for IV rank, skew, and term structure;
+  corrected max-pain wording and flow sorting/filter empty states.
+- Made AI analysis fail closed when `AI_PIN` is absent, restricted requests to
+  the configured model and bounded inputs, protected history with `X-AI-PIN`,
+  and stopped returning provider exception details.
+- Persisted snapshots and SQLite under the host `data/` mount in Compose and
+  bound backend port 8000 to localhost only.
+- Fixed option DTE date boundaries, scheduler write isolation, scheduler
+  shutdown cleanup, and the existing frontend clock lint failure.
+
+**Verified:** frontend lint and production build pass; Python compileall and
+`docker compose config --quiet` pass; backend API tests are 16/17 locally. The
+one failure is the known missing-token test because the real local `.env` is
+loaded after the test removes only the process environment variable.

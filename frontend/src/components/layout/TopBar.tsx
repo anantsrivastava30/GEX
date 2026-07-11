@@ -26,9 +26,13 @@ export default function TopBar() {
   const [now, setNow] = useState<Date | null>(null);
 
   useEffect(() => {
-    setNow(new Date());
-    const id = setInterval(() => setNow(new Date()), 30_000);
-    return () => clearInterval(id);
+    const updateClock = () => setNow(new Date());
+    const initialId = window.setTimeout(updateClock, 0);
+    const intervalId = window.setInterval(updateClock, 30_000);
+    return () => {
+      window.clearTimeout(initialId);
+      window.clearInterval(intervalId);
+    };
   }, []);
 
   function submit(e: React.FormEvent) {

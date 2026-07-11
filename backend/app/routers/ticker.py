@@ -6,8 +6,10 @@ from backend.app import services
 from backend.app.schemas import (
     Candle,
     GexProfile,
+    MaxPainResponse,
     RatiosResponse,
     SkewResponse,
+    TermStructureResponse,
     TickerSnapshot,
 )
 
@@ -52,3 +54,16 @@ def put_call_ratios(
     expirations: List[str] = Query(..., description="One or more expirations"),
 ):
     return services.get_ratios(symbol.upper(), expirations)
+
+
+@router.get("/{symbol}/max-pain", response_model=MaxPainResponse)
+def max_pain(symbol: str, expiration: str = Query(...)):
+    return services.get_max_pain(symbol.upper(), expiration)
+
+
+@router.get("/{symbol}/term-structure", response_model=TermStructureResponse)
+def term_structure(
+    symbol: str,
+    expirations: int = Query(6, ge=2, le=12, description="Expirations to include"),
+):
+    return services.get_term_structure(symbol.upper(), expirations)

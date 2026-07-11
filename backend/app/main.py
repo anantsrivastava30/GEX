@@ -6,20 +6,46 @@ Run locally with:
 
 from __future__ import annotations
 
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.config import get_settings
-from backend.app.routers import flow, history, market, news, ticker
+from backend.app.routers import ai, exposure, flow, history, market, news, ticker
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    settings = get_settings()
+    scheduler = None
+    if settings.scheduler_enabled:
+        from backend.app.jobs import create_scheduler
+
+        scheduler = create_scheduler()
+        scheduler.start()
+        logger.info(
+            "Scheduler started: intraday snapshots for %s",
+            ", ".join(settings.snapshot_tickers),
+        )
+    try:
+        yield
+    finally:
+        if scheduler:
+            scheduler.shutdown(wait=False)
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
         title="GEX Options Analytics API",
-        description="Dealer-positioning analytics: GEX, gamma-gap, skew, "
-        "unusual activity, and own-data market history.",
-        version="0.1.0",
+        description="Dealer-positioning analytics: GEX, vanna/charm, gamma-gap, "
+        "skew, max pain, unusual activity, and own-data market history.",
+        version="0.2.0",
+        lifespan=lifespan,
     )
     app.add_middleware(
         CORSMiddleware,
@@ -29,16 +55,19 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(ticker.router)
+    app.include_router(exposure.router)
     app.include_router(market.router)
     app.include_router(news.router)
     app.include_router(flow.router)
     app.include_router(history.router)
+    app.include_router(ai.router)
 
     @app.get("/api/health", tags=["meta"])
     def health() -> dict:
         return {
             "status": "ok",
             "tradier_configured": bool(settings.tradier_token),
+            "scheduler_enabled": settings.scheduler_enabled,
         }
 
     return app

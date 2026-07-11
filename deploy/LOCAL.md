@@ -16,7 +16,11 @@ Open **http://localhost:3000**.
 - Backend API: http://localhost:8000 (health: http://localhost:8000/api/health)
 
 The frontend calls `/api/*` and Docker's internal network proxies that to the
-backend container, so only port 3000 needs to be reachable.
+backend container. Backend port 8000 is bound to localhost only; port 3000 is
+the public entry point.
+
+Snapshot history and the SQLite fallback database persist under the host's
+`data/` directory across image rebuilds and container replacement.
 
 Stop with `Ctrl-C`, or run detached with `docker compose up --build -d` and
 stop with `docker compose down`.
