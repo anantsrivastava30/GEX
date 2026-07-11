@@ -1,0 +1,48 @@
+# Full local stack: FastAPI backend + Next.js frontend.
+#
+#   cp .env.example .env      # fill in TRADIER_TOKEN
+#   docker compose up --build
+#
+# Then open http://localhost:3000. The frontend proxies /api/* to the backend
+# container over the internal network, so only port 3000 needs to be public.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      # The root Dockerfile binds ${PORT:-7860}; pin it to 8000 locally.
+      PORT: 8000
+      TRADIER_TOKEN: ${TRADIER_TOKEN:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health').status==200 else 1)
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      # Give the heavy scientific stack time to import on first boot.
+      start_period: 60s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Baked into the Next rewrite at build time -> the backend service.
+        BACKEND_URL: http://backend:8000
+    environment:
+      PORT: 3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped

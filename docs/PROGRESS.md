@@ -190,3 +190,26 @@ only console warning was preview-only (module-level `Math.random` mock data).
 **Next up (Session 3, updated):** APScheduler intraday jobs; `ai` router (env
 key, no `st.secrets`); IV-rank tile on `/stock` from `/api/history`; filter
 chips on `/flow`; wire live candles once the backend runs on the Space.
+
+### Session 2d — 2026-07-11 (self-host Docker setup)
+Hugging Face now gates Docker Spaces behind a paid PRO plan (Static-only free),
+so the free HF backend path is dead. Pivoted to self-hosting the full stack via
+Docker (user's Ubuntu box has far more RAM than any free tier anyway).
+- `frontend/Dockerfile`: multi-stage, Next `output: "standalone"` (added to
+  `next.config.ts`) → minimal `server.js` runtime image, non-root. `BACKEND_URL`
+  is a build arg (Next bakes rewrites into the routes manifest at build time).
+- `frontend/.dockerignore`.
+- Root `docker-compose.yml`: `backend` (root Dockerfile, `PORT=8000`, healthcheck
+  on `/api/health`) + `frontend` (waits for backend healthy). One command:
+  `cp .env.example .env && docker compose up --build` → http://localhost:3000.
+- `.env.example`, `deploy/LOCAL.md` (compose usage + Cloudflare Tunnel for a
+  free public HTTPS URL from the box).
+
+**Verified:** frontend standalone build clean; confirmed the `/api` rewrite is
+baked into `routes-manifest.json` at build time (so the compose build arg is the
+correct mechanism); `docker compose config` validates. Images not built here (no
+Docker daemon in this session) — build/run happens on the user's box.
+
+**Deploy status:** HF Spaces abandoned (now paid). Options documented: self-host
+Docker (primary), or Render free / Cloud Run for cloud. `deploy-hf.yml` +
+`deploy/huggingface/` remain in-tree but unused unless HF PRO.
