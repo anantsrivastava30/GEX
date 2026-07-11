@@ -14,6 +14,7 @@ negligible against the ~120 req/min budget.
 from __future__ import annotations
 
 import logging
+import time as time_module
 from datetime import datetime, time
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -57,38 +58,43 @@ def run_intraday_snapshots() -> None:
     base_dir = Path(settings.snapshot_dir)
     gap_rows = []
     captured = 0
-    for ticker in settings.snapshot_tickers:
+    tickers = settings.snapshot_tickers
+    for index, ticker in enumerate(tickers):
+        snap = None
         try:
             snap = snapshot_store.capture_ticker_snapshot(
                 ticker, settings.tradier_token
             )
         except Exception:
             logger.exception("Snapshot capture failed for %s", ticker)
-            continue
-        if not snap:
-            continue
-        try:
-            snapshot_store.write_snapshot(snap, base_dir)
-            captured += 1
+        if snap:
+            try:
+                snapshot_store.write_snapshot(snap, base_dir)
+                captured += 1
 
-            metrics = snap["metrics"]
-            if metrics.get("gamma_gap_score") is not None:
-                expirations = str(metrics.get("expirations", ""))
-                gap_rows.append(
-                    {
-                        "ticker": ticker,
-                        "expiration": expirations,
-                        "dte": None,
-                        "spot": snap.get("spot"),
-                        "magnet_strike": metrics.get("gamma_magnet_strike"),
-                        "magnet_gex": metrics.get("gamma_magnet_gex"),
-                        "distance": metrics.get("gamma_gap_distance"),
-                        "score": metrics.get("gamma_gap_score"),
-                        "positive_zone": metrics.get("gamma_positive_zone"),
-                    }
-                )
-        except Exception:
-            logger.exception("Snapshot persistence failed for %s", ticker)
+                metrics = snap["metrics"]
+                if metrics.get("gamma_gap_score") is not None:
+                    expirations = str(metrics.get("expirations", ""))
+                    gap_rows.append(
+                        {
+                            "ticker": ticker,
+                            "expiration": expirations,
+                            "dte": None,
+                            "spot": snap.get("spot"),
+                            "magnet_strike": metrics.get("gamma_magnet_strike"),
+                            "magnet_gex": metrics.get("gamma_magnet_gex"),
+                            "distance": metrics.get("gamma_gap_distance"),
+                            "score": metrics.get("gamma_gap_score"),
+                            "positive_zone": metrics.get("gamma_positive_zone"),
+                        }
+                    )
+            except Exception:
+                logger.exception("Snapshot persistence failed for %s", ticker)
+
+        # Captures make several upstream calls. Pace the bounded configured
+        # universe instead of allowing an intraday run to burst the free plan.
+        if index < len(tickers) - 1 and settings.snapshot_refresh_pause_seconds:
+            time_module.sleep(settings.snapshot_refresh_pause_seconds)
 
     if gap_rows:
         try:

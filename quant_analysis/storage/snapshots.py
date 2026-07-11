@@ -297,22 +297,58 @@ def compute_oi_change(
         return pd.DataFrame()
 
     prev_date, last_date = dates[-2], dates[-1]
-    cols = CONTRACT_KEY + ["open_interest"]
-    prev = history[history["snapshot_date"] == prev_date][cols]
-    last = history[history["snapshot_date"] == last_date][
-        cols + [c for c in ["volume", "mid_iv"] if c in history.columns]
+    prev = history[history["snapshot_date"] == prev_date]
+    last = history[history["snapshot_date"] == last_date]
+    merged = compute_contract_snapshot_diff(prev, last, prev_date, last_date)
+    # Keep the existing public OI-change frame stable. Consumers needing IV
+    # changes use the lower-level contract diff helper directly.
+    legacy_columns = CONTRACT_KEY + ["open_interest"]
+    legacy_columns += [
+        column for column in ("volume", "mid_iv") if column in merged.columns
     ]
-
-    merged = last.merge(
-        prev, on=CONTRACT_KEY, how="left", suffixes=("", "_prev")
-    )
-    merged["open_interest_prev"] = merged["open_interest_prev"].fillna(0)
-    merged["oi_change"] = merged["open_interest"] - merged["open_interest_prev"]
-    merged["from_date"] = prev_date
-    merged["to_date"] = last_date
+    legacy_columns += ["open_interest_prev", "oi_change", "from_date", "to_date"]
+    merged = merged[legacy_columns]
     return merged.sort_values(
         "oi_change", key=lambda s: s.abs(), ascending=False
     ).reset_index(drop=True)
+
+
+def compute_contract_snapshot_diff(
+    previous: pd.DataFrame,
+    current: pd.DataFrame,
+    from_date: str,
+    to_date: str,
+) -> pd.DataFrame:
+    """Compare two daily contract snapshots by contract key.
+
+    Missing prior OI is treated as zero, matching ``compute_oi_change``'s
+    established behavior. IV is not zero-filled: a missing prior quote means
+    the daily IV change is unavailable rather than a measured move.
+    """
+
+    current_columns = CONTRACT_KEY + ["open_interest"]
+    current_columns += [
+        column for column in ("volume", "mid_iv") if column in current.columns
+    ]
+    previous_columns = CONTRACT_KEY + ["open_interest"]
+    if "mid_iv" in previous.columns:
+        previous_columns.append("mid_iv")
+
+    prev = previous[previous_columns].copy()
+    last = current[current_columns].copy()
+    merged = last.merge(prev, on=CONTRACT_KEY, how="left", suffixes=("", "_prev"))
+    merged["open_interest_prev"] = merged["open_interest_prev"].fillna(0)
+    merged["oi_change"] = merged["open_interest"] - merged["open_interest_prev"]
+
+    if "mid_iv" in merged.columns and "mid_iv_prev" in merged.columns:
+        merged["iv_change"] = merged["mid_iv"] - merged["mid_iv_prev"]
+    elif "mid_iv" in merged.columns:
+        merged["mid_iv_prev"] = pd.NA
+        merged["iv_change"] = pd.NA
+
+    merged["from_date"] = from_date
+    merged["to_date"] = to_date
+    return merged
 
 
 def compute_iv_rank(

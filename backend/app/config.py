@@ -9,6 +9,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import List, Optional
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from quant_analysis.config import CONFIG
@@ -33,6 +34,11 @@ class Settings(BaseSettings):
     # never fire Tradier calls; the self-host compose stack turns it on.
     scheduler_enabled: bool = False
     snapshot_tickers: List[str] = list(DEFAULT_TICKERS)
+    snapshot_refresh_pause_seconds: float = Field(
+        default=float(CONFIG.get("snapshots", {}).get("refresh_pause_seconds", 1.0)),
+        ge=0.0,
+        le=60.0,
+    )
 
     # AI analysis (Phase 1 port of the Streamlit AI tab).
     openai_model: str = CONFIG.get("openai", {}).get("model", "gpt-4o-mini")

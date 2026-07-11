@@ -53,6 +53,9 @@ snapshots:
   dir: "data/snapshots"
   num_expirations: 4
   strike_offset: 35
+  # One capture uses a quote, expirations, and the configured chain expirations.
+  # Pace the bounded universe so scheduler runs stay below the free-data limit.
+  refresh_pause_seconds: 1.0
   tickers:
     - SPY
     - QQQ

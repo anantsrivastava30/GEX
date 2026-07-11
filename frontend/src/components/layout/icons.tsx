@@ -81,6 +81,17 @@ export const IconAI = base(
   </>,
 );
 
+export const IconTrackRecord = base(
+  <>
+    <path d="M4 19V5M4 19h16" />
+    <path d="M7 15l4-4 3 2 4-6" />
+    <circle cx="7" cy="15" r="1" />
+    <circle cx="11" cy="11" r="1" />
+    <circle cx="14" cy="13" r="1" />
+    <circle cx="18" cy="7" r="1" />
+  </>,
+);
+
 export const IconTools = base(
   <>
     <path d="M4 20l6-6" />

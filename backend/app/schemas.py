@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -91,6 +91,88 @@ class UnusualResponse(BaseModel):
     rows: List[UnusualRow]
 
 
+class CachedFlowRow(BaseModel):
+    ticker: str
+    expiration_date: str
+    strike: float
+    option_type: str
+    snapshot_date: str
+    volume: Optional[float] = None
+    open_interest: Optional[float] = None
+    volume_oi: Optional[float] = None
+    oi_change: Optional[float] = None
+    mid_iv: Optional[float] = None
+    iv_change: Optional[float] = None
+    history_available: bool
+    score: float
+
+
+class CachedFlowResponse(BaseModel):
+    """Cached contract-anomaly proxy, not a trade tape or directional feed."""
+
+    as_of: Optional[str] = None
+    stale: bool
+    unavailable_history: bool
+    unavailable_tickers: List[str]
+    unavailable_history_tickers: List[str]
+    rows: List[CachedFlowRow]
+
+
+class HottestChainRow(BaseModel):
+    ticker: str
+    expiration_date: str
+    snapshot_date: str
+    contracts: int
+    total_volume: float
+    total_open_interest: float
+    volume_oi: Optional[float] = None
+    oi_change: Optional[float] = None
+    iv_change: Optional[float] = None
+    history_available: bool
+    score: float
+
+
+class HottestChainsResponse(BaseModel):
+    """Cached chain rankings, not a representation of option trade activity."""
+
+    as_of: Optional[str] = None
+    stale: bool
+    unavailable_history: bool
+    unavailable_tickers: List[str]
+    unavailable_history_tickers: List[str]
+    rows: List[HottestChainRow]
+
+
+class ScreenerRow(BaseModel):
+    """A candidate derived from the latest persisted option snapshots."""
+
+    symbol: str
+    snapshot_date: str
+    expiration_date: Optional[str] = None
+    strike: Optional[float] = None
+    option_type: Optional[Literal["call", "put"]] = None
+    volume: Optional[float] = None
+    open_interest: Optional[float] = None
+    volume_oi: Optional[float] = None
+    spot: Optional[float] = None
+    net_gex_total: Optional[float] = None
+    gamma_magnet_strike: Optional[float] = None
+    gamma_gap_distance: Optional[float] = None
+    gamma_gap_score: Optional[float] = None
+    gamma_positive_zone: Optional[bool] = None
+
+
+class ScreenerResponse(BaseModel):
+    """Snapshot-only screener output, not a live options-flow feed."""
+
+    preset: Literal["high_vol_oi", "unusually_bullish", "gamma_squeeze"]
+    as_of: Optional[str] = None
+    stale: bool
+    unavailable_symbols: List[str]
+    methodology: str
+    rows: List[ScreenerRow]
+
+
 class NewsItem(BaseModel):
     title: str
     link: str
@@ -165,6 +247,32 @@ class TermStructureResponse(BaseModel):
     symbol: str
     spot: float
     points: List[TermStructurePoint]
+
+
+class BinomialCalibration(BaseModel):
+    risk_free_rate: float
+    risk_free_rate_source: Literal["market", "override"]
+    implied_volatility: float
+    implied_volatility_source: Literal["market", "override"]
+
+
+class BinomialNode(BaseModel):
+    step: int
+    node: int
+    price: float
+    option: float
+
+
+class BinomialTreeResponse(BaseModel):
+    symbol: str
+    expiration: str
+    spot: float
+    strike: float
+    option_type: Literal["call", "put"]
+    steps: int
+    days_to_exp: int
+    calibration: BinomialCalibration
+    nodes: List[BinomialNode]
 
 
 class GammaGapHistoryRow(BaseModel):

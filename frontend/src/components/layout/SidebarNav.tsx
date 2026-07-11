@@ -12,6 +12,7 @@ import {
   IconNews,
   IconScreener,
   IconTicker,
+  IconTrackRecord,
   IconTools,
 } from "./icons";
 
@@ -37,10 +38,11 @@ const SECTIONS: { heading: string; items: NavItem[] }[] = [
     heading: "Research",
     items: [
       { href: "/news", label: "News", icon: IconNews },
-      { href: "/ai", label: "AI Analysis", icon: IconAI, soon: true },
-      { href: "/calendar", label: "Calendar", icon: IconCalendar, soon: true },
+      { href: "/track-record", label: "Track Record", icon: IconTrackRecord },
+      { href: "/ai", label: "AI Analysis", icon: IconAI },
+      { href: "/calendar", label: "Calendar", icon: IconCalendar },
       { href: "/congress", label: "Congress", icon: IconCongress, soon: true },
-      { href: "/tools/binomial", label: "Tools", icon: IconTools, soon: true },
+      { href: "/tools/binomial", label: "Tools", icon: IconTools },
     ],
   },
 ];

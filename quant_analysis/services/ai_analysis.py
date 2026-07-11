@@ -693,5 +693,5 @@ def render_ai_tab(
 def main() -> int:
     """Console entrypoint placeholder for packaged installs."""
 
-    print("Run the dashboard with: streamlit run app.py")
+    print("Run the dashboard with: streamlit run legacy/app.py")
     return 0

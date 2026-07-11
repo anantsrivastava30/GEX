@@ -27,18 +27,18 @@ session should pick up.
 - [x] P1.1 Backend skeleton: `backend/` FastAPI (config, deps w/ tenacity retry, `cache.py` TTL layer, `ratelimit.py` token bucket), routers `ticker` (snapshot/expirations/gex/skew/ratios/max-pain/term-structure), `exposure` (vanna/charm), `market`, `news`, `flow` (unusual proxy), `history` (iv-rank/oi-change/metrics/gamma-gap from our own data), `ai` (analyze/analyses/status), pydantic schemas, TestClient tests w/ faked Tradier.
 - [x] P1.2 Scheduler jobs in backend (APScheduler): intraday snapshot + gamma-gap scoring every 30 min during market hours (`backend/app/jobs.py`, `SCHEDULER_ENABLED`, on by default in compose)
 - [x] P1.3 Frontend shell: Next.js 16 + Tailwind v4 in `frontend/`, dark theme tokens (`globals.css`), `SidebarNav`/`TopBar` w/ ticker search, typed API client (`src/lib/api.ts`), `/api` rewrite to backend :8000. First pages live: `/market` (VIX/yields/futures), `/stock/[symbol]` (quote, expiration chips, net-GEX chart + table, gamma-gap signal card, interpretation), `/news`, `/flow` (live). *Still to add: shadcn/ui + TanStack Table for dense tables, more chart components, remaining pages.*
-- [ ] P1.4 Page ports (one PR each): `/market`, `/stock/[symbol]` (+`/gex`, `/vol`), `/news`, `/ai`, `/tools/binomial`, `/flow` (basic unusual-spikes table), `/calendar` (iframe parity); resurrect intraday delta-projection on `/gex`
-- [ ] P1.5 Legacy freeze: move `app.py` → `legacy/app.py`, `docker-compose.yml`, CI matrix (quant_analysis pytest + backend pytest + frontend build/Playwright), README update
+- [x] P1.4 Page ports: `/market`, `/stock/[symbol]` (Overview/GEX/Volatility tabs), `/news`, `/ai`, `/tools/binomial`, `/flow` (cached proxy feed), `/calendar` (iframe parity), `/track-record` — *intraday delta-projection on `/gex` still pending*
+- [x] P1.5 Legacy freeze: `app.py` → `legacy/app.py`, `docker-compose.yml`, path-filtered CI matrix (analytics pytest + backend pytest + frontend build/Playwright e2e), README update
 
 ### Phase 2 — Close the UW feature gap (free data)
 - [x] Vanna/Charm local Black-Scholes derivation (`quant_analysis/analytics/greeks.py`) + exposure endpoints/charts
 - [x] Max pain (`compute_max_pain` + endpoint + tile on the GEX tab)
-- [ ] IV rank / percentile tiles + historical GEX charts (reads `data/snapshots/`) — *tiles shipped on `/stock` Overview + Volatility; historical GEX charts still pending*
+- [x] IV rank / percentile tiles + historical GEX charts (reads `data/snapshots/`) — tiles on `/stock` Overview + Volatility; historical net GEX on the GEX tab
 - [x] Term structure (pure `compute_term_structure` + fixed `compute_term_structure_slope` + endpoint + chart)
-- [ ] Full proxy flow feed + hottest chains (vol/OI spikes + OI Δ from snapshots + IV move; filter chips)
+- [x] Full proxy flow feed + hottest chains (`/api/flow/feed` + `/api/flow/hottest-chains` ranking vol/OI + OI Δ + IV Δ from snapshots; filters on `/flow`)
 - [ ] Congress trades (Senate eFD / House Clerk daily job)
-- [ ] Native earnings/economic calendar
-- [ ] Screener (presets + custom), server-persisted watchlists, alerts (in-app/Discord/email)
+- [ ] Native earnings/economic calendar (iframe parity shipped; native version pending)
+- [ ] Screener (presets + custom), server-persisted watchlists, alerts (in-app/Discord/email) — *snapshot-backed screener API with three presets shipped; frontend page, custom filters, watchlists, alerts pending*
 
 ### Phase 3 — Monetization
 - [ ] Supabase Auth + entitlements (replaces AI PIN)
@@ -317,3 +317,92 @@ site issues it left behind.
 `docker compose config --quiet` pass; backend API tests are 16/17 locally. The
 one failure is the known missing-token test because the real local `.env` is
 loaded after the test removes only the process environment variable.
+
+### Session 4 — 2026-07-11 (history and track record)
+- Added a typed client for the existing `/api/history/metrics` and
+  `/api/history/gamma-gap` endpoints.
+- `/stock/[symbol]` now renders a historical net-GEX chart on the GEX tab from
+  the project's daily snapshot metrics. It has clear loading and insufficient-
+  history states so it does not imply data that has not accrued yet.
+- Added `/track-record`: ticker-filterable gamma-gap signal log, summary tiles,
+  and the scheduler capture history. It explicitly does not claim a hit rate
+  until realized-outcome validation is implemented.
+- Added Track Record to the live sidebar navigation.
+
+**Verified:** `npm run lint` and `npm run build` in `frontend/` pass. The build
+includes static `/track-record` and dynamic `/stock/[symbol]` routes.
+
+**Next up:** port the AI frontend flow, then complete the multi-ticker proxy
+flow feed and hottest-chains ranking. Add gamma-gap realized-outcome scoring
+after enough snapshots exist to support a genuine hit-rate calculation.
+
+### Session 5 — 2026-07-11 (P1 finish line + flow feed, screener, pages; two-agent handoff)
+This session's work spans two agents that each hit usage limits mid-stream;
+a third pass reconstructed the combined state, validated everything, and
+fixed the handoff gaps. Combined delivery:
+
+**Backend:**
+- Cached proxy flow feed: `GET /api/flow/feed` (contract-level anomalies
+  ranked by percentile-scored vol/OI + |OI Δ| + |IV Δ|) and
+  `GET /api/flow/hottest-chains` (per-chain aggregates), both reading only
+  persisted snapshots - no live Tradier scans. Snapshot layer gained
+  `compute_contract_snapshot_diff` (OI + IV day-over-day diffs;
+  `compute_oi_change` now delegates to it with an unchanged public frame).
+- Snapshot-backed screener: `GET /api/screener` with `high_vol_oi`,
+  `unusually_bullish`, `gamma_squeeze` presets, explicit methodology strings,
+  and per-symbol staleness/unavailability reporting.
+- Binomial tree: `GET /api/ticker/{sym}/binomial-tree` (CRR, market-calibrated
+  rate/IV with manual overrides) reusing `generate_binomial_tree`.
+- AI hardening: PIN gate now constant-time via `secrets.compare_digest`,
+  required whenever configured (503 when unset), model allowlisted to the
+  configured id, `/api/ai/analyses` PIN-gated via `X-AI-PIN` header.
+- Scheduler: per-ticker pacing (`snapshots.refresh_pause_seconds`, config +
+  env), per-ticker persistence error isolation, lifespan shutdown in
+  try/finally.
+- Snapshot universe expanded to 13 liquid tickers in `config.yaml`.
+
+**Frontend:**
+- `/flow` rebuilt as the cached positioning proxy: hottest-chains table +
+  contract-level feed with symbol/side/vol-OI/OI-Δ/IV-Δ filters, staleness
+  badges, and honest not-trade-tape labeling. AbortController on refetch.
+- `/ai`: full three-step flow (status tiles, live expiration chips, PIN-gated
+  review + send, protected history).
+- `/tools/binomial`: CRR tree explorer against the new endpoint.
+- `/calendar`: Investing.com iframe parity page (nav unflagged).
+- `/track-record`: gamma-gap signal log + summary tiles (no hit-rate claim
+  until realized-outcome scoring exists) - Session 4 item, now nav-linked.
+- `HistoricalGexChart` on the GEX tab from `/api/history/metrics`.
+
+**P1.5 legacy freeze:** `app.py` moved to `legacy/app.py`; path-filtered CI
+matrix (analytics pytest / backend pytest / frontend build + Playwright);
+README and deploy docs updated; Playwright smoke suite added
+(`frontend/e2e/smoke.spec.ts`, fully API-mocked).
+
+**Handoff fixes in the reconciliation pass:**
+- Rewrote the stale flow e2e test for the rebuilt `/flow` page (old test
+  targeted the removed per-symbol Scan UI) and added `/api/flow/feed` +
+  `/api/flow/hottest-chains` mocks.
+- Unflagged Calendar in the sidebar (page existed but nav still said SOON).
+
+**Verified (combined):** analytics + backend pytest 93/94 (the one failure is
+the known local-.env missing-token test); `npm run lint` + `npm run build`
+clean; Playwright 4/4 against the standalone build; live end-to-end with real
+Tradier data: snapshot capture (SPY/QQQ into a scratch dir) → `/api/flow/feed`,
+`/api/flow/hottest-chains`, `/api/screener` all rank real contract anomalies
+with correct staleness flags; binomial tree calibrates against live spot;
+`/flow`, `/tools/binomial`, `/ai`, `/track-record` rendered and eyeballed via
+headless Chrome against the live backend.
+
+**Next up (Session 6):**
+1. Screener frontend page (backend presets are live) + custom filter builder.
+2. Resurrect intraday delta-projection on the GEX tab (last P1.4 item).
+3. Gamma-gap realized-outcome scoring + hit-rate on `/track-record` once
+   snapshot history accrues.
+4. Congress trades daily job; native calendar.
+5. Watchlists + alerts.
+
+**Open items for the human:**
+- Merge to `main` so the snapshot cron starts accruing the 13-ticker history
+  (IV rank, OI Δ, flow feed, and the track record all depend on it).
+- `docker compose up --build` on the box picks up the scheduler for intraday
+  accrual.

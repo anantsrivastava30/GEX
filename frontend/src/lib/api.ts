@@ -87,6 +87,54 @@ export interface UnusualResponse {
   rows: UnusualRow[];
 }
 
+export interface CachedFlowRow {
+  ticker: string;
+  expiration_date: string;
+  strike: number;
+  option_type: string;
+  snapshot_date: string;
+  volume?: number | null;
+  open_interest?: number | null;
+  volume_oi?: number | null;
+  oi_change?: number | null;
+  mid_iv?: number | null;
+  iv_change?: number | null;
+  history_available: boolean;
+  score: number;
+}
+
+export interface CachedFlowResponse {
+  as_of?: string | null;
+  stale: boolean;
+  unavailable_history: boolean;
+  unavailable_tickers: string[];
+  unavailable_history_tickers: string[];
+  rows: CachedFlowRow[];
+}
+
+export interface HottestChainRow {
+  ticker: string;
+  expiration_date: string;
+  snapshot_date: string;
+  contracts: number;
+  total_volume: number;
+  total_open_interest: number;
+  volume_oi?: number | null;
+  oi_change?: number | null;
+  iv_change?: number | null;
+  history_available: boolean;
+  score: number;
+}
+
+export interface HottestChainsResponse {
+  as_of?: string | null;
+  stale: boolean;
+  unavailable_history: boolean;
+  unavailable_tickers: string[];
+  unavailable_history_tickers: string[];
+  rows: HottestChainRow[];
+}
+
 export interface NewsItem {
   title: string;
   link: string;
@@ -102,6 +150,29 @@ export interface IVRankResponse {
   iv_low: number;
   iv_high: number;
   days_of_history: number;
+}
+
+export interface DailyMetricsPoint {
+  date: string;
+  ticker: string;
+  spot?: number | null;
+  net_gex_total?: number | null;
+  gamma_gap_score?: number | null;
+  gamma_magnet_strike?: number | null;
+  gamma_gap_distance?: number | null;
+}
+
+export interface GammaGapHistoryRow {
+  ts: string;
+  ticker: string;
+  expiration?: string | null;
+  dte?: number | null;
+  spot?: number | null;
+  magnet_strike?: number | null;
+  magnet_gex?: number | null;
+  distance?: number | null;
+  score?: number | null;
+  positive_zone?: number | null;
 }
 
 export interface MarketOverview {
@@ -152,6 +223,75 @@ export interface TermStructureResponse {
   points: TermStructurePoint[];
 }
 
+export type BinomialOptionType = "call" | "put";
+export type BinomialCalibrationSource = "market" | "override";
+
+export interface BinomialCalibration {
+  risk_free_rate: number;
+  risk_free_rate_source: BinomialCalibrationSource;
+  implied_volatility: number;
+  implied_volatility_source: BinomialCalibrationSource;
+}
+
+export interface BinomialNode {
+  step: number;
+  node: number;
+  price: number;
+  option: number;
+}
+
+export interface BinomialTreeResponse {
+  symbol: string;
+  expiration: string;
+  spot: number;
+  strike: number;
+  option_type: BinomialOptionType;
+  steps: number;
+  days_to_exp: number;
+  calibration: BinomialCalibration;
+  nodes: BinomialNode[];
+}
+
+export interface BinomialTreeRequest {
+  expiration: string;
+  strike: number;
+  optionType: BinomialOptionType;
+  steps: number;
+  daysToExp: number;
+  rateOverride?: number;
+  ivOverride?: number;
+}
+
+export interface AIStatus {
+  openai_configured: boolean;
+  pin_required: boolean;
+  default_model: string;
+}
+
+export interface AIAnalyzeRequest {
+  symbol: string;
+  expirations?: string[];
+  model?: string;
+  offset: number;
+  pin?: string;
+}
+
+export interface AIAnalyzeResponse {
+  symbol: string;
+  model: string;
+  response: string;
+  prompt_tokens?: number | null;
+  payload: Record<string, unknown>;
+}
+
+export interface AIHistoryItem {
+  ts?: string | null;
+  ticker?: string | null;
+  expirations?: unknown;
+  response?: string | null;
+  token_count?: unknown;
+}
+
 export class APIError extends Error {
   constructor(
     message: string,
@@ -162,9 +302,13 @@ export class APIError extends Error {
   }
 }
 
-async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
+async function getJSON<T>(
+  path: string,
+  signal?: AbortSignal,
+  headers?: HeadersInit,
+): Promise<T> {
   const resp = await fetch(path, {
-    headers: { accept: "application/json" },
+    headers: { accept: "application/json", ...headers },
     signal,
   });
   if (!resp.ok) {
@@ -172,6 +316,28 @@ async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
     try {
       const body = await resp.json();
       if (body?.detail) detail = String(body.detail);
+    } catch {
+      // non-JSON error body; keep the status message
+    }
+    throw new APIError(detail, resp.status);
+  }
+  return resp.json() as Promise<T>;
+}
+
+async function postJSON<T>(path: string, body: unknown): Promise<T> {
+  const resp = await fetch(path, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    let detail = `Backend returned ${resp.status}`;
+    try {
+      const errorBody = await resp.json();
+      if (errorBody?.detail) detail = String(errorBody.detail);
     } catch {
       // non-JSON error body; keep the status message
     }
@@ -231,12 +397,30 @@ export const api = {
       signal,
     ),
 
+  flowFeed: (limit = 500, signal?: AbortSignal) =>
+    getJSON<CachedFlowResponse>(`/api/flow/feed${qs({ limit })}`, signal),
+
+  hottestChains: (limit = 200, signal?: AbortSignal) =>
+    getJSON<HottestChainsResponse>(
+      `/api/flow/hottest-chains${qs({ limit })}`,
+      signal,
+    ),
+
   marketOverview: () => getJSON<MarketOverview>(`/api/market/overview`),
 
   news: () => getJSON<NewsItem[]>(`/api/news`),
 
   ivRank: (symbol: string, signal?: AbortSignal) =>
     getJSON<IVRankResponse>(`/api/history/${symbol}/iv-rank`, signal),
+
+  dailyMetrics: (symbol: string, signal?: AbortSignal) =>
+    getJSON<DailyMetricsPoint[]>(`/api/history/metrics${qs({ symbol })}`, signal),
+
+  gammaGapHistory: (ticker?: string, limit = 250, signal?: AbortSignal) =>
+    getJSON<GammaGapHistoryRow[]>(
+      `/api/history/gamma-gap${qs(ticker ? { ticker, limit } : { limit })}`,
+      signal,
+    ),
 
   exposure: (
     symbol: string,
@@ -260,4 +444,32 @@ export const api = {
       `/api/ticker/${symbol}/term-structure${qs({ expirations })}`,
       signal,
     ),
+
+  binomialTree: (
+    symbol: string,
+    request: BinomialTreeRequest,
+    signal?: AbortSignal,
+  ) =>
+    getJSON<BinomialTreeResponse>(
+      `/api/ticker/${symbol}/binomial-tree${qs({
+        expiration: request.expiration,
+        strike: request.strike,
+        option_type: request.optionType,
+        steps: request.steps,
+        days_to_exp: request.daysToExp,
+        ...(request.rateOverride == null ? {} : { rate_override: request.rateOverride }),
+        ...(request.ivOverride == null ? {} : { iv_override: request.ivOverride }),
+      })}`,
+      signal,
+    ),
+
+  aiStatus: (signal?: AbortSignal) => getJSON<AIStatus>("/api/ai/status", signal),
+
+  aiAnalyze: (request: AIAnalyzeRequest) =>
+    postJSON<AIAnalyzeResponse>("/api/ai/analyze", request),
+
+  aiHistory: (pin: string, limit = 15, signal?: AbortSignal) =>
+    getJSON<AIHistoryItem[]>(`/api/ai/analyses${qs({ limit })}`, signal, {
+      "X-AI-PIN": pin,
+    }),
 };

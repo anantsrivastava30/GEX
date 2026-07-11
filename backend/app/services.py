@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -18,6 +19,7 @@ from quant_analysis.analytics.visualization import (
     compute_gamma_gap_metrics,
     compute_net_gamma_exposure,
     describe_gamma_gap,
+    generate_binomial_tree,
     interpret_net_gex,
 )
 from quant_analysis.services.market_data import (
@@ -213,6 +215,171 @@ def get_unusual(symbol: str, expirations: List[str], top_n: int) -> Dict[str, An
     }
 
 
+def _configured_snapshot_tickers() -> List[str]:
+    """The flow proxy is deliberately limited to the configured snapshot universe."""
+
+    return list(dict.fromkeys(ticker.upper() for ticker in get_settings().snapshot_tickers))
+
+
+def _cached_contract_proxy_data() -> tuple[pd.DataFrame, Dict[str, Any]]:
+    """Load latest cached contracts and their preceding daily snapshot, if any.
+
+    This intentionally never uses the live-chain service. The scheduler and
+    snapshot CLI are the only producers of data consumed by flow endpoints.
+    """
+
+    base_dir = _snapshot_dir()
+    today = snapshot_store.market_date_today()
+    frames = []
+    unavailable_tickers = []
+    unavailable_history_tickers = []
+    observed_dates = []
+
+    for ticker in _configured_snapshot_tickers():
+        history = snapshot_store.load_contract_history(ticker, base_dir)
+        if history.empty:
+            unavailable_tickers.append(ticker)
+            continue
+
+        dates = sorted(history["snapshot_date"].unique())
+        latest_date = dates[-1]
+        observed_dates.append(latest_date)
+        latest = history[history["snapshot_date"] == latest_date].copy()
+        latest["ticker"] = ticker
+
+        if len(dates) < 2:
+            unavailable_history_tickers.append(ticker)
+            latest["open_interest_prev"] = pd.NA
+            latest["oi_change"] = pd.NA
+            latest["mid_iv_prev"] = pd.NA
+            latest["iv_change"] = pd.NA
+            latest["history_available"] = False
+        else:
+            previous_date = dates[-2]
+            previous = history[history["snapshot_date"] == previous_date]
+            latest = snapshot_store.compute_contract_snapshot_diff(
+                previous, latest, previous_date, latest_date
+            )
+            latest["ticker"] = ticker
+            latest["snapshot_date"] = latest_date
+            latest["history_available"] = True
+        frames.append(latest)
+
+    as_of = max(observed_dates) if observed_dates else None
+    stale = not observed_dates or bool(unavailable_tickers) or any(
+        observed_date != today for observed_date in observed_dates
+    )
+    status = {
+        "as_of": as_of,
+        "stale": stale,
+        "unavailable_history": bool(unavailable_tickers or unavailable_history_tickers),
+        "unavailable_tickers": unavailable_tickers,
+        "unavailable_history_tickers": unavailable_history_tickers,
+    }
+    return (pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(), status)
+
+
+def _rank_proxy_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Rank cached anomalies without inferring trade execution or direction."""
+
+    ranked = df.copy()
+    def numeric_column(column: str) -> pd.Series:
+        if column not in ranked:
+            return pd.Series(pd.NA, index=ranked.index, dtype="float64")
+        return pd.to_numeric(ranked[column], errors="coerce")
+
+    oi = numeric_column("open_interest")
+    volume = numeric_column("volume").fillna(0)
+    ranked["volume_oi"] = volume.div(oi.where(oi > 0))
+    oi_change = numeric_column("oi_change").abs()
+    iv_change = numeric_column("iv_change").abs()
+    ranked["score"] = (
+        ranked["volume_oi"].fillna(0).rank(pct=True) * 100
+        + oi_change.fillna(0).rank(pct=True) * 100
+        + iv_change.fillna(0).rank(pct=True) * 100
+    )
+    return ranked.sort_values("score", ascending=False).reset_index(drop=True)
+
+
+def _json_number(value: Any) -> Optional[float]:
+    return None if pd.isna(value) else float(value)
+
+
+def get_cached_flow_feed(limit: int) -> Dict[str, Any]:
+    """Cached multi-ticker contract ranking for the proxy flow page."""
+
+    contracts, status = _cached_contract_proxy_data()
+    if contracts.empty:
+        return {**status, "rows": []}
+
+    ranked = _rank_proxy_rows(contracts).head(limit)
+    rows = []
+    for _, row in ranked.iterrows():
+        rows.append(
+            {
+                "ticker": str(row["ticker"]),
+                "expiration_date": str(row["expiration_date"]),
+                "strike": float(row["strike"]),
+                "option_type": str(row["option_type"]),
+                "snapshot_date": str(row["snapshot_date"]),
+                "volume": _json_number(row.get("volume")),
+                "open_interest": _json_number(row.get("open_interest")),
+                "volume_oi": _json_number(row.get("volume_oi")),
+                "oi_change": _json_number(row.get("oi_change")),
+                "mid_iv": _json_number(row.get("mid_iv")),
+                "iv_change": _json_number(row.get("iv_change")),
+                "history_available": bool(row["history_available"]),
+                "score": float(row["score"]),
+            }
+        )
+    return {**status, "rows": rows}
+
+
+def get_hottest_chains(limit: int) -> Dict[str, Any]:
+    """Cached chain-level ranking over the configured snapshot universe."""
+
+    contracts, status = _cached_contract_proxy_data()
+    if contracts.empty:
+        return {**status, "rows": []}
+
+    contracts = _rank_proxy_rows(contracts)
+    grouped = contracts.groupby(
+        ["ticker", "expiration_date", "snapshot_date", "history_available"], dropna=False
+    ).agg(
+        contracts=("strike", "size"),
+        total_volume=("volume", "sum"),
+        total_open_interest=("open_interest", "sum"),
+        oi_change=("oi_change", lambda values: values.sum(min_count=1)),
+        iv_change=("iv_change", "mean"),
+    ).reset_index()
+    grouped["volume_oi"] = grouped["total_volume"].div(
+        grouped["total_open_interest"].where(grouped["total_open_interest"] > 0)
+    )
+    ranked = _rank_proxy_rows(
+        grouped.rename(
+            columns={"total_volume": "volume", "total_open_interest": "open_interest"}
+        )
+    ).head(limit)
+    rows = []
+    for _, row in ranked.iterrows():
+        rows.append(
+            {
+                "ticker": str(row["ticker"]),
+                "expiration_date": str(row["expiration_date"]),
+                "snapshot_date": str(row["snapshot_date"]),
+                "contracts": int(row["contracts"]),
+                "total_volume": float(row["volume"]),
+                "total_open_interest": float(row["open_interest"]),
+                "volume_oi": _json_number(row.get("volume_oi")),
+                "oi_change": _json_number(row.get("oi_change")),
+                "iv_change": _json_number(row.get("iv_change")),
+                "history_available": bool(row["history_available"]),
+                "score": float(row["score"]),
+            }
+        )
+    return {**status, "rows": rows}
+
+
 def _risk_free_rate() -> float:
     return cache.get_or_compute("risk_free_rate", TTL_RISK_FREE, get_risk_free_rate)
 
@@ -299,6 +466,102 @@ def get_term_structure(symbol: str, num_expirations: int) -> Dict[str, Any]:
         "symbol": symbol.upper(),
         "spot": spot,
         "points": ts.to_dict(orient="records"),
+    }
+
+
+def _market_iv(chain: List[Dict[str, Any]], strike: float, option_type: str) -> Optional[float]:
+    """Return a usable selected-contract IV, preferring Tradier's mid IV."""
+
+    for contract in chain:
+        try:
+            contract_strike = float(contract["strike"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not math.isclose(contract_strike, strike, rel_tol=0.0, abs_tol=1e-8):
+            continue
+        if str(contract.get("option_type", "")).lower() != option_type:
+            continue
+        greeks = contract.get("greeks") or {}
+        for field in ("mid_iv", "smv_vol", "iv"):
+            try:
+                iv = float(greeks[field])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if math.isfinite(iv) and iv > 0:
+                return iv
+    return None
+
+
+def get_binomial_tree(
+    symbol: str,
+    expiration: str,
+    strike: float,
+    option_type: str,
+    steps: int,
+    days_to_exp: int,
+    rate_override: Optional[float],
+    iv_override: Optional[float],
+) -> Dict[str, Any]:
+    """Price a CRR tree from cached market calibration or supplied overrides."""
+
+    spot = _spot(symbol)
+    rate_source = "override" if rate_override is not None else "market"
+    rate = rate_override if rate_override is not None else _risk_free_rate()
+
+    iv_source = "override" if iv_override is not None else "market"
+    iv = iv_override
+    if iv is None:
+        iv = _market_iv(_chain(symbol, expiration), strike, option_type)
+    if iv is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"No usable implied volatility for {symbol} {expiration} "
+                f"{strike:g} {option_type}; provide iv_override."
+            ),
+        )
+
+    rate = float(rate)
+    iv = float(iv)
+    if not math.isfinite(rate) or not math.isfinite(iv):
+        raise HTTPException(status_code=422, detail="Rate and IV must be finite values.")
+
+    maturity = days_to_exp / 365.0
+    dt = maturity / steps
+    up = math.exp(iv * math.sqrt(dt))
+    probability = (math.exp(rate * dt) - (1.0 / up)) / (up - (1.0 / up))
+    if not 0.0 <= probability <= 1.0:
+        raise HTTPException(
+            status_code=422,
+            detail="Rate, IV, days_to_exp, and steps produce an invalid CRR probability.",
+        )
+
+    tree = generate_binomial_tree(
+        spot, strike, maturity, rate, iv, steps, option_type
+    )
+    return {
+        "symbol": symbol.upper(),
+        "expiration": expiration,
+        "spot": spot,
+        "strike": strike,
+        "option_type": option_type,
+        "steps": steps,
+        "days_to_exp": days_to_exp,
+        "calibration": {
+            "risk_free_rate": rate,
+            "risk_free_rate_source": rate_source,
+            "implied_volatility": iv,
+            "implied_volatility_source": iv_source,
+        },
+        "nodes": [
+            {
+                "step": int(row["step"]),
+                "node": int(row["node"]),
+                "price": float(row["price"]),
+                "option": float(row["option"]),
+            }
+            for _, row in tree.iterrows()
+        ],
     }
 
 

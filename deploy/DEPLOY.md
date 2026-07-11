@@ -6,7 +6,7 @@ data — so each can be developed and shipped independently.
 
 | Piece | Host | Deploys from | Cost |
 | --- | --- | --- | --- |
-| Legacy Streamlit (`app.py`) | Streamlit Community Cloud | `streamlit-prod` branch | Free |
+| Legacy Streamlit (`legacy/app.py`) | Streamlit Community Cloud | `streamlit-prod` branch | Free |
 | Backend (FastAPI) | Hugging Face Spaces (Docker) | `master` (path-filtered) | Free — 2 vCPU / 16 GB RAM, sleeps after ~48h idle |
 | Frontend (Next.js) | Vercel Hobby | `master`, root dir `frontend/` | Free |
 | Daily snapshot cron | GitHub Actions | `master` | Free |
@@ -24,7 +24,7 @@ Separation is enforced at the deploy layer:
   `master`. New-stack pushes to `master` therefore never restart the Streamlit
   app. Ship a legacy release only when you intend to:
   `git checkout streamlit-prod && git merge --ff-only master && git push`.
-  (`app.py` also stays frozen per the UW plan, so its output does not change.)
+  (`legacy/app.py` also stays frozen per the UW plan, so its output does not change.)
 - **Backend Space** rebuilds only when its own files change — `deploy-hf.yml`
   is path-filtered to `backend/`, `quant_analysis/`, `Dockerfile`,
   `requirements.txt`, `config.yaml`. A frontend-only push does not touch it.
@@ -98,7 +98,7 @@ GEX. Each Space rebuild picks up the latest committed snapshots automatically.
 ## 4. Legacy Streamlit on Streamlit Community Cloud
 
 1. At https://share.streamlit.io create an app from this repo.
-2. **Branch:** `streamlit-prod` · **Main file path:** `app.py`.
+2. **Branch:** `streamlit-prod` · **Main file path:** `legacy/app.py`.
 3. Add `TRADIER_TOKEN` / `OPENAI_API_KEY` under the app's **Secrets**.
 
 Because it deploys from `streamlit-prod` (not `master`), day-to-day new-stack

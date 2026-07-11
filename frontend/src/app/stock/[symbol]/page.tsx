@@ -5,6 +5,7 @@ import {
   api,
   APIError,
   Candle,
+  DailyMetricsPoint,
   ExposureResponse,
   GexProfile,
   IVRankResponse,
@@ -16,6 +17,7 @@ import {
 import GexStrikeChart from "@/components/charts/GexStrikeChart";
 import StrikeBarChart from "@/components/charts/StrikeBarChart";
 import CandlestickChart from "@/components/charts/CandlestickChart";
+import HistoricalGexChart from "@/components/charts/HistoricalGexChart";
 import SkewChart from "@/components/charts/SkewChart";
 import TermStructureChart from "@/components/charts/TermStructureChart";
 import Panel from "@/components/ui/Panel";
@@ -67,6 +69,7 @@ function StockDataPage({ upper }: { upper: string }) {
   const [ivRank, setIvRank] = useState<
     IVRankResponse | null | "none" | "error"
   >(null);
+  const [metrics, setMetrics] = useState<DailyMetricsPoint[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -97,6 +100,12 @@ function StockDataPage({ upper }: { upper: string }) {
       .catch((e) => {
         if (e.name === "AbortError") return;
         setIvRank(e instanceof APIError && e.status === 404 ? "none" : "error");
+      });
+    api
+      .dailyMetrics(upper, signal)
+      .then(setMetrics)
+      .catch((e) => {
+        if (e.name !== "AbortError") setMetrics([]);
       });
     api
       .expirations(upper, signal)
@@ -456,6 +465,27 @@ function StockDataPage({ upper }: { upper: string }) {
               </Panel>
             </div>
           )}
+
+          <Panel
+            title="Net GEX history"
+            right={
+              metrics && metrics.length > 0 ? (
+                <span className="font-mono text-xs text-muted">
+                  {metrics.length} daily snapshots
+                </span>
+              ) : null
+            }
+          >
+            {metrics == null ? (
+              <div className="h-44 animate-pulse rounded bg-surface-2" />
+            ) : metrics.filter((point) => point.net_gex_total != null).length >= 2 ? (
+              <HistoricalGexChart points={metrics} />
+            ) : (
+              <p className="py-8 text-center text-sm text-muted">
+                GEX history will appear after at least two daily snapshots are captured.
+              </p>
+            )}
+          </Panel>
         </div>
       )}
 

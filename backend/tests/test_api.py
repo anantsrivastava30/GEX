@@ -1,4 +1,6 @@
 import pytest
+import pandas as pd
+from datetime import timedelta
 from fastapi.testclient import TestClient
 
 from backend.app import services
@@ -6,6 +8,7 @@ from backend.app.cache import cache
 from backend.app.main import app
 from backend.app.ratelimit import TokenBucket
 from quant_analysis.storage.snapshots import upsert_daily_metrics
+from quant_analysis.storage.snapshots import market_date_today
 
 
 def make_chain(spot=100.0, mid_iv=0.22):
@@ -116,6 +119,73 @@ def test_unusual_flow(client):
     rows = resp.json()["rows"]
     assert len(rows) == 2
     assert "total_vol_oi" in rows[0]
+
+
+def test_cached_flow_endpoints_use_snapshot_data_only(client, monkeypatch, tmp_path):
+    today = market_date_today()
+    previous = (pd.Timestamp(today) - timedelta(days=1)).date().isoformat()
+    for snapshot_date, oi, iv in ((previous, 100, 0.20), (today, 140, 0.24)):
+        day_dir = tmp_path / snapshot_date
+        day_dir.mkdir()
+        pd.DataFrame(
+            [
+                {
+                    "expiration_date": "2026-08-21",
+                    "strike": 100.0,
+                    "option_type": "call",
+                    "open_interest": oi,
+                    "volume": 75,
+                    "mid_iv": iv,
+                }
+            ]
+        ).to_csv(day_dir / "SPY.csv.gz", index=False, compression="gzip")
+
+    monkeypatch.setattr(services, "_snapshot_dir", lambda: tmp_path)
+    monkeypatch.setattr(services, "_configured_snapshot_tickers", lambda: ["SPY"])
+    monkeypatch.setattr(
+        services,
+        "get_tradier",
+        lambda: pytest.fail("cached flow endpoints must not call Tradier"),
+    )
+
+    feed = client.get("/api/flow/feed").json()
+    assert feed["as_of"] == today
+    assert not feed["stale"]
+    assert not feed["unavailable_history"]
+    assert feed["rows"][0]["oi_change"] == 40.0
+    assert feed["rows"][0]["iv_change"] == pytest.approx(0.04)
+    assert feed["rows"][0]["history_available"]
+
+    chains = client.get("/api/flow/hottest-chains").json()
+    assert chains["as_of"] == today
+    assert chains["rows"][0]["total_open_interest"] == 140.0
+    assert chains["rows"][0]["oi_change"] == 40.0
+
+
+def test_cached_flow_reports_missing_history(client, monkeypatch, tmp_path):
+    today = market_date_today()
+    day_dir = tmp_path / today
+    day_dir.mkdir()
+    pd.DataFrame(
+        [
+            {
+                "expiration_date": "2026-08-21",
+                "strike": 100.0,
+                "option_type": "call",
+                "open_interest": 100,
+                "volume": 75,
+                "mid_iv": 0.20,
+            }
+        ]
+    ).to_csv(day_dir / "SPY.csv.gz", index=False, compression="gzip")
+    monkeypatch.setattr(services, "_snapshot_dir", lambda: tmp_path)
+    monkeypatch.setattr(services, "_configured_snapshot_tickers", lambda: ["SPY"])
+
+    body = client.get("/api/flow/feed").json()
+    assert body["unavailable_history"]
+    assert body["unavailable_history_tickers"] == ["SPY"]
+    assert body["rows"][0]["oi_change"] is None
+    assert not body["rows"][0]["history_available"]
 
 
 def test_iv_rank_from_snapshots(client, monkeypatch, tmp_path):

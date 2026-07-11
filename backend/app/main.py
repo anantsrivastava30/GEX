@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.config import get_settings
-from backend.app.routers import ai, exposure, flow, history, market, news, ticker
+from backend.app.routers import ai, binomial, exposure, flow, history, market, news, screener, ticker
 
 logger = logging.getLogger(__name__)
 
@@ -55,10 +55,12 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(ticker.router)
+    app.include_router(binomial.router)
     app.include_router(exposure.router)
     app.include_router(market.router)
     app.include_router(news.router)
     app.include_router(flow.router)
+    app.include_router(screener.router)
     app.include_router(history.router)
     app.include_router(ai.router)
 
