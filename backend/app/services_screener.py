@@ -181,7 +181,7 @@ def get_screener(
     sort_key = "gamma_gap_score" if preset == "gamma_squeeze" else "volume_oi"
     rows.sort(key=lambda row: row.get(sort_key) or 0.0, reverse=True)
     as_of = max(observed_dates) if observed_dates else None
-    today = snapshot_store.market_date_today()
+    today = snapshot_store.last_trading_date()
     return {
         "preset": preset,
         "as_of": as_of,

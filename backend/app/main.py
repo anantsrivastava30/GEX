@@ -13,7 +13,19 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.config import get_settings
-from backend.app.routers import ai, binomial, exposure, flow, history, market, news, screener, ticker
+from backend.app.routers import (
+    admin,
+    ai,
+    binomial,
+    congress,
+    exposure,
+    flow,
+    history,
+    market,
+    news,
+    screener,
+    ticker,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +74,9 @@ def create_app() -> FastAPI:
     app.include_router(flow.router)
     app.include_router(screener.router)
     app.include_router(history.router)
+    app.include_router(congress.router)
     app.include_router(ai.router)
+    app.include_router(admin.router)
 
     @app.get("/api/health", tags=["meta"])
     def health() -> dict:

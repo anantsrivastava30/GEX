@@ -19,7 +19,7 @@ so an intraday re-run simply refreshes the day's snapshot.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
@@ -70,6 +70,21 @@ def market_date_today() -> str:
     """Current date in US market time (snapshots are keyed by this)."""
 
     return datetime.now(tz=MARKET_TZ).date().isoformat()
+
+
+def last_trading_date() -> str:
+    """Most recent weekday in US market time.
+
+    Snapshots captured on a weekend key to Friday, and staleness checks
+    compare against Friday instead of flagging weekend reads as stale.
+    Holidays are not modelled; a holiday capture keys to the holiday date,
+    which is harmless because chains barely move while markets are closed.
+    """
+
+    day = datetime.now(tz=MARKET_TZ).date()
+    while day.weekday() >= 5:
+        day -= timedelta(days=1)
+    return day.isoformat()
 
 
 def build_snapshot(
@@ -194,7 +209,7 @@ def capture_ticker_snapshot(
         return None
 
     df = load_options_data(ticker, expirations, token)
-    return build_snapshot(ticker, market_date_today(), spot, df, offset=offset)
+    return build_snapshot(ticker, last_trading_date(), spot, df, offset=offset)
 
 
 def write_snapshot(snapshot: Dict[str, Any], base_dir: Path = DEFAULT_BASE_DIR) -> Path:

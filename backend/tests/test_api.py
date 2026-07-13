@@ -8,7 +8,7 @@ from backend.app.cache import cache
 from backend.app.main import app
 from backend.app.ratelimit import TokenBucket
 from quant_analysis.storage.snapshots import upsert_daily_metrics
-from quant_analysis.storage.snapshots import market_date_today
+from quant_analysis.storage.snapshots import last_trading_date
 
 
 def make_chain(spot=100.0, mid_iv=0.22):
@@ -132,7 +132,7 @@ def test_unusual_flow(client):
 
 
 def test_cached_flow_endpoints_use_snapshot_data_only(client, monkeypatch, tmp_path):
-    today = market_date_today()
+    today = last_trading_date()
     previous = (pd.Timestamp(today) - timedelta(days=1)).date().isoformat()
     for snapshot_date, oi, iv in ((previous, 100, 0.20), (today, 140, 0.24)):
         day_dir = tmp_path / snapshot_date
@@ -173,7 +173,7 @@ def test_cached_flow_endpoints_use_snapshot_data_only(client, monkeypatch, tmp_p
 
 
 def test_cached_flow_reports_missing_history(client, monkeypatch, tmp_path):
-    today = market_date_today()
+    today = last_trading_date()
     day_dir = tmp_path / today
     day_dir.mkdir()
     pd.DataFrame(

@@ -220,6 +220,30 @@ export interface NewsItem {
   date: string;
 }
 
+export type CongressChamber = "house" | "senate";
+
+export interface CongressTrade {
+  chamber: CongressChamber;
+  member?: string | null;
+  party?: string | null;
+  state?: string | null;
+  ticker?: string | null;
+  asset_description?: string | null;
+  transaction_type: string;
+  amount?: string | null;
+  owner?: string | null;
+  transaction_date?: string | null;
+  disclosure_date?: string | null;
+}
+
+export interface CongressTradesResponse {
+  as_of?: string | null;
+  stale: boolean;
+  unavailable_sources: string[];
+  count: number;
+  rows: CongressTrade[];
+}
+
 export interface IVRankResponse {
   symbol: string;
   iv: number;
@@ -362,6 +386,25 @@ export interface AIAnalyzeResponse {
   payload: Record<string, unknown>;
 }
 
+export interface AIPayloadRequest {
+  symbol: string;
+  expirations?: string[];
+  offset: number;
+}
+
+export interface AIPayloadMessage {
+  role: string;
+  content: string;
+}
+
+export interface AIPayloadResponse {
+  symbol: string;
+  expirations: string[];
+  prompt_tokens?: number | null;
+  payload: Record<string, unknown>;
+  messages: AIPayloadMessage[];
+}
+
 export interface AIHistoryItem {
   ts?: string | null;
   ticker?: string | null;
@@ -501,6 +544,26 @@ export const api = {
 
   news: () => getJSON<NewsItem[]>(`/api/news`),
 
+  congressTrades: (
+    filters: {
+      ticker?: string;
+      chamber?: CongressChamber;
+      days?: number;
+      limit?: number;
+    } = {},
+    signal?: AbortSignal,
+  ) => {
+    const params: Record<string, string | number> = {};
+    if (filters.ticker) params.ticker = filters.ticker;
+    if (filters.chamber) params.chamber = filters.chamber;
+    if (filters.days != null) params.days = filters.days;
+    if (filters.limit != null) params.limit = filters.limit;
+    return getJSON<CongressTradesResponse>(
+      `/api/congress/trades${qs(params)}`,
+      signal,
+    );
+  },
+
   ivRank: (symbol: string, signal?: AbortSignal) =>
     getJSON<IVRankResponse>(`/api/history/${symbol}/iv-rank`, signal),
 
@@ -582,6 +645,8 @@ export const api = {
 
   aiAnalyze: (request: AIAnalyzeRequest) =>
     postJSON<AIAnalyzeResponse>("/api/ai/analyze", request),
+  aiPayload: (request: AIPayloadRequest) =>
+    postJSON<AIPayloadResponse>("/api/ai/payload", request),
 
   aiHistory: (pin: string, limit = 15, signal?: AbortSignal) =>
     getJSON<AIHistoryItem[]>(`/api/ai/analyses${qs({ limit })}`, signal, {

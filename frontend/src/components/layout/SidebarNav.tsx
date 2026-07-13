@@ -41,7 +41,7 @@ const SECTIONS: { heading: string; items: NavItem[] }[] = [
       { href: "/track-record", label: "Track Record", icon: IconTrackRecord },
       { href: "/ai", label: "AI Analysis", icon: IconAI },
       { href: "/calendar", label: "Calendar", icon: IconCalendar },
-      { href: "/congress", label: "Congress", icon: IconCongress, soon: true },
+      { href: "/congress", label: "Congress", icon: IconCongress },
       { href: "/tools/binomial", label: "Tools", icon: IconTools },
     ],
   },

@@ -5,6 +5,7 @@ import {
   api,
   AIAnalyzeResponse,
   AIHistoryItem,
+  AIPayloadResponse,
   AIStatus,
 } from "@/lib/api";
 import Panel from "@/components/ui/Panel";
@@ -34,13 +35,17 @@ export default function AIAnalysisPage() {
   const [reviewing, setReviewing] = useState(false);
   const [pin, setPin] = useState("");
   const [result, setResult] = useState<AIAnalyzeResponse | null>(null);
+  const [payloadResult, setPayloadResult] = useState<AIPayloadResponse | null>(null);
+  const [copied, setCopied] = useState<"prompt" | "payload" | null>(null);
   const [history, setHistory] = useState<AIHistoryItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadingExpirations, setLoadingExpirations] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [buildingPayload, setBuildingPayload] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const expirationController = useRef<AbortController | null>(null);
   const analysisInFlight = useRef(false);
+  const payloadInFlight = useRef(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -70,6 +75,7 @@ export default function AIAnalysisPage() {
     setError(null);
     setReviewing(false);
     setResult(null);
+    setPayloadResult(null);
     api.expirations(normalized, controller.signal).then((nextExpirations) => {
       if (expirationController.current !== controller) return;
       setActiveTicker(normalized);
@@ -144,6 +150,42 @@ export default function AIAnalysisPage() {
     }
   }
 
+  async function buildPayload() {
+    if (payloadInFlight.current) return;
+    if (!selectedExpirations.length) {
+      setError("Select at least one expiration.");
+      return;
+    }
+    payloadInFlight.current = true;
+    setBuildingPayload(true);
+    setError(null);
+    setPayloadResult(null);
+    setCopied(null);
+    try {
+      setPayloadResult(await api.aiPayload({
+        symbol: activeTicker,
+        expirations: selectedExpirations,
+        offset,
+      }));
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBuildingPayload(false);
+      payloadInFlight.current = false;
+    }
+  }
+
+  function copyText(kind: "prompt" | "payload", text: string) {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(kind);
+      setTimeout(() => setCopied((current) => (current === kind ? null : current)), 2000);
+    }).catch(() => setError("Clipboard copy failed."));
+  }
+
+  const promptText = payloadResult
+    ? payloadResult.messages.map((message) => `[${message.role}]\n${message.content}`).join("\n\n")
+    : "";
+
   const unavailable = status != null && (!status.openai_configured || !status.pin_required);
 
   return (
@@ -200,9 +242,15 @@ export default function AIAnalysisPage() {
             {expirations?.length === 0 && <p className="text-sm text-muted">No expirations available for this ticker.</p>}
           </fieldset>
 
-          <button type="button" disabled={!status || unavailable || !selectedExpirations.length} onClick={() => { setError(null); setReviewing(true); }} className="rounded-md border border-accent bg-accent/15 px-4 py-2 text-sm text-foreground hover:bg-accent/25 disabled:cursor-not-allowed disabled:opacity-50">
-            Review request
-          </button>
+          <div className="flex flex-wrap items-center gap-3">
+            <button type="button" disabled={!status || unavailable || !selectedExpirations.length} onClick={() => { setError(null); setReviewing(true); }} className="rounded-md border border-accent bg-accent/15 px-4 py-2 text-sm text-foreground hover:bg-accent/25 disabled:cursor-not-allowed disabled:opacity-50">
+              Review request
+            </button>
+            <button type="button" disabled={buildingPayload || !selectedExpirations.length} onClick={buildPayload} className="rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-foreground hover:bg-surface-hover disabled:cursor-wait disabled:opacity-60">
+              {buildingPayload ? "Building..." : "Build payload only"}
+            </button>
+            <span className="text-xs text-muted">Payload mode is free and needs no PIN: copy the prompt into any LLM.</span>
+          </div>
         </form>
       </Panel>
 
@@ -219,6 +267,33 @@ export default function AIAnalysisPage() {
             </button>
             <button type="button" disabled={submitting} onClick={() => { setReviewing(false); setPin(""); }} className="px-3 py-2 text-sm text-muted hover:text-foreground">Cancel</button>
           </div>
+        </div>
+      </Panel>}
+
+      {payloadResult && <Panel
+        title={`${payloadResult.symbol} payload`}
+        right={<span className="font-mono text-xs text-muted">{payloadResult.prompt_tokens == null ? "" : `${payloadResult.prompt_tokens.toLocaleString()} prompt tokens`}</span>}
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-muted">
+            Snapshot across {payloadResult.expirations.length} expiration{payloadResult.expirations.length === 1 ? "" : "s"}. Paste the prompt into any LLM, or feed the JSON payload to your own agent.
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <button type="button" onClick={() => copyText("prompt", promptText)} className="rounded-md border border-accent bg-accent/15 px-4 py-2 text-sm text-foreground hover:bg-accent/25">
+              {copied === "prompt" ? "Copied" : "Copy prompt"}
+            </button>
+            <button type="button" onClick={() => copyText("payload", JSON.stringify(payloadResult.payload, null, 2))} className="rounded-md border border-border bg-surface-2 px-4 py-2 text-sm text-foreground hover:bg-surface-hover">
+              {copied === "payload" ? "Copied" : "Copy payload JSON"}
+            </button>
+          </div>
+          <details className="rounded-lg border border-border bg-surface-2/50">
+            <summary className="cursor-pointer px-4 py-3 text-xs font-medium uppercase tracking-wide text-muted">Prompt preview</summary>
+            <pre className="max-h-[24rem] overflow-auto whitespace-pre-wrap border-t border-border p-4 font-mono text-xs leading-5 text-muted">{promptText}</pre>
+          </details>
+          <details className="rounded-lg border border-border bg-surface-2/50">
+            <summary className="cursor-pointer px-4 py-3 text-xs font-medium uppercase tracking-wide text-muted">Payload JSON</summary>
+            <pre className="max-h-[24rem] overflow-auto border-t border-border p-4 font-mono text-xs leading-5 text-muted">{JSON.stringify(payloadResult.payload, null, 2)}</pre>
+          </details>
         </div>
       </Panel>}
 

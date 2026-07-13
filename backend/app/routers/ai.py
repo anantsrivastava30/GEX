@@ -7,6 +7,8 @@ from backend.app.schemas import (
     AIAnalyzeRequest,
     AIAnalyzeResponse,
     AIHistoryItem,
+    AIPayloadRequest,
+    AIPayloadResponse,
     AIStatus,
 )
 
@@ -24,6 +26,16 @@ def ai_history(
     pin: Optional[str] = Header(None, alias="X-AI-PIN", max_length=128),
 ):
     return services_ai.get_ai_history(limit, pin)
+
+
+@router.post("/payload", response_model=AIPayloadResponse)
+def ai_payload(req: AIPayloadRequest):
+    """Build the compact analysis payload and prompt messages without any
+    OpenAI call. Free and PIN-less: paste the prompt into any LLM or feed
+    the payload to an external agent when no API key is configured.
+    """
+
+    return services_ai.get_ai_payload(req.symbol, req.expirations, req.offset)
 
 
 @router.post("/analyze", response_model=AIAnalyzeResponse)

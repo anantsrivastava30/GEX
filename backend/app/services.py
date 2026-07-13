@@ -237,7 +237,7 @@ def _cached_contract_proxy_data() -> tuple[pd.DataFrame, Dict[str, Any]]:
     """
 
     base_dir = _snapshot_dir()
-    today = snapshot_store.market_date_today()
+    today = snapshot_store.last_trading_date()
     frames = []
     unavailable_tickers = []
     unavailable_history_tickers = []

@@ -36,7 +36,7 @@ session should pick up.
 - [x] IV rank / percentile tiles + historical GEX charts (reads `data/snapshots/`) — tiles on `/stock` Overview + Volatility; historical net GEX on the GEX tab
 - [x] Term structure (pure `compute_term_structure` + fixed `compute_term_structure_slope` + endpoint + chart)
 - [x] Full proxy flow feed + hottest chains (`/api/flow/feed` + `/api/flow/hottest-chains` ranking vol/OI + OI Δ + IV Δ from snapshots; filters on `/flow`)
-- [ ] Congress trades (Senate eFD / House Clerk daily job)
+- [x] Congress trades (Senate eFD / House Clerk daily job) — *provider-pluggable feed (`/api/congress/trades` + `/congress` page). Live and current via `FMP_API_KEY` (verified Session 8: 156 filings, `stale=false`); the free mirrors remain a degraded fallback.*
 - [ ] Native earnings/economic calendar (iframe parity shipped; native version pending)
 - [ ] Screener (presets + custom), server-persisted watchlists, alerts (in-app/Discord/email) — *screener API + `/screener` page with three presets and threshold filters shipped; custom filter builder, watchlists, alerts pending*
 
@@ -464,3 +464,119 @@ rendered and eyeballed via headless Chrome.
 
 **Open items for the human:** unchanged (merge to `main`; run compose with
 the scheduler).
+
+### Session 7 — 2026-07-11 (Congress trades feed)
+Closed the first of the remaining Phase 2 UW-gap items: congressional
+stock-trade disclosures, a marquee UW feature on free data. The `/congress`
+nav entry was already stubbed (`soon`) with an icon but had no page or backend.
+
+**Backend:**
+- `backend/app/services_congress.py`: provider-pluggable, tolerant disclosure
+  aggregator. A single `_normalise` collapses Senate/House/FMP record shapes
+  into one row (probes many key aliases, parses 5 date formats, maps
+  purchase/sale/exchange to buy/sell/exchange, resolves member names from
+  `representative`/`senator`/`office`/first+last). Providers are tried in
+  order and merged + de-duped: an optional `FMP_API_KEY` first, then the
+  `congress.sources` JSON mirrors from `config.yaml`. Any provider failing is
+  isolated into `unavailable_sources`; the response is flagged `stale` when the
+  newest disclosure is > 14 days old or every provider failed. Cached 6h.
+- `GET /api/congress/trades` (`ticker`/`chamber`/`days`/`limit` filters) +
+  `CongressTrade`/`CongressTradesResponse` schemas; router registered in
+  `main.py`.
+- `config.py`: optional `fmp_api_key`. `config.yaml`: `congress.sources` list.
+
+**Frontend:**
+- `/congress`: chamber chips (Both/Senate/House), lookback windows
+  (30/90/180/365d), ticker filter, dense disclosure table (traded/disclosed
+  dates, member + owner, chamber, ticker, buy/sell-tinted side, dollar-range
+  amount), staleness + unreachable-source badges, honest "PTRs filed on a lag,
+  not real-time" labeling. AbortController on refetch. Sidebar `soon` flag
+  removed. `api.ts`: `CongressTrade`/`CongressTradesResponse` + `congressTrades`.
+
+**Data-source note (important):** the long-standing free stock-watcher S3
+mirrors now return `403 AccessDenied`, and CapitolTrades' BFF is CloudFront/WAF
+-blocked from this sandbox; FMP needs a key. So the default feed currently
+returns an empty, `stale`, `unavailable_sources` result from here - which is
+the intended graceful-degradation behavior (the plan flagged congress feeds as
+scrape-fragile). Live data needs either a reachable mirror URL swapped into
+`config.yaml` or an `FMP_API_KEY`. The parser is verified against real
+Senate/House/FMP record shapes offline.
+
+**Verified:** `backend/app/*` py_compile clean; `config.yaml` parses;
+`/api/congress/trades` returns 200 and degrades gracefully (verified live:
+`stale=true`, both mirrors in `unavailable_sources`); `_normalise` unit-checked
+on real-shape House/Senate/FMP records (correct dates, sides, tickers, names);
+frontend `npm run lint` + `npm run build` clean (new `/congress` route);
+backend pytest 20/21 (only the known local-`.env` missing-token test fails).
+
+**Next up (Session 8):**
+1. Native earnings/econ calendar (yfinance earnings + FRED releases) to replace
+   the Investing.com iframe.
+2. Custom screener filter builder; then server-persisted watchlists + alerts
+   (in-app + Discord webhook + email) - watchlists/alerts really want the
+   Phase 3 auth layer, so consider sequencing auth first.
+3. Swap in a reachable congress source (mirror URL or `FMP_API_KEY`) and add a
+   scheduler job to warm the 6h cache.
+4. Gamma-gap realized-outcome hit-rate polish once intraday snapshots accrue.
+
+**Open items for the human:**
+- To light up live Congress data: set `FMP_API_KEY` (free tier) as a backend
+  env var, or replace the `congress.sources` URLs in `config.yaml` with a
+  currently-reachable mirror. Without either, the page honestly shows an empty,
+  stale feed.
+- Still pending from prior sessions: merge to `main` for snapshot accrual; run
+  compose with the scheduler.
+
+### Session 8 - 2026-07-12 (seeded snapshots, admin capture, AI payload-only mode, Congress validation)
+
+Goal: make the tool demonstrable now. The screener/flow pages were shipped but
+empty because tracked `data/snapshots/` had never been seeded, and AI analysis
+was unusable without OpenAI credentials.
+
+**Snapshot seeding + weekend-aware dating:**
+- `quant_analysis/storage/snapshots.py`: new `last_trading_date()` (rolls the
+  US-market calendar date back over weekends). `capture_ticker_snapshot` now
+  keys snapshots by it, and the staleness `today` comparisons in
+  `backend/app/services.py` / `services_screener.py` use it, so weekend or
+  pre-market reads of Friday data are not falsely flagged stale.
+- `backend/app/jobs.py`: extracted `capture_universe()` from the scheduler job
+  (returns a summary dict); `run_intraday_snapshots` keeps its token +
+  market-open gates and delegates.
+- New `POST /api/admin/capture` (`backend/app/routers/admin.py`), gated by the
+  same `X-AI-PIN`: on-demand full-universe refresh, works off-hours (closed
+  chains carry the last session's OI/volume). `CaptureResponse` schema.
+- Seeded real snapshots for the 13-ticker universe (keyed 2026-07-13, ET
+  pre-market). Screener now returns 50 live candidates with `stale=false`;
+  gamma_squeeze honestly returns 0 (top score 34.8 < the 50 threshold). Flow
+  feed serves volume rows now and gains OI/IV deltas when a second distinct
+  trading day accrues.
+
+**AI payload-only mode (usable without any agent/key):**
+- `backend/app/services_ai.py`: extracted `_build_symbol_packet` (data fetch +
+  compact payload + prompt packet + token estimate) shared by the paid path;
+  new `get_ai_payload` and `POST /api/ai/payload` - no PIN, no OpenAI call.
+- `/ai` page: "Build payload only" button (enabled even when OpenAI/PIN are
+  missing), payload panel with Copy prompt / Copy payload JSON, prompt preview
+  and payload JSON accordions, prompt-token count.
+- `api.ts`: `AIPayloadRequest/Response` + `aiPayload`.
+
+**Congress handoff validated (Session 7 work stream):**
+- `FMP_API_KEY` is now set in the local `.env`; `/api/congress/trades` is live
+  and current (`as_of` 2026-07-07, `stale=false`, no unavailable sources) and
+  the `/congress` page renders 156 real filings. Committed as part of this
+  session.
+
+**Verified:** backend+analytics pytest 102/103 (only the known local-`.env`
+missing-token test fails; passes in CI); frontend `npm run lint` +
+`npm run build` clean; live smokes against the real backend: screener presets,
+flow feed, `/api/admin/capture` (401 without PIN, full capture with it),
+`/api/ai/payload` (1,769-token SPY prompt), congress trades; headless-browser
+screenshots of `/screener`, `/ai` payload flow, `/congress` all render real
+data.
+
+**Next up (Session 9):**
+1. Native earnings/econ calendar (yfinance earnings + FRED releases).
+2. Custom screener filter builder; then watchlists + alerts (consider
+   sequencing Phase 3 auth first).
+3. Scheduler job to warm the 6h congress cache.
+4. Track-record polish as intraday snapshots accrue on the default branch.

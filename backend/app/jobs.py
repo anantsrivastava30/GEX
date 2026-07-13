@@ -44,9 +44,6 @@ def market_is_open(now: datetime | None = None) -> bool:
 def run_intraday_snapshots() -> None:
     """Capture chains, write snapshots, and log gamma-gap scan rows."""
 
-    from quant_analysis.storage import snapshots as snapshot_store
-    from quant_analysis.storage.db import save_gamma_gap_results
-
     settings = get_settings()
     if not settings.tradier_token:
         logger.info("Intraday snapshot skipped: TRADIER_TOKEN not configured.")
@@ -55,6 +52,22 @@ def run_intraday_snapshots() -> None:
         logger.debug("Intraday snapshot skipped: market closed.")
         return
 
+    capture_universe()
+
+
+def capture_universe() -> dict:
+    """Capture the configured snapshot universe once and persist results.
+
+    Shared by the scheduler job and the admin capture endpoint. Off-hours
+    runs are safe: chains fetched while the market is closed carry the last
+    session's OI/volume and key to ``last_trading_date()``, so a weekend
+    capture seeds Friday's snapshot instead of a bogus weekend row.
+    """
+
+    from quant_analysis.storage import snapshots as snapshot_store
+    from quant_analysis.storage.db import save_gamma_gap_results
+
+    settings = get_settings()
     base_dir = Path(settings.snapshot_dir)
     gap_rows = []
     captured = 0
@@ -103,11 +116,18 @@ def run_intraday_snapshots() -> None:
             logger.exception("Failed to persist gamma-gap scan rows")
 
     logger.info(
-        "Intraday snapshot done: %d/%d tickers, %d gamma-gap rows",
+        "Snapshot capture done: %d/%d tickers, %d gamma-gap rows",
         captured,
-        len(settings.snapshot_tickers),
+        len(tickers),
         len(gap_rows),
     )
+    return {
+        "captured": captured,
+        "requested": len(tickers),
+        "tickers": list(tickers),
+        "gamma_gap_rows": len(gap_rows),
+        "as_of": snapshot_store.last_trading_date(),
+    }
 
 
 def create_scheduler() -> BackgroundScheduler:

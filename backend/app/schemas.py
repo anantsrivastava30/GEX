@@ -180,6 +180,35 @@ class NewsItem(BaseModel):
     date: str
 
 
+class CongressTrade(BaseModel):
+    chamber: Literal["house", "senate"]
+    member: Optional[str] = None
+    party: Optional[str] = None
+    state: Optional[str] = None
+    ticker: Optional[str] = None
+    asset_description: Optional[str] = None
+    transaction_type: str
+    amount: Optional[str] = None
+    owner: Optional[str] = None
+    transaction_date: Optional[str] = None
+    disclosure_date: Optional[str] = None
+
+
+class CongressTradesResponse(BaseModel):
+    """Congressional disclosures from free public mirrors.
+
+    These are periodic transaction reports (PTRs), disclosed on a lag of up to
+    45 days; ``as_of`` is the newest transaction date seen, and ``stale`` flags
+    when the newest disclosure is unusually old or a source could not be read.
+    """
+
+    as_of: Optional[str] = None
+    stale: bool
+    unavailable_sources: List[str]
+    count: int
+    rows: List[CongressTrade]
+
+
 class IVRankResponse(BaseModel):
     symbol: str
     iv: float
@@ -370,6 +399,20 @@ class AIAnalyzeResponse(BaseModel):
     payload: Dict[str, Any]
 
 
+class AIPayloadRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=12, pattern=r"^[A-Za-z0-9.^-]+$")
+    expirations: Optional[List[str]] = Field(default=None, max_length=8)
+    offset: int = Field(default=35, ge=1, le=100)
+
+
+class AIPayloadResponse(BaseModel):
+    symbol: str
+    expirations: List[str]
+    prompt_tokens: Optional[int] = None
+    payload: Dict[str, Any]
+    messages: List[Dict[str, Any]]
+
+
 class AIStatus(BaseModel):
     openai_configured: bool
     pin_required: bool
@@ -382,3 +425,11 @@ class AIHistoryItem(BaseModel):
     expirations: Optional[Any] = None
     response: Optional[str] = None
     token_count: Optional[Any] = None
+
+
+class CaptureResponse(BaseModel):
+    captured: int
+    requested: int
+    tickers: List[str]
+    gamma_gap_rows: int
+    as_of: str

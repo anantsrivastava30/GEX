@@ -58,25 +58,19 @@ def get_ai_history(limit: int, pin: Optional[str]) -> List[Dict[str, Any]]:
     return [{k: v for k, v in row.items() if k != "payload"} for row in rows]
 
 
-def run_ai_analysis(
+def _build_symbol_packet(
     symbol: str,
     expirations: Optional[List[str]],
-    model: Optional[str],
     offset: int,
-    pin: Optional[str],
-) -> Dict[str, Any]:
+    model: str,
+) -> tuple[str, List[str], Dict[str, Any], Dict[str, Any], Optional[int]]:
+    """Fetch positioning data and build the compact payload + prompt packet.
+
+    Shared by the paid analyze endpoint and the free payload-only endpoint;
+    involves no OpenAI call.
+    """
+
     settings = get_settings()
-    verify_ai_pin(pin)
-
-    creds = resolve_openai_credentials()
-    if not creds.get("api_key"):
-        raise HTTPException(
-            status_code=503, detail="OPENAI_API_KEY is not configured on the server."
-        )
-
-    if model and model != settings.openai_model:
-        raise HTTPException(status_code=400, detail="Requested model is not allowed.")
-    model = settings.openai_model
     symbol = symbol.upper()
     exps = (expirations or services.get_expirations(symbol)[:4])[:8]
     if not exps:
@@ -112,6 +106,56 @@ def run_ai_analysis(
     )
     packet = create_data_packet(symbol, payload)
     tokens = estimate_token_count(packet, model)
+    return symbol, list(exps), payload, packet, tokens
+
+
+def get_ai_payload(
+    symbol: str,
+    expirations: Optional[List[str]],
+    offset: int,
+) -> Dict[str, Any]:
+    """Payload-only mode: the analysis packet without any OpenAI call.
+
+    No PIN and no spend, so the tool stays usable when no agent or API key
+    is available - paste the messages into any LLM, or feed the payload to
+    an external agent.
+    """
+
+    settings = get_settings()
+    symbol, exps, payload, packet, tokens = _build_symbol_packet(
+        symbol, expirations, offset, settings.openai_model
+    )
+    return {
+        "symbol": symbol,
+        "expirations": exps,
+        "prompt_tokens": tokens,
+        "payload": payload,
+        "messages": packet["messages"],
+    }
+
+
+def run_ai_analysis(
+    symbol: str,
+    expirations: Optional[List[str]],
+    model: Optional[str],
+    offset: int,
+    pin: Optional[str],
+) -> Dict[str, Any]:
+    settings = get_settings()
+    verify_ai_pin(pin)
+
+    creds = resolve_openai_credentials()
+    if not creds.get("api_key"):
+        raise HTTPException(
+            status_code=503, detail="OPENAI_API_KEY is not configured on the server."
+        )
+
+    if model and model != settings.openai_model:
+        raise HTTPException(status_code=400, detail="Requested model is not allowed.")
+    model = settings.openai_model
+    symbol, exps, payload, packet, tokens = _build_symbol_packet(
+        symbol, expirations, offset, model
+    )
 
     client = _client_from_creds(creds)
     try:

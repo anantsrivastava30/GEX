@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     openai_model: str = CONFIG.get("openai", {}).get("model", "gpt-4o-mini")
     ai_pin: Optional[str] = None
 
+    # Optional Financial Modeling Prep key for the congress-trades feed. When
+    # absent the feed falls back to the config.yaml JSON mirrors.
+    fmp_api_key: Optional[str] = None
+
 
 @lru_cache
 def get_settings() -> Settings:
