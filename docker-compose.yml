@@ -1,0 +1,69 @@
+# Full local stack: FastAPI backend + Next.js frontend.
+#
+#   cp .env.example .env      # fill in TRADIER_TOKEN
+#   docker compose up --build
+#
+# Then open http://localhost:3000. The frontend proxies /api/* to the backend
+# container over the internal network, so only port 3000 needs to be public.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      # The root Dockerfile binds ${PORT:-7860}; pin it to 8000 locally.
+      PORT: 8000
+      TRADIER_TOKEN: ${TRADIER_TOKEN:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # Optional Financial Modeling Prep key for the Congress-trades feed.
+      FMP_API_KEY: ${FMP_API_KEY:-}
+      FRED_API_KEY: ${FRED_API_KEY:-}
+      SNAPSHOT_DIR: /app/data/snapshots
+      SQLITE_DB_PATH: /app/data/ai_analysis.db
+      APP_DB_PATH: /app/data/gex_app.db
+      # Intraday snapshot + gamma-gap jobs (every 30 min, market hours).
+      SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-true}
+      # Optional PIN protecting the paid /api/ai/analyze endpoint.
+      AI_PIN: ${AI_PIN:-}
+      WORKSPACE_PIN: ${WORKSPACE_PIN:-}
+      ALERT_DISCORD_WEBHOOK_URL: ${ALERT_DISCORD_WEBHOOK_URL:-}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health').status==200 else 1)
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      # Give the heavy scientific stack time to import on first boot.
+      start_period: 60s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Baked into the Next rewrite at build time -> the backend service.
+        BACKEND_URL: http://backend:8000
+    environment:
+      PORT: 3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped

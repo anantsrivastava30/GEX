@@ -1,0 +1,20 @@
+# Keep the backend image small: only quant_analysis + backend + config ship.
+.git
+.github
+frontend
+legacy
+app.py
+tests
+conftest.py
+deploy
+docs
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.mypy_cache
+**/*.db
+**/*.db-*
+.venv
+venv
+*.md
+!data/snapshots/README.md

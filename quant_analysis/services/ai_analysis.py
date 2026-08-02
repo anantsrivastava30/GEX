@@ -329,10 +329,17 @@ def build_analysis_payload(
     offset: float,
     ticker: str,
     expirations: Optional[Sequence[str]],
+    tradier_token: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Assemble a compact, structured snapshot for the model prompt."""
+    """Assemble a compact, structured snapshot for the model prompt.
 
-    tradier_token = st.secrets.get("TRADIER_TOKEN")
+    ``tradier_token`` may be passed by headless callers (the FastAPI
+    backend); when omitted it resolves from Streamlit secrets or the
+    environment as before.
+    """
+
+    if not tradier_token:
+        tradier_token = _resolve_secret("TRADIER_TOKEN") or os.getenv("TRADIER_TOKEN")
 
     payload: Dict[str, Any] = {
         "ticker": ticker,
@@ -686,5 +693,5 @@ def render_ai_tab(
 def main() -> int:
     """Console entrypoint placeholder for packaged installs."""
 
-    print("Run the dashboard with: streamlit run app.py")
+    print("Run the dashboard with: streamlit run legacy/app.py")
     return 0

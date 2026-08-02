@@ -46,6 +46,50 @@ database:
   sqlite_db: "ai_analysis.db"
   supabase_table: "ai_analysis"
 
+# Congressional stock-trade disclosures (free public JSON mirrors).
+# Providers are tried in order and merged; a Financial Modeling Prep key
+# (FMP_API_KEY) takes priority when set. Override or extend this list if the
+# community mirrors move - the backend degrades gracefully with per-source
+# staleness flags when a feed is unreachable.
+congress:
+  sources:
+    - name: "senate-stock-watcher"
+      chamber: "senate"
+      url: "https://senate-stock-watcher-data.s3-us-west-2.amazonaws.com/aggregate/all_transactions.json"
+    - name: "house-stock-watcher"
+      chamber: "house"
+      url: "https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json"
+
+# Native calendar. Earnings are queried from yfinance for this bounded
+# universe. FRED IDs are a curated US macro list, not provider impact scores.
+calendar:
+  earnings_tickers:
+    - AAPL
+    - MSFT
+    - NVDA
+    - TSLA
+    - AMZN
+    - GOOGL
+    - META
+    - AMD
+    - NFLX
+  fred_release_ids:
+    - 9
+    - 10
+    - 11
+    - 13
+    - 27
+    - 46
+    - 50
+    - 51
+    - 53
+    - 54
+    - 97
+    - 101
+    - 180
+    - 192
+    - 291
+
 # Daily own-data history collection (see docs/UW_PARITY_PLAN.md).
 # Keep the universe small enough that one run stays inside Tradier's
 # rate limit: each ticker costs 2 + num_expirations requests.
@@ -53,6 +97,9 @@ snapshots:
   dir: "data/snapshots"
   num_expirations: 4
   strike_offset: 35
+  # One capture uses a quote, expirations, and the configured chain expirations.
+  # Pace the bounded universe so scheduler runs stay below the free-data limit.
+  refresh_pause_seconds: 1.0
   tickers:
     - SPY
     - QQQ

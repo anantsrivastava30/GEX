@@ -1,6 +1,6 @@
 # GEX — Options Analytics Dashboard
 
-A Streamlit dashboard for options traders that visualizes **dealer gamma exposure (GEX)**, delta exposure, open interest, and volume across strikes and expirations, and layers macro context (VIX, Treasury yields, futures, curated news) on top. An optional AI tab sends a structured market snapshot to OpenAI models to generate directional option trade ideas.
+An options analytics platform for dealer gamma exposure (GEX), delta exposure, open interest, volume, macro context, and AI trade narratives. The FastAPI and Next.js stack is the active rebuild; the original Streamlit dashboard is frozen under `legacy/` for parity checks during the transition.
 
 ## Features
 
@@ -15,7 +15,9 @@ A Streamlit dashboard for options traders that visualizes **dealer gamma exposur
 ## Project Structure
 
 ```
-app.py                              # Streamlit entrypoint (run this)
+legacy/app.py                       # Frozen Streamlit entrypoint
+backend/                             # FastAPI service
+frontend/                            # Next.js frontend
 config.yaml                         # API endpoints, RSS feeds, topics, DB names
 quant_analysis/
 ├── config.py                       # Loads config.yaml
@@ -55,19 +57,37 @@ tests/                              # Unit tests (pytest)
    SUPABASE_KEY = "..."
    ```
 
-## Running
+## Running the legacy dashboard
 
 ```bash
-streamlit run app.py
+streamlit run legacy/app.py
 ```
+
+Run this command from the repository root so the frozen app can import the shared
+`quant_analysis` package. New feature work belongs in the FastAPI and Next.js stack.
+
+## Running the new stack
+
+```bash
+uvicorn backend.app.main:app --reload --port 8000
+cd frontend && npm install && npm run dev
+```
+
+The frontend is available at `http://localhost:3000` and proxies `/api/*` to the
+backend. Deployment instructions, including the separate legacy release branch,
+are in [deploy/DEPLOY.md](deploy/DEPLOY.md).
 
 ## Testing
 
 ```bash
-pytest
+pytest -q tests
+pytest -q backend/tests
+cd frontend && npm run build && npm run test:e2e
 ```
 
-CI (`.github/workflows/ci.yml`) runs the test suite on every push and pull request to `master`.
+CI (`.github/workflows/ci.yml`) selects analytics, backend, and frontend checks
+from changed paths. Frontend smoke tests intercept every API request and do not
+require Tradier, OpenAI, or any other credentials.
 
 ## Daily Data Snapshots (own-data history)
 

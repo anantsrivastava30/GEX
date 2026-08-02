@@ -1,0 +1,58 @@
+name: Deploy backend to Hugging Face Space
+
+# Pushes the repo to a Hugging Face Docker Space, which rebuilds the root
+# Dockerfile and serves the FastAPI backend for free.
+#
+# One-time setup (see deploy/DEPLOY.md):
+#   1. Create a Docker Space at https://huggingface.co/new-space
+#   2. Add repository secrets:
+#        HF_TOKEN  - a write token from https://huggingface.co/settings/tokens
+#        HF_SPACE  - "username/space-name"
+#   3. In the Space settings add TRADIER_TOKEN (and OPENAI_API_KEY) as secrets.
+
+on:
+  push:
+    branches: [master]
+    # Only redeploy the backend Space when its own inputs change, so a
+    # frontend-only or docs-only push to master leaves the Space untouched.
+    paths:
+      - "backend/**"
+      - "quant_analysis/**"
+      - "config.yaml"
+      - "requirements.txt"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "deploy/huggingface/**"
+      - ".github/workflows/deploy-hf.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-hf
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ github.repository_owner != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push to Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_SPACE: ${{ secrets.HF_SPACE }}
+        run: |
+          if [ -z "$HF_TOKEN" ] || [ -z "$HF_SPACE" ]; then
+            echo "HF_TOKEN / HF_SPACE secrets not set; skipping deploy."
+            exit 0
+          fi
+          # Use the Space config card as the Space README (carries the
+          # required Hugging Face frontmatter) without touching the repo.
+          cp deploy/huggingface/README.md README.md
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "deploy: hugging face space card" || true
+          git push --force "https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE}" HEAD:main

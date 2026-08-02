@@ -532,41 +532,50 @@ def get_intraday_prices_with_prev_close(ticker: str, interval: str = "30m") -> p
     combined = pd.concat([ser_y, df_t]).sort_index()
     return combined
 
+def compute_delta_exposure_series(chain, price_series: pd.Series, offset) -> pd.Series:
+    """Net dealer delta exposure along an intraday price path (pure).
+
+    For each bar after the first (yesterday's close), sums
+    delta * OI * contract_size * side over strikes within ±offset of that
+    bar's spot, from ONE chain snapshot. The exposure varies along the path
+    only through the strike window; historical chains are not available on
+    free data.
+    """
+
+    df_chain = pd.DataFrame(chain)
+    if df_chain.empty or 'strike' not in df_chain.columns:
+        return pd.Series(dtype=float, name="Net Delta Exposure")
+    df_chain['strike'] = df_chain['strike'].astype(float)
+    df_chain['delta'] = df_chain['greeks'].apply(
+        lambda g: (g or {}).get('delta', 0.0) or 0.0
+    )
+    df_chain['oi'] = df_chain['open_interest'].fillna(0).astype(int)
+    df_chain['side'] = df_chain['option_type'].str.lower().map({'call': 1, 'put': -1})
+    df_chain['d_exposure'] = (
+        df_chain['delta'] * df_chain['oi'] * df_chain['contract_size'] * df_chain['side']
+    )
+
+    exposures = []
+    for ts, spot in price_series.iloc[1:].items():
+        spot = float(spot)
+        mask = (df_chain['strike'] >= spot - offset) & (df_chain['strike'] <= spot + offset)
+        exposures.append(float(df_chain.loc[mask, 'd_exposure'].sum()))
+
+    idx = price_series.index[1:]  # skip yesterday's close
+    return pd.Series(exposures, index=idx, name="Net Delta Exposure")
+
+
 def get_delta_exposure_at_times(
     ticker, expiration, tradier_token, offset, price_series: pd.Series
 ) -> pd.Series:
-    exposures = []
     api = TradierAPI(tradier_token)
-
-    # skip the first index (yesterday’s close)
-    for ts, spot in price_series.iloc[1:].items():
-        spot = float(spot)
-        data = api.option_chain(
-            ticker,
-            expiration,
-            greeks="true",
-            include_all_roots=True,
-        )
-        df_chain = pd.DataFrame(data)
-        df_chain['strike'] = df_chain['strike'].astype(float)
-        df_chain['delta']  = df_chain['greeks'].apply(lambda g: g.get('delta', 0.0))
-        df_chain['oi']     = df_chain['open_interest'].astype(int)
-
-        mask = (df_chain['strike'] >= spot-offset) & (df_chain['strike'] <= spot+offset)
-        df_chain = df_chain.loc[mask]
-
-        df_chain['side'] = df_chain['option_type'].str.lower().map({'call':1,'put':-1})
-        df_chain['d_exposure'] = (
-            df_chain['delta']*
-            df_chain['oi']*
-            df_chain['contract_size']*
-            df_chain['side']
-        )
-        exposures.append(df_chain['d_exposure'].sum())
-
-    # build a Series aligned to the *trading-day* timestamps
-    idx = price_series.index[1:]  # skip the first
-    return pd.Series(exposures, index=idx, name="Net Delta Exposure")
+    chain = api.option_chain(
+        ticker,
+        expiration,
+        greeks="true",
+        include_all_roots=True,
+    )
+    return compute_delta_exposure_series(chain, price_series, offset)
 
 def plot_price_and_delta_projection(
     ticker, expiration, tradier_token, offset, interval="30m"

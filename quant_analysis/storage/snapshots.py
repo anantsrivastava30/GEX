@@ -19,7 +19,7 @@ so an intraday re-run simply refreshes the day's snapshot.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
@@ -66,10 +66,120 @@ CONTRACT_COLUMNS = [
 CONTRACT_KEY = ["expiration_date", "strike", "option_type"]
 
 
+def _observed(day: date) -> date:
+    if day.weekday() == 5:
+        return day - timedelta(days=1)
+    if day.weekday() == 6:
+        return day + timedelta(days=1)
+    return day
+
+
+def _nth_weekday(year: int, month: int, weekday: int, occurrence: int) -> date:
+    day = date(year, month, 1)
+    day += timedelta(days=(weekday - day.weekday()) % 7)
+    return day + timedelta(weeks=occurrence - 1)
+
+
+def _last_weekday(year: int, month: int, weekday: int) -> date:
+    if month == 12:
+        day = date(year + 1, 1, 1) - timedelta(days=1)
+    else:
+        day = date(year, month + 1, 1) - timedelta(days=1)
+    return day - timedelta(days=(day.weekday() - weekday) % 7)
+
+
+def _easter(year: int) -> date:
+    """Gregorian Easter date (Anonymous Gregorian algorithm)."""
+
+    a = year % 19
+    b, c = divmod(year, 100)
+    d, e = divmod(b, 4)
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = divmod(c, 4)
+    month_seed = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * month_seed) // 451
+    month = (h + month_seed - 7 * m + 114) // 31
+    day = (h + month_seed - 7 * m + 114) % 31 + 1
+    return date(year, month, day)
+
+
+def _market_holidays(year: int) -> set[date]:
+    holidays = {
+        _observed(date(year, 1, 1)),
+        _nth_weekday(year, 1, 0, 3),  # Martin Luther King Jr. Day
+        _nth_weekday(year, 2, 0, 3),  # Presidents Day
+        _easter(year) - timedelta(days=2),  # Good Friday
+        _last_weekday(year, 5, 0),  # Memorial Day
+        _observed(date(year, 7, 4)),
+        _nth_weekday(year, 9, 0, 1),  # Labor Day
+        _nth_weekday(year, 11, 3, 4),  # Thanksgiving
+        _observed(date(year, 12, 25)),
+        # A Saturday New Year can be observed on Dec 31 of this year.
+        _observed(date(year + 1, 1, 1)),
+    }
+    if year >= 2022:
+        holidays.add(_observed(date(year, 6, 19)))
+    return holidays
+
+
+def is_market_session(day: date) -> bool:
+    return day.weekday() < 5 and day not in _market_holidays(day.year)
+
+
+def previous_market_session(day: date) -> date:
+    candidate = day - timedelta(days=1)
+    while not is_market_session(candidate):
+        candidate -= timedelta(days=1)
+    return candidate
+
+
+def are_consecutive_market_sessions(from_date: str, to_date: str) -> bool:
+    try:
+        previous = date.fromisoformat(from_date)
+        current = date.fromisoformat(to_date)
+    except ValueError:
+        return False
+    return previous_market_session(current) == previous
+
+
+def capture_session_date(now: Optional[datetime] = None) -> Optional[str]:
+    """Current session key, or None when an off-session capture is unsafe."""
+
+    now = now or datetime.now(tz=MARKET_TZ)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=MARKET_TZ)
+    else:
+        now = now.astimezone(MARKET_TZ)
+    if not is_market_session(now.date()) or now.time() < time(9, 30):
+        return None
+    return now.date().isoformat()
+
+
 def market_date_today() -> str:
     """Current date in US market time (snapshots are keyed by this)."""
 
     return datetime.now(tz=MARKET_TZ).date().isoformat()
+
+
+def last_trading_date() -> str:
+    """Most recent started weekday session in US market time.
+
+    Premarket and weekend captures key to the previous weekday so they cannot
+    overwrite or falsely advertise a session that has not started. Staleness
+    checks use the same rule.
+    Standard full-day US equity-market holidays are skipped. Exceptional
+    closures are not modelled.
+    """
+
+    now = datetime.now(tz=MARKET_TZ)
+    day = now.date()
+    if day.weekday() < 5 and now.time() < time(9, 30):
+        day -= timedelta(days=1)
+    while not is_market_session(day):
+        day -= timedelta(days=1)
+    return day.isoformat()
 
 
 def build_snapshot(
@@ -187,14 +297,19 @@ def capture_ticker_snapshot(
         load_options_data,
     )
 
+    snapshot_date = capture_session_date()
+    if snapshot_date is None:
+        logger.warning("Off-session snapshot capture skipped for %s", ticker)
+        return None
+
     spot = get_stock_quote(ticker, token)
     expirations = get_expirations(ticker, token)[:num_expirations]
     if not expirations:
         logger.warning("No expirations returned for %s; skipping", ticker)
         return None
 
-    df = load_options_data(ticker, expirations, token)
-    return build_snapshot(ticker, market_date_today(), spot, df, offset=offset)
+    df = load_options_data(ticker, expirations, token, require_all=True)
+    return build_snapshot(ticker, snapshot_date, spot, df, offset=offset)
 
 
 def write_snapshot(snapshot: Dict[str, Any], base_dir: Path = DEFAULT_BASE_DIR) -> Path:
@@ -297,22 +412,60 @@ def compute_oi_change(
         return pd.DataFrame()
 
     prev_date, last_date = dates[-2], dates[-1]
-    cols = CONTRACT_KEY + ["open_interest"]
-    prev = history[history["snapshot_date"] == prev_date][cols]
-    last = history[history["snapshot_date"] == last_date][
-        cols + [c for c in ["volume", "mid_iv"] if c in history.columns]
+    if not are_consecutive_market_sessions(prev_date, last_date):
+        return pd.DataFrame()
+    prev = history[history["snapshot_date"] == prev_date]
+    last = history[history["snapshot_date"] == last_date]
+    merged = compute_contract_snapshot_diff(prev, last, prev_date, last_date)
+    # Keep the existing public OI-change frame stable. Consumers needing IV
+    # changes use the lower-level contract diff helper directly.
+    legacy_columns = CONTRACT_KEY + ["open_interest"]
+    legacy_columns += [
+        column for column in ("volume", "mid_iv") if column in merged.columns
     ]
-
-    merged = last.merge(
-        prev, on=CONTRACT_KEY, how="left", suffixes=("", "_prev")
-    )
-    merged["open_interest_prev"] = merged["open_interest_prev"].fillna(0)
-    merged["oi_change"] = merged["open_interest"] - merged["open_interest_prev"]
-    merged["from_date"] = prev_date
-    merged["to_date"] = last_date
+    legacy_columns += ["open_interest_prev", "oi_change", "from_date", "to_date"]
+    merged = merged[legacy_columns]
     return merged.sort_values(
         "oi_change", key=lambda s: s.abs(), ascending=False
     ).reset_index(drop=True)
+
+
+def compute_contract_snapshot_diff(
+    previous: pd.DataFrame,
+    current: pd.DataFrame,
+    from_date: str,
+    to_date: str,
+) -> pd.DataFrame:
+    """Compare two daily contract snapshots by contract key.
+
+    Missing prior OI is treated as zero, matching ``compute_oi_change``'s
+    established behavior. IV is not zero-filled: a missing prior quote means
+    the daily IV change is unavailable rather than a measured move.
+    """
+
+    current_columns = CONTRACT_KEY + ["open_interest"]
+    current_columns += [
+        column for column in ("volume", "mid_iv") if column in current.columns
+    ]
+    previous_columns = CONTRACT_KEY + ["open_interest"]
+    if "mid_iv" in previous.columns:
+        previous_columns.append("mid_iv")
+
+    prev = previous[previous_columns].copy()
+    last = current[current_columns].copy()
+    merged = last.merge(prev, on=CONTRACT_KEY, how="left", suffixes=("", "_prev"))
+    merged["open_interest_prev"] = merged["open_interest_prev"].fillna(0)
+    merged["oi_change"] = merged["open_interest"] - merged["open_interest_prev"]
+
+    if "mid_iv" in merged.columns and "mid_iv_prev" in merged.columns:
+        merged["iv_change"] = merged["mid_iv"] - merged["mid_iv_prev"]
+    elif "mid_iv" in merged.columns:
+        merged["mid_iv_prev"] = pd.NA
+        merged["iv_change"] = pd.NA
+
+    merged["from_date"] = from_date
+    merged["to_date"] = to_date
+    return merged
 
 
 def compute_iv_rank(

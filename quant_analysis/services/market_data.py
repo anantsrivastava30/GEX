@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -13,6 +14,7 @@ from quant_analysis.config import CONFIG
 from quant_analysis.integrations.tradier import TradierAPI
 
 API_URL = CONFIG.get("tradier", {}).get("api_url", "https://api.tradier.com/v1")
+logger = logging.getLogger(__name__)
 
 RSS_FEEDS = CONFIG.get("news", {}).get("rss_feeds", [])
 
@@ -59,9 +61,10 @@ def get_expirations(ticker, token, include_all_roots=False):
     api = TradierAPI(token, API_URL)
     return api.expirations(ticker, include_all_roots)
 
-def load_options_data(ticker, expirations, token):
+def load_options_data(ticker, expirations, token, require_all=False):
     """Fetch option chains and process data for positioning."""
     all_opts = []
+    failed = []
     for exp in expirations:
         try:
             chain = get_option_chain(ticker, exp, token, include_all_roots=True)
@@ -69,7 +72,28 @@ def load_options_data(ticker, expirations, token):
                 opt['expiration_date'] = exp
             all_opts.extend(chain)
         except Exception:
+            failed.append(exp)
+            logger.warning("Option chain unavailable for %s %s", ticker, exp)
             continue
+    if require_all and failed:
+        logger.warning(
+            "Strict snapshot rejected for %s: %d/%d expirations unavailable",
+            ticker,
+            len(failed),
+            len(expirations),
+        )
+        return pd.DataFrame()
+    return process_options_data(all_opts)
+
+
+def process_options_data(all_opts):
+    """Pure transform: raw chain dicts -> positioning DataFrame.
+
+    Flattens greeks, computes DTE and Gamma/Delta exposures, negates put
+    gamma. Each dict must already carry ``expiration_date``. Extracted from
+    ``load_options_data`` so callers with pre-fetched (cached) chains reuse
+    the same math.
+    """
 
     if not all_opts:
         return pd.DataFrame()
@@ -79,7 +103,8 @@ def load_options_data(ticker, expirations, token):
         greeks_df = pd.json_normalize(df.pop('greeks'))
         df = pd.concat([df, greeks_df], axis=1)
     df['expiration_date'] = pd.to_datetime(df['expiration_date'])
-    df['DTE'] = (df['expiration_date'] - datetime.now()).dt.days
+    today = pd.Timestamp.now().normalize()
+    df['DTE'] = (df['expiration_date'].dt.normalize() - today).dt.days
 
     contract_size = df.get('contract_size')
     if contract_size is None:
@@ -560,28 +585,63 @@ def compute_butterfly_skew(chain, spot):
     return ((iv_low + iv_high)/2) - iv_atm
 
 
+def compute_term_structure(chains_by_expiration, spot, offset=None):
+    """ATM implied vol per expiration from pre-fetched chains (pure).
+
+    ``chains_by_expiration`` maps expiration date (YYYY-MM-DD) to a raw
+    Tradier chain list (greeks included). ATM IV is the mean ``mid_iv``
+    (``smv_vol`` fallback) across both sides at the strike nearest spot.
+    Returns a DataFrame with ``expiration``, ``dte``, ``atm_iv`` sorted by
+    expiration.
+    """
+
+    from quant_analysis.analytics.greeks import iv_series
+
+    today = datetime.now().date()
+    rows = []
+    for exp, chain in chains_by_expiration.items():
+        if not chain:
+            continue
+        df = pd.DataFrame(chain)
+        if 'greeks' in df.columns:
+            flat = pd.json_normalize(df['greeks'].apply(lambda g: g or {}))
+            df = pd.concat([df.drop(columns=['greeks']), flat], axis=1)
+        if 'strike' not in df.columns:
+            continue
+        df['strike'] = pd.to_numeric(df['strike'], errors='coerce')
+        df['_iv'] = iv_series(df)
+        df = df.dropna(subset=['strike', '_iv'])
+        if offset is not None:
+            df = df[(df['strike'] >= spot - offset) & (df['strike'] <= spot + offset)]
+        if df.empty:
+            continue
+        atm_strike = df.loc[(df['strike'] - spot).abs().idxmin(), 'strike']
+        atm_iv = df[df['strike'] == atm_strike]['_iv'].mean()
+        try:
+            dte = (datetime.strptime(str(exp)[:10], '%Y-%m-%d').date() - today).days
+        except ValueError:
+            dte = None
+        rows.append({'expiration': str(exp), 'dte': dte, 'atm_iv': float(atm_iv)})
+
+    return pd.DataFrame(rows, columns=['expiration', 'dte', 'atm_iv']).sort_values(
+        'expiration'
+    ).reset_index(drop=True)
+
+
 def compute_term_structure_slope(tradier_token, ticker, expirations, spot, offset):
     """
     Compute term structure slope = IV_near - IV_far for your ±offset strikes.
     Uses the first and last in expirations list.
     """
     api = TradierAPI(tradier_token, API_URL)
-    ivs = []
-    for exp in [expirations[0], expirations[-1]]:
-        resp = api.option_chain(
-            ticker,
-            exp,
-            greeks="false",
-            include_all_roots=True,
-        )
-        df = pd.DataFrame(resp)
-        greeks_df = pd.json_normalize(df.greeks)
-        df = pd.concat([df, greeks_df], axis=1)
-        df['strike']  = df['strike'].astype(float)
-        df['mid_iv']  = df['mid_iv'].astype(float)
-        df = df[(df['strike']>=spot-offset)&(df['strike']<=spot+offset)]
-        ivs.append(df['mid_iv'].mean())
-    return ivs[0] - ivs[1]
+    chains = {
+        exp: api.option_chain(ticker, exp, greeks="true", include_all_roots=True)
+        for exp in {expirations[0], expirations[-1]}
+    }
+    ts = compute_term_structure(chains, spot, offset)
+    if len(ts) < 2:
+        return None
+    return float(ts['atm_iv'].iloc[0] - ts['atm_iv'].iloc[-1])
 
 
 def compute_avg_spread(chain, spot, offset):

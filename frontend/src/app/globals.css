@@ -1,38 +1,77 @@
 @import "tailwindcss";
 
-/* Dark-first theme tokens (see docs/UW_PARITY_PLAN.md). */
+/* Dark-first theme tokens (see docs/UW_PARITY_PLAN.md).
+   Tuned for a dense, Unusual-Whales-style terminal: near-black canvas,
+   layered surfaces, quiet borders, one interactive accent, green/red for
+   data polarity only. */
 :root {
-  --background: #0b0e14;
-  --surface: #11151f;
-  --surface-hover: #171c29;
-  --border: #1e2433;
-  --foreground: #e6e9f0;
+  --background: #08090d;
+  --surface: #0f1118;
+  --surface-2: #141824;
+  --surface-hover: #1a1f2e;
+  --border: #1e2331;
+  --border-strong: #2a3040;
+  --foreground: #e7eaf2;
   --muted: #8b93a7;
-  --accent: #6366f1;
+  --faint: #5b6274;
+  --accent: #5b8def;
+  --accent-strong: #7aa4ff;
   --positive: #22c55e;
-  --negative: #ef4444;
+  --negative: #f0616d;
+  --warning: #f5a623;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
   --color-surface-hover: var(--surface-hover);
   --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
   --color-foreground: var(--foreground);
   --color-muted: var(--muted);
+  --color-faint: var(--faint);
   --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
   --color-positive: var(--positive);
   --color-negative: var(--negative);
+  --color-warning: var(--warning);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+}
+
+html {
+  font-size: 14px;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
+  -webkit-font-smoothing: antialiased;
 }
 
 /* Dense financial tables read best with aligned numerals. */
 table {
   font-variant-numeric: tabular-nums;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+/* Thin, quiet scrollbars to match the terminal aesthetic. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
 }

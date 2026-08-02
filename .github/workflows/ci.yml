@@ -7,24 +7,95 @@ on:
     branches: [ master ]
 
 jobs:
-  test:
+  changes:
     runs-on: ubuntu-latest
+    outputs:
+      components: ${{ steps.filter.outputs.changes }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            analytics:
+              - 'quant_analysis/**'
+              - 'tests/**'
+              - 'legacy/**'
+              - 'requirements.txt'
+              - 'setup.py'
+              - 'config.yaml'
+              - '.github/workflows/ci.yml'
+            backend:
+              - 'backend/**'
+              - 'quant_analysis/**'
+              - 'requirements.txt'
+              - 'config.yaml'
+              - '.github/workflows/ci.yml'
+            frontend:
+              - 'frontend/**'
+              - '.github/workflows/ci.yml'
+
+  test:
+    needs: changes
+    if: ${{ needs.changes.outputs.components != '[]' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component: ${{ fromJSON(needs.changes.outputs.components) }}
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Python
+        if: ${{ matrix.component != 'frontend' }}
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Install dependencies
+      - name: Set up Node
+        if: ${{ matrix.component == 'frontend' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Python dependencies
+        if: ${{ matrix.component != 'frontend' }}
         run: |
           python -m pip install --upgrade pip setuptools wheel
           pip install -r requirements.txt
-          pip install -r backend/requirements.txt
+          if [ "${{ matrix.component }}" = "backend" ]; then
+            pip install -r backend/requirements.txt
+          fi
 
-      - name: Run tests
-        run: |
-          pytest -q
+      - name: Test analytics
+        if: ${{ matrix.component == 'analytics' }}
+        run: pytest -q tests
+
+      - name: Test backend
+        if: ${{ matrix.component == 'backend' }}
+        run: pytest -q backend/tests
+
+      - name: Install frontend dependencies
+        if: ${{ matrix.component == 'frontend' }}
+        run: npm ci
+        working-directory: frontend
+
+      - name: Build frontend
+        if: ${{ matrix.component == 'frontend' }}
+        run: npm run build
+        working-directory: frontend
+
+      - name: Install Playwright browser
+        if: ${{ matrix.component == 'frontend' }}
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+
+      - name: Run frontend smoke tests
+        if: ${{ matrix.component == 'frontend' }}
+        run: npm run test:e2e
+        working-directory: frontend
