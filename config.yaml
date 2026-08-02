@@ -60,6 +60,36 @@ congress:
       chamber: "house"
       url: "https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json"
 
+# Native calendar. Earnings are queried from yfinance for this bounded
+# universe. FRED IDs are a curated US macro list, not provider impact scores.
+calendar:
+  earnings_tickers:
+    - AAPL
+    - MSFT
+    - NVDA
+    - TSLA
+    - AMZN
+    - GOOGL
+    - META
+    - AMD
+    - NFLX
+  fred_release_ids:
+    - 9
+    - 10
+    - 11
+    - 13
+    - 27
+    - 46
+    - 50
+    - 51
+    - 53
+    - 54
+    - 97
+    - 101
+    - 180
+    - 192
+    - 291
+
 # Daily own-data history collection (see docs/UW_PARITY_PLAN.md).
 # Keep the universe small enough that one run stays inside Tradier's
 # rate limit: each ticker costs 2 + num_expirations requests.

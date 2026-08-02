@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -13,6 +14,7 @@ from quant_analysis.config import CONFIG
 from quant_analysis.integrations.tradier import TradierAPI
 
 API_URL = CONFIG.get("tradier", {}).get("api_url", "https://api.tradier.com/v1")
+logger = logging.getLogger(__name__)
 
 RSS_FEEDS = CONFIG.get("news", {}).get("rss_feeds", [])
 
@@ -59,9 +61,10 @@ def get_expirations(ticker, token, include_all_roots=False):
     api = TradierAPI(token, API_URL)
     return api.expirations(ticker, include_all_roots)
 
-def load_options_data(ticker, expirations, token):
+def load_options_data(ticker, expirations, token, require_all=False):
     """Fetch option chains and process data for positioning."""
     all_opts = []
+    failed = []
     for exp in expirations:
         try:
             chain = get_option_chain(ticker, exp, token, include_all_roots=True)
@@ -69,7 +72,17 @@ def load_options_data(ticker, expirations, token):
                 opt['expiration_date'] = exp
             all_opts.extend(chain)
         except Exception:
+            failed.append(exp)
+            logger.warning("Option chain unavailable for %s %s", ticker, exp)
             continue
+    if require_all and failed:
+        logger.warning(
+            "Strict snapshot rejected for %s: %d/%d expirations unavailable",
+            ticker,
+            len(failed),
+            len(expirations),
+        )
+        return pd.DataFrame()
     return process_options_data(all_opts)
 
 

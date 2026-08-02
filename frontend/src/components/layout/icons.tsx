@@ -53,6 +53,20 @@ export const IconScreener = base(
   </>,
 );
 
+export const IconWatchlist = base(
+  <>
+    <path d="M4 5h16M4 12h16M4 19h16" />
+    <path d="M7 3v4M12 10v4M17 17v4" />
+  </>,
+);
+
+export const IconAlerts = base(
+  <>
+    <path d="M18 8a6 6 0 00-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" />
+    <path d="M10 21h4" />
+  </>,
+);
+
 export const IconCalendar = base(
   <>
     <rect x="3" y="4" width="18" height="17" rx="2" />

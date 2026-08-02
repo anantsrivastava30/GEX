@@ -29,14 +29,16 @@ logger = logging.getLogger(__name__)
 MARKET_TZ = ZoneInfo("America/New_York")
 MARKET_OPEN = time(9, 30)
 MARKET_CLOSE = time(16, 0)
+ALERT_EVALUATION_CLOSE = time(16, 15)
 
 
 def market_is_open(now: datetime | None = None) -> bool:
-    """Weekday regular-hours check (holidays excluded; a holiday run just
-    re-writes unchanged data, which the upsert makes harmless)."""
+    """US equity regular-hours check, excluding standard full-day holidays."""
 
     now = now or datetime.now(tz=MARKET_TZ)
-    if now.weekday() >= 5:
+    from quant_analysis.storage.snapshots import is_market_session
+
+    if not is_market_session(now.date()):
         return False
     return MARKET_OPEN <= now.time() <= MARKET_CLOSE
 
@@ -55,13 +57,52 @@ def run_intraday_snapshots() -> None:
     capture_universe()
 
 
+def alert_evaluation_window(now: datetime | None = None) -> bool:
+    """Allow evaluations after each snapshot, including the 16:10 close run."""
+
+    now = now or datetime.now(tz=MARKET_TZ)
+    from quant_analysis.storage.snapshots import is_market_session
+
+    if not is_market_session(now.date()):
+        return False
+    return MARKET_OPEN <= now.time() <= ALERT_EVALUATION_CLOSE
+
+
+def run_alert_evaluation() -> None:
+    if not alert_evaluation_window():
+        return
+    from backend.app.services_alerts import evaluate_enabled_alerts
+
+    result = evaluate_enabled_alerts()
+    logger.info(
+        "Alert evaluation done: %d rules, %d events",
+        result["evaluated"],
+        result["emitted"],
+    )
+
+
+def warm_congress_cache() -> None:
+    """Best-effort daily warm-up for the six-hour disclosure cache."""
+
+    try:
+        from backend.app.services_congress import get_congress_trades
+
+        result = get_congress_trades(limit=1)
+        logger.info(
+            "Congress cache warm-up done: as_of=%s stale=%s",
+            result.get("as_of"),
+            result.get("stale"),
+        )
+    except Exception:
+        logger.exception("Congress cache warm-up failed")
+
+
 def capture_universe() -> dict:
     """Capture the configured snapshot universe once and persist results.
 
-    Shared by the scheduler job and the admin capture endpoint. Off-hours
-    runs are safe: chains fetched while the market is closed carry the last
-    session's OI/volume and key to ``last_trading_date()``, so a weekend
-    capture seeds Friday's snapshot instead of a bogus weekend row.
+    Shared by the scheduler job and the admin capture endpoint. Off-session
+    runs are skipped so a rolled provider expiration universe cannot overwrite
+    the previous session with non-comparable data.
     """
 
     from quant_analysis.storage import snapshots as snapshot_store
@@ -69,6 +110,15 @@ def capture_universe() -> dict:
 
     settings = get_settings()
     base_dir = Path(settings.snapshot_dir)
+    if snapshot_store.capture_session_date() is None:
+        logger.info("Snapshot capture skipped: no active market session today")
+        return {
+            "captured": 0,
+            "requested": len(settings.snapshot_tickers),
+            "tickers": list(settings.snapshot_tickers),
+            "gamma_gap_rows": 0,
+            "as_of": snapshot_store.last_trading_date(),
+        }
     gap_rows = []
     captured = 0
     tickers = settings.snapshot_tickers
@@ -146,5 +196,31 @@ def create_scheduler() -> BackgroundScheduler:
         coalesce=True,
         max_instances=1,
         misfire_grace_time=300,
+    )
+    scheduler.add_job(
+        run_alert_evaluation,
+        CronTrigger(
+            day_of_week="mon-fri",
+            hour="9-16",
+            minute="10,40",
+            timezone=str(MARKET_TZ),
+        ),
+        id="alert_evaluation",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=300,
+    )
+    scheduler.add_job(
+        warm_congress_cache,
+        CronTrigger(
+            day_of_week="mon-fri",
+            hour=7,
+            minute=15,
+            timezone=str(MARKET_TZ),
+        ),
+        id="congress_cache_warmup",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=1800,
     )
     return scheduler

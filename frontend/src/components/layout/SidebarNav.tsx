@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import type { ComponentType } from "react";
 import {
   IconAI,
+  IconAlerts,
   IconCalendar,
   IconCongress,
   IconFlow,
@@ -14,6 +15,7 @@ import {
   IconTicker,
   IconTrackRecord,
   IconTools,
+  IconWatchlist,
 } from "./icons";
 
 type NavItem = {
@@ -32,6 +34,8 @@ const SECTIONS: { heading: string; items: NavItem[] }[] = [
       { href: "/flow", label: "Flow", icon: IconFlow },
       { href: "/stock/SPY", label: "Tickers", icon: IconTicker, match: "/stock" },
       { href: "/screener", label: "Screener", icon: IconScreener },
+      { href: "/watchlists", label: "Watchlists", icon: IconWatchlist },
+      { href: "/alerts", label: "Alerts", icon: IconAlerts },
     ],
   },
   {
@@ -50,7 +54,8 @@ const SECTIONS: { heading: string; items: NavItem[] }[] = [
 export default function SidebarNav() {
   const pathname = usePathname();
   return (
-    <aside className="fixed inset-y-0 left-0 z-20 flex w-52 flex-col border-r border-border bg-surface">
+    <>
+    <aside className="fixed inset-y-0 left-0 z-20 hidden w-52 flex-col border-r border-border bg-surface md:flex">
       <Link
         href="/market"
         className="flex items-center gap-2 px-4 py-4 text-foreground"
@@ -106,5 +111,18 @@ export default function SidebarNav() {
         Research &amp; education only. Not financial advice.
       </div>
     </aside>
+    <nav aria-label="Primary navigation" className="fixed inset-x-0 bottom-0 z-30 flex h-16 items-stretch gap-1 overflow-x-auto border-t border-border bg-surface px-2 md:hidden">
+      {SECTIONS.flatMap((section) => section.items).map((item) => {
+        const active = pathname.startsWith(item.match ?? item.href);
+        const Icon = item.icon;
+        return (
+          <Link key={item.href} href={item.href} className={`flex min-w-16 flex-col items-center justify-center gap-1 px-2 text-[10px] ${active ? "text-accent" : "text-muted"}`}>
+            <Icon className="h-4 w-4" />
+            <span className="whitespace-nowrap">{item.label}</span>
+          </Link>
+        );
+      })}
+    </nav>
+    </>
   );
 }

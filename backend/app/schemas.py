@@ -173,6 +173,160 @@ class ScreenerResponse(BaseModel):
     rows: List[ScreenerRow]
 
 
+class ScreenerFieldSpec(BaseModel):
+    name: str
+    label: str
+    type: Literal["number", "string", "boolean", "date"]
+    scopes: List[Literal["contract", "ticker"]]
+    operators: List[Literal["eq", "ne", "gt", "gte", "lt", "lte"]]
+
+
+class ScreenerFieldsResponse(BaseModel):
+    fields: List[ScreenerFieldSpec]
+
+
+class ScreenerCondition(BaseModel):
+    field: str = Field(min_length=1, max_length=64)
+    operator: Literal["eq", "ne", "gt", "gte", "lt", "lte"]
+    value: Any
+
+
+class ScreenerSort(BaseModel):
+    field: str = Field(min_length=1, max_length=64)
+    direction: Literal["asc", "desc"] = "desc"
+
+
+class CustomScreenerRequest(BaseModel):
+    scope: Literal["contract", "ticker"]
+    symbols: Optional[List[str]] = Field(default=None, max_length=25)
+    conditions: List[ScreenerCondition] = Field(default_factory=list, max_length=12)
+    sort: Optional[ScreenerSort] = None
+    limit: int = Field(default=50, ge=1, le=200)
+
+
+class CustomScreenerRow(BaseModel):
+    row_key: str
+    symbol: str
+    snapshot_date: str
+    values: Dict[str, Any]
+
+
+class CustomScreenerResponse(BaseModel):
+    scope: Literal["contract", "ticker"]
+    as_of: Optional[str] = None
+    stale: bool
+    unavailable_symbols: List[str]
+    methodology: str
+    rows: List[CustomScreenerRow]
+
+
+class CalendarSourceStatus(BaseModel):
+    configured: bool
+    available: bool
+    partial: bool = False
+    unavailable: List[str] = Field(default_factory=list)
+    message: Optional[str] = None
+
+
+class EarningsEvent(BaseModel):
+    symbol: str
+    earnings_at: str
+    eps_estimate: Optional[float] = None
+    reported_eps: Optional[float] = None
+    surprise_pct: Optional[float] = None
+    url: str
+
+
+class EconomicRelease(BaseModel):
+    release_id: int
+    release_name: str
+    release_date: str
+    url: str
+
+
+class CalendarResponse(BaseModel):
+    start_date: str
+    end_date: str
+    generated_at: str
+    earnings: List[EarningsEvent]
+    economic_releases: List[EconomicRelease]
+    sources: Dict[str, CalendarSourceStatus]
+
+
+class WatchlistMutation(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    symbols: List[str] = Field(min_length=1, max_length=25)
+
+
+class Watchlist(BaseModel):
+    id: int
+    name: str
+    symbols: List[str]
+    created_at: str
+    updated_at: str
+
+
+class WatchlistListResponse(BaseModel):
+    workspace: Literal["shared"] = "shared"
+    available_symbols: List[str]
+    items: List[Watchlist]
+
+
+class AlertRuleMutation(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    enabled: bool = True
+    watchlist_id: int = Field(ge=1)
+    query: CustomScreenerRequest
+    notify_discord: bool = False
+    notify_email: bool = False
+
+
+class AlertRule(BaseModel):
+    id: int
+    name: str
+    enabled: bool
+    watchlist_id: int
+    watchlist_name: str
+    query: CustomScreenerRequest
+    notify_discord: bool
+    notify_email: bool
+    version: int
+    last_evaluated_at: Optional[str] = None
+    last_error: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class AlertStatus(BaseModel):
+    workspace: Literal["shared"] = "shared"
+    scheduler_enabled: bool
+    pin_required: bool
+    discord_configured: bool
+    email_configured: bool
+    evaluation_interval_minutes: int = 30
+
+
+class AlertEvent(BaseModel):
+    id: int
+    alert_rule_id: int
+    rule_name: str
+    snapshot_date: str
+    symbol: str
+    scope: Literal["contract", "ticker"]
+    title: str
+    message: str
+    payload: Dict[str, Any]
+    created_at: str
+    read_at: Optional[str] = None
+    discord_status: str
+    email_status: str
+
+
+class AlertEventsResponse(BaseModel):
+    unread: int
+    items: List[AlertEvent]
+
+
 class NewsItem(BaseModel):
     title: str
     link: str

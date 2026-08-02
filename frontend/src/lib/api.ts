@@ -213,6 +213,146 @@ export interface ScreenerResponse {
   rows: ScreenerRow[];
 }
 
+export type ScreenerScope = "contract" | "ticker";
+export type ScreenerOperator = "eq" | "ne" | "gt" | "gte" | "lt" | "lte";
+
+export interface ScreenerFieldSpec {
+  name: string;
+  label: string;
+  type: "number" | "string" | "boolean" | "date";
+  scopes: ScreenerScope[];
+  operators: ScreenerOperator[];
+}
+
+export interface ScreenerCondition {
+  field: string;
+  operator: ScreenerOperator;
+  value: string | number | boolean;
+}
+
+export interface CustomScreenerRequest {
+  scope: ScreenerScope;
+  symbols?: string[];
+  conditions: ScreenerCondition[];
+  sort?: { field: string; direction: "asc" | "desc" };
+  limit: number;
+}
+
+export interface CustomScreenerRow {
+  row_key: string;
+  symbol: string;
+  snapshot_date: string;
+  values: Record<string, string | number | boolean | null>;
+}
+
+export interface CustomScreenerResponse {
+  scope: ScreenerScope;
+  as_of?: string | null;
+  stale: boolean;
+  unavailable_symbols: string[];
+  methodology: string;
+  rows: CustomScreenerRow[];
+}
+
+export interface CalendarSourceStatus {
+  configured: boolean;
+  available: boolean;
+  partial: boolean;
+  unavailable: string[];
+  message?: string | null;
+}
+
+export interface EarningsEvent {
+  symbol: string;
+  earnings_at: string;
+  eps_estimate?: number | null;
+  reported_eps?: number | null;
+  surprise_pct?: number | null;
+  url: string;
+}
+
+export interface EconomicRelease {
+  release_id: number;
+  release_name: string;
+  release_date: string;
+  url: string;
+}
+
+export interface CalendarResponse {
+  start_date: string;
+  end_date: string;
+  generated_at: string;
+  earnings: EarningsEvent[];
+  economic_releases: EconomicRelease[];
+  sources: Record<string, CalendarSourceStatus>;
+}
+
+export interface WatchlistMutation {
+  name: string;
+  symbols: string[];
+}
+
+export interface Watchlist extends WatchlistMutation {
+  id: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WatchlistListResponse {
+  workspace: "shared";
+  available_symbols: string[];
+  items: Watchlist[];
+}
+
+export interface AlertRuleMutation {
+  name: string;
+  enabled: boolean;
+  watchlist_id: number;
+  query: CustomScreenerRequest;
+  notify_discord: boolean;
+  notify_email: boolean;
+}
+
+export interface AlertRule extends AlertRuleMutation {
+  id: number;
+  watchlist_name: string;
+  version: number;
+  last_evaluated_at?: string | null;
+  last_error?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AlertStatus {
+  workspace: "shared";
+  scheduler_enabled: boolean;
+  pin_required: boolean;
+  discord_configured: boolean;
+  email_configured: boolean;
+  evaluation_interval_minutes: number;
+}
+
+export interface AlertEvent {
+  id: number;
+  alert_rule_id: number;
+  rule_name: string;
+  snapshot_date: string;
+  symbol: string;
+  scope: ScreenerScope;
+  title: string;
+  message: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+  read_at?: string | null;
+  discord_status: string;
+  email_status: string;
+}
+
+export interface AlertEventsResponse {
+  unread: number;
+  items: AlertEvent[];
+}
+
 export interface NewsItem {
   title: string;
   link: string;
@@ -423,6 +563,24 @@ export class APIError extends Error {
   }
 }
 
+function errorDetail(detail: unknown, fallback: string): string {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => {
+        if (!item || typeof item !== "object") return null;
+        const record = item as { loc?: unknown[]; msg?: unknown };
+        const location = record.loc?.slice(1).join(".");
+        return typeof record.msg === "string"
+          ? `${location ? `${location}: ` : ""}${record.msg}`
+          : null;
+      })
+      .filter(Boolean);
+    if (messages.length) return messages.join("; ");
+  }
+  return fallback;
+}
+
 async function getJSON<T>(
   path: string,
   signal?: AbortSignal,
@@ -436,7 +594,7 @@ async function getJSON<T>(
     let detail = `Backend returned ${resp.status}`;
     try {
       const body = await resp.json();
-      if (body?.detail) detail = String(body.detail);
+      if (body?.detail) detail = errorDetail(body.detail, detail);
     } catch {
       // non-JSON error body; keep the status message
     }
@@ -445,27 +603,53 @@ async function getJSON<T>(
   return resp.json() as Promise<T>;
 }
 
-async function postJSON<T>(path: string, body: unknown): Promise<T> {
+async function sendJSON<T>(
+  path: string,
+  method: "POST" | "PUT" | "DELETE",
+  body?: unknown,
+  signal?: AbortSignal,
+  headers?: HeadersInit,
+): Promise<T> {
   const resp = await fetch(path, {
-    method: "POST",
+    method,
     headers: {
       accept: "application/json",
       "content-type": "application/json",
+      ...headers,
     },
-    body: JSON.stringify(body),
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal,
   });
   if (!resp.ok) {
     let detail = `Backend returned ${resp.status}`;
     try {
       const errorBody = await resp.json();
-      if (errorBody?.detail) detail = String(errorBody.detail);
+      if (errorBody?.detail) detail = errorDetail(errorBody.detail, detail);
     } catch {
       // non-JSON error body; keep the status message
     }
     throw new APIError(detail, resp.status);
   }
+  if (resp.status === 204) return undefined as T;
   return resp.json() as Promise<T>;
 }
+
+const postJSON = <T>(
+  path: string,
+  body: unknown,
+  signal?: AbortSignal,
+  headers?: HeadersInit,
+) => sendJSON<T>(path, "POST", body, signal, headers);
+const putJSON = <T>(
+  path: string,
+  body: unknown,
+  signal?: AbortSignal,
+  headers?: HeadersInit,
+) => sendJSON<T>(path, "PUT", body, signal, headers);
+const deleteJSON = (path: string, signal?: AbortSignal, headers?: HeadersInit) =>
+  sendJSON<void>(path, "DELETE", undefined, signal, headers);
+
+const workspaceHeaders = (pin: string): HeadersInit => ({ "X-Workspace-PIN": pin });
 
 function qs(params: Record<string, string | number | string[]>): string {
   const search = new URLSearchParams();
@@ -539,6 +723,71 @@ export const api = {
     if (filters.limit != null) params.limit = filters.limit;
     return getJSON<ScreenerResponse>(`/api/screener${qs(params)}`, signal);
   },
+
+  screenerFields: (signal?: AbortSignal) =>
+    getJSON<{ fields: ScreenerFieldSpec[] }>("/api/screener/fields", signal),
+  customScreener: (request: CustomScreenerRequest, signal?: AbortSignal) =>
+    postJSON<CustomScreenerResponse>("/api/screener/query", request, signal),
+
+  calendar: (
+    filters: { start?: string; end?: string; symbols?: string[] } = {},
+    signal?: AbortSignal,
+  ) => {
+    const params: Record<string, string | string[]> = {};
+    if (filters.start) params.start = filters.start;
+    if (filters.end) params.end = filters.end;
+    if (filters.symbols?.length) params.symbols = filters.symbols;
+    return getJSON<CalendarResponse>(`/api/calendar${qs(params)}`, signal);
+  },
+
+  watchlists: (signal?: AbortSignal) =>
+    getJSON<WatchlistListResponse>("/api/watchlists", signal),
+  createWatchlist: (request: WatchlistMutation, pin: string) =>
+    postJSON<Watchlist>("/api/watchlists", request, undefined, workspaceHeaders(pin)),
+  updateWatchlist: (id: number, request: WatchlistMutation, pin: string) =>
+    putJSON<Watchlist>(
+      `/api/watchlists/${id}`,
+      request,
+      undefined,
+      workspaceHeaders(pin),
+    ),
+  deleteWatchlist: (id: number, pin: string) =>
+    deleteJSON(`/api/watchlists/${id}`, undefined, workspaceHeaders(pin)),
+
+  alertStatus: (signal?: AbortSignal) =>
+    getJSON<AlertStatus>("/api/alerts/status", signal),
+  alertRules: (signal?: AbortSignal) =>
+    getJSON<AlertRule[]>("/api/alerts/rules", signal),
+  createAlertRule: (request: AlertRuleMutation, pin: string) =>
+    postJSON<AlertRule>("/api/alerts/rules", request, undefined, workspaceHeaders(pin)),
+  updateAlertRule: (id: number, request: AlertRuleMutation, pin: string) =>
+    putJSON<AlertRule>(
+      `/api/alerts/rules/${id}`,
+      request,
+      undefined,
+      workspaceHeaders(pin),
+    ),
+  deleteAlertRule: (id: number, pin: string) =>
+    deleteJSON(`/api/alerts/rules/${id}`, undefined, workspaceHeaders(pin)),
+  alertEvents: (unreadOnly = false, limit = 100, signal?: AbortSignal) =>
+    getJSON<AlertEventsResponse>(
+      `/api/alerts/events${qs({ unread_only: String(unreadOnly), limit })}`,
+      signal,
+    ),
+  markAlertRead: (id: number, pin: string) =>
+    postJSON<{ status: string }>(
+      `/api/alerts/events/${id}/read`,
+      {},
+      undefined,
+      workspaceHeaders(pin),
+    ),
+  markAllAlertsRead: (pin: string) =>
+    postJSON<{ updated: number }>(
+      "/api/alerts/events/read-all",
+      {},
+      undefined,
+      workspaceHeaders(pin),
+    ),
 
   marketOverview: () => getJSON<MarketOverview>(`/api/market/overview`),
 

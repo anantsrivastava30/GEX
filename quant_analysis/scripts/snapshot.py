@@ -26,6 +26,7 @@ from quant_analysis.storage.snapshots import (
     DEFAULT_NUM_EXPIRATIONS,
     DEFAULT_TICKERS,
     capture_ticker_snapshot,
+    capture_session_date,
     write_snapshot,
 )
 
@@ -55,6 +56,9 @@ def run(tickers: List[str], num_expirations: int, base_dir: Path) -> int:
             "No Tradier token found: set TRADIER_TOKEN or add it to Streamlit secrets"
         )
         return 2
+    if capture_session_date() is None:
+        logger.info("Snapshot run skipped: no active market session today")
+        return 0
 
     captured, failed = [], []
     for i, ticker in enumerate(tickers):

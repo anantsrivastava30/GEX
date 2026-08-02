@@ -32,9 +32,9 @@ export default function RootLayout({
     >
       <body className="min-h-full">
         <SidebarNav />
-        <div className="pl-52">
+        <div className="md:pl-52">
           <TopBar />
-          <main className="px-6 py-6">{children}</main>
+          <main className="px-3 pb-20 pt-4 sm:px-4 md:px-6 md:py-6">{children}</main>
         </div>
       </body>
     </html>

@@ -255,7 +255,9 @@ def _cached_contract_proxy_data() -> tuple[pd.DataFrame, Dict[str, Any]]:
         latest = history[history["snapshot_date"] == latest_date].copy()
         latest["ticker"] = ticker
 
-        if len(dates) < 2:
+        if len(dates) < 2 or not snapshot_store.are_consecutive_market_sessions(
+            str(dates[-2]), str(latest_date)
+        ):
             unavailable_history_tickers.append(ticker)
             latest["open_interest_prev"] = pd.NA
             latest["oi_change"] = pd.NA

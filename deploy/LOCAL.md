@@ -22,6 +22,11 @@ the public entry point.
 Snapshot history and the SQLite fallback database persist under the host's
 `data/` directory across image rebuilds and container replacement.
 
+Watchlists, alert rules, and the in-app event inbox persist in
+`data/gex_app.db`. Until Phase 3 authentication, this is one shared workspace
+for every browser connected to the deployment. Set `WORKSPACE_PIN` (or reuse
+`AI_PIN`) to authorize all watchlist and alert mutations.
+
 Stop with `Ctrl-C`, or run detached with `docker compose up --build -d` and
 stop with `docker compose down`.
 
@@ -57,3 +62,28 @@ cloudflared tunnel --url http://localhost:3000
 That prints a public `https://*.trycloudflare.com` URL. For a permanent named
 URL on your own domain, create a named tunnel in a free Cloudflare account.
 `tailscale funnel 3000` and `ngrok http 3000` are equivalent alternatives.
+
+## Optional alert delivery
+
+In-app alerts require no additional configuration. Discord and email
+destinations are server-owned and can be enabled in `.env`:
+
+```text
+ALERT_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+ALERT_EMAIL_TO=operator@example.com
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USERNAME=
+SMTP_PASSWORD=
+SMTP_FROM=gex@example.com
+SMTP_STARTTLS=true
+```
+
+Do not expose the shared watchlist/alert mutation API publicly until Phase 3
+authentication is installed unless every viewer is trusted. The temporary
+workspace PIN prevents unauthenticated mutation but does not provide per-user
+visibility or ownership.
+
+If an older Docker run created `data/*.db` as root and bare local Python reports
+`attempt to write a readonly database`, correct the file ownership once before
+mixing local and container runs.

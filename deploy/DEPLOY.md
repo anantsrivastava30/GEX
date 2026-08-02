@@ -90,6 +90,14 @@ option-chain snapshots, and commits them under `data/snapshots/`. It needs the
 `TRADIER_TOKEN` repo secret and only fires on the default branch, so history
 accrual starts once this work merges to `master`.
 
+The secret must be an Actions repository secret named exactly
+`TRADIER_TOKEN`; a local `.env` or Streamlit secret is not visible to GitHub
+Actions. After adding it, manually dispatch **Daily market snapshot** on a US
+market day after 09:30 ET and verify that a
+`data: market snapshot YYYY-MM-DD` bot commit lands on `master`.
+The backend health response exposes `snapshot_latest`,
+`snapshot_history_days`, and `snapshot_history_ready` for quick diagnosis.
+
 The backend reads that committed history for IV rank, OI change, and historical
 GEX. Each Space rebuild picks up the latest committed snapshots automatically.
 

@@ -43,10 +43,30 @@ class Settings(BaseSettings):
     # AI analysis (Phase 1 port of the Streamlit AI tab).
     openai_model: str = CONFIG.get("openai", {}).get("model", "gpt-4o-mini")
     ai_pin: Optional[str] = None
+    workspace_pin: Optional[str] = None
 
     # Optional Financial Modeling Prep key for the congress-trades feed. When
     # absent the feed falls back to the config.yaml JSON mirrors.
     fmp_api_key: Optional[str] = None
+
+    # Native calendar providers. Earnings work without credentials; FRED
+    # release dates require a free API key.
+    fred_api_key: Optional[str] = None
+    fred_api_url: str = CONFIG.get("fred", {}).get(
+        "api_url", "https://api.stlouisfed.org/fred"
+    )
+
+    # Shared single-workspace state. Phase 3 auth will add ownership; until
+    # then watchlists, rules, and events are intentionally server-global.
+    app_db_path: str = "data/gex_app.db"
+    alert_discord_webhook_url: Optional[str] = None
+    alert_email_to: Optional[str] = None
+    smtp_host: Optional[str] = None
+    smtp_port: int = Field(default=587, ge=1, le=65535)
+    smtp_username: Optional[str] = None
+    smtp_password: Optional[str] = None
+    smtp_from: Optional[str] = None
+    smtp_starttls: bool = True
 
 
 @lru_cache

@@ -21,9 +21,10 @@ def capture_snapshots(
 ):
     """Capture the configured snapshot universe now.
 
-    Works off-hours too: closed-market chains carry the last session's
-    OI/volume and key to the last trading date. Synchronous; a full
-    universe refresh takes on the order of a minute.
+    Runs only after the current US market session has started. Off-session
+    captures are rejected because the provider can roll its expiration
+    universe and overwrite the previous session with non-comparable data.
+    Synchronous; a full universe refresh takes on the order of a minute.
     """
 
     verify_ai_pin(pin)
@@ -31,6 +32,14 @@ def capture_snapshots(
     if not settings.tradier_token:
         raise HTTPException(
             status_code=503, detail="TRADIER_TOKEN is not configured on the server."
+        )
+
+    from quant_analysis.storage.snapshots import capture_session_date
+
+    if capture_session_date() is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Snapshot capture is unavailable before the market session or on closed days.",
         )
 
     from backend.app.jobs import capture_universe

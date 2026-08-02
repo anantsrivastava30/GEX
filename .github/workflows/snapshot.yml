@@ -27,6 +27,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify Tradier credential
+        env:
+          TRADIER_TOKEN: ${{ secrets.TRADIER_TOKEN }}
+        run: |
+          if [ -z "$TRADIER_TOKEN" ]; then
+            echo "::error::TRADIER_TOKEN is missing. Add it under Settings > Secrets and variables > Actions."
+            exit 2
+          fi
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"

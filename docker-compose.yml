@@ -18,12 +18,23 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       # Optional Financial Modeling Prep key for the Congress-trades feed.
       FMP_API_KEY: ${FMP_API_KEY:-}
+      FRED_API_KEY: ${FRED_API_KEY:-}
       SNAPSHOT_DIR: /app/data/snapshots
       SQLITE_DB_PATH: /app/data/ai_analysis.db
+      APP_DB_PATH: /app/data/gex_app.db
       # Intraday snapshot + gamma-gap jobs (every 30 min, market hours).
       SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-true}
       # Optional PIN protecting the paid /api/ai/analyze endpoint.
       AI_PIN: ${AI_PIN:-}
+      WORKSPACE_PIN: ${WORKSPACE_PIN:-}
+      ALERT_DISCORD_WEBHOOK_URL: ${ALERT_DISCORD_WEBHOOK_URL:-}
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
     ports:
       - "127.0.0.1:8000:8000"
     volumes:

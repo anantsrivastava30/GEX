@@ -10,7 +10,7 @@ session should pick up.
 1. Read `docs/UW_PARITY_PLAN.md` (architecture, phases, endpoint/function mappings).
 2. Read the Status board and the last Session log entry below.
 3. Work on the "Next up" items; keep `pytest` green; update this file before pushing.
-4. Branch: `claude/unusual-whales-parity-fz318a` (until Phase 1 merges).
+4. Active branch: `claude/streamlit-free-deployment-9r4x55`.
 
 ## Status board
 
@@ -37,8 +37,8 @@ session should pick up.
 - [x] Term structure (pure `compute_term_structure` + fixed `compute_term_structure_slope` + endpoint + chart)
 - [x] Full proxy flow feed + hottest chains (`/api/flow/feed` + `/api/flow/hottest-chains` ranking vol/OI + OI Δ + IV Δ from snapshots; filters on `/flow`)
 - [x] Congress trades (Senate eFD / House Clerk daily job) — *provider-pluggable feed (`/api/congress/trades` + `/congress` page). Live and current via `FMP_API_KEY` (verified Session 8: 156 filings, `stale=false`); the free mirrors remain a degraded fallback.*
-- [ ] Native earnings/economic calendar (iframe parity shipped; native version pending)
-- [ ] Screener (presets + custom), server-persisted watchlists, alerts (in-app/Discord/email) — *screener API + `/screener` page with three presets and threshold filters shipped; custom filter builder, watchlists, alerts pending*
+- [x] Native earnings/economic calendar (yfinance earnings + curated FRED release dates, independently degradable sources)
+- [x] Screener (presets + custom), server-persisted watchlists, alerts (in-app/Discord/email) - shared single-workspace persistence until Phase 3 auth
 
 ### Phase 3 — Monetization
 - [ ] Supabase Auth + entitlements (replaces AI PIN)
@@ -580,3 +580,69 @@ data.
    sequencing Phase 3 auth first).
 3. Scheduler job to warm the 6h congress cache.
 4. Track-record polish as intraday snapshots accrue on the default branch.
+
+### Session 9 - 2026-08-02 (Phase 2 completion + snapshot recovery)
+
+**Snapshot root cause and recovery:**
+- Confirmed all 17 scheduled GitHub Actions runs reached the capture step but
+  exited with code 2 because the repository Actions secret `TRADIER_TOKEN` is
+  absent. Added an explicit workflow preflight that reports the exact setup
+  path instead of failing after dependency installation.
+- The latest seed/scheduler work is still unmerged: local HEAD is eight commits
+  ahead of `master`, and the latest seed commit is one commit ahead of its
+  remote feature branch. `master` therefore has no committed snapshot history.
+- Attempted a bounded Sunday capture, then removed it during review because the
+  provider had already rolled its expiration universe; labeling that chain as
+  Friday would create false OI changes. Capture entry points now skip weekends,
+  holidays, and premarket instead of overwriting the previous session.
+- Added standard US market-holiday handling and consecutive-session checks.
+  OI/IV changes are unavailable across date gaps rather than treating every
+  newly listed contract as fresh OI. `/api/health` now reports the latest date,
+  history-day count, and whether current consecutive history is ready. Local
+  history remains the single 2026-07-13 seed until a valid market-session run.
+- Found a separate local gamma-gap persistence issue: `data/ai_analysis.db` is
+  owned by `root:root` from an earlier Docker run, so bare local Python cannot
+  append. The database needs a one-time
+  ownership correction before local gamma-gap logging uses that path.
+
+**Completed Phase 2:**
+- Replaced the calendar iframe with `GET /api/calendar` and a native page:
+  yfinance earnings for a bounded company universe plus curated FRED release
+  dates, with independent source status and honest provider limitations.
+- Added field metadata and `POST /api/screener/query`: contract/ticker scopes,
+  whitelisted typed fields/operators, AND conditions, sorting, bounded output,
+  snapshot staleness, and no live Tradier reads. `/screener` now includes a
+  reusable custom filter builder while preserving all three presets.
+- Added shared SQLite watchlist CRUD under `data/gex_app.db`, bounded to the
+  configured snapshot universe, plus `/watchlists` management UI.
+- Added persisted alert-rule CRUD, in-app event inbox, daily deduplication, and
+  scheduled evaluation 10 minutes after each intraday snapshot. Stale or
+  incomplete snapshots never emit. Optional Discord and SMTP delivery uses
+  server-owned environment settings; API callers cannot provide destinations.
+- Added a constant-time workspace PIN gate for every watchlist/alert mutation,
+  outbound delivery retry (three attempts), and retained event history that
+  prevents deleting a rule after it has emitted.
+- Added the pending weekday congress-feed cache warm-up job at 07:15 ET.
+- Added `/alerts`, `/watchlists`, responsive desktop/mobile navigation, and
+  accessible custom-filter controls. The UI labels the state as a shared
+  server workspace pending Phase 3 authentication.
+
+**Verified:** backend compile/OpenAPI generation clean (40 routes); lightweight
+API smoke covered health, watchlist initialization, custom ticker query, alert
+rule create/list/evaluate/delete, and event persistence. Final safety smoke
+confirmed unauthenticated mutation returns 401, valid PIN mutation returns 201,
+stale history emits zero events, retained event history blocks rule deletion
+with 409, and Sunday capture performs zero provider calls. Frontend
+`npm run lint` and `npm run build` pass; the production route list includes
+`/alerts`, `/calendar`, `/screener`, and `/watchlists`. `docker compose config
+--quiet` passes. Per repository policy, no test files were changed and broad
+test suites were not run.
+
+**Next up:**
+1. Add `TRADIER_TOKEN` under GitHub Settings > Secrets and variables > Actions,
+   manually dispatch Daily market snapshot, and verify a bot data commit.
+2. Push the local feature commit, merge the feature branch to `master`, and
+   advance `streamlit-prod` intentionally.
+3. Correct ownership of `data/ai_analysis.db` or migrate the root database into
+   the canonical Compose data path.
+4. Begin Phase 3 with Supabase Auth so watchlists and alerts gain user ownership.
