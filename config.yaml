@@ -95,6 +95,9 @@ calendar:
 # rate limit: each ticker costs 2 + num_expirations requests.
 snapshots:
   dir: "data/snapshots"
+  # Runtime-only append archive. Local backend captures write one Parquet file
+  # per ticker and run; GitHub Actions continues committing only daily files.
+  intraday_dir: "data/intraday_snapshots"
   num_expirations: 4
   strike_offset: 35
   # Configured tickers plus custom watchlist symbols share this capacity.
@@ -123,4 +126,4 @@ snapshots:
     - SMH
     - SOXL
     - AVGO
-    - MRVLL
+    - MRVL

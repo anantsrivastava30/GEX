@@ -113,6 +113,12 @@ symbols require a persistent server and `SCHEDULER_ENABLED=true`; GitHub Actions
 captures only the static `config.yaml` baseline because it cannot read the
 server-local watchlist database.
 
+Each successful backend capture also appends an immutable Parquet file under
+`data/intraday_snapshots/YYYY-MM-DD/{TICKER}/`. These runtime files retain every
+30-minute chain state with UTC timestamps and provenance while the daily CSV
+continues serving existing analytics. Intraday files are intentionally excluded
+from Git and Docker images; see [docs/INTRADAY_DATA.md](docs/INTRADAY_DATA.md).
+
 ## Roadmap
 
 The project is being rebuilt into an Unusual Whales–style platform (FastAPI +

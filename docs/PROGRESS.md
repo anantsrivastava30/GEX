@@ -690,7 +690,7 @@ test files changed.
   row aggregates every call/put strike for one symbol and expiration. Rows now
   fetch and scroll to a symbol/expiration-filtered strike-level contract feed.
 - Added INTC, MU, SNDK, PENG, SMH, SOXL, AVGO, and the explicitly requested
-  MRVLL symbol to the configured snapshot baseline.
+  MRVL symbol to the configured snapshot baseline.
 - Replaced the fixed Watchlists symbol picker with comma/space ticker entry,
   removable chips, scheduled-symbol suggestions, and a 50-unique-symbol server
   capacity. Symbols receive strict path-safe syntax validation but are not
@@ -771,10 +771,10 @@ Desktop at 1440px re-measured unchanged: root 14px, sidebar visible, phone tab
 bar hidden. No test files changed and no broad test suites run.
 
 **Next up:**
-1. Add `TRADIER_TOKEN` under GitHub Settings > Secrets and variables > Actions,
-   then dispatch Daily market snapshot and verify a bot data commit. The cron
-   has never produced one; `data/snapshots/` holds only the seeded 2026-07-13
-   date, so IV rank, OI change, and historical GEX have no history to read.
+1. Verify the newly configured GitHub `TRADIER_TOKEN` with the next Daily market
+   snapshot run and confirm the first bot data commit. `data/snapshots/` still
+   holds only the seeded 2026-07-13 date, so IV rank, OI change, and historical
+   GEX have no accumulated history yet.
 2. Decide where the backend is hosted now that HF Spaces requires a paid plan.
 3. Chart SVG labels render at roughly 5px on a phone because they scale with
    the viewBox; needs a separate pass with live data to avoid label collisions.
@@ -807,3 +807,26 @@ overflow. Per repository policy, no test files were changed.
 
 **Next up:** unchanged from Session 13, plus consider surfacing the hottest
 chains ranking on the ticker Flow tab once real data needs emerge.
+
+### Session 15 - 2026-08-03 (append-only intraday chain archive)
+
+- Preserved the existing daily CSV/upsert behavior for all current consumers
+  while adding immutable, timestamped Parquet captures for every successful
+  backend scheduler or admin run.
+- Added a versioned Arrow schema with UTC capture timing, shared run ID,
+  per-ticker capture ID, market session, spot, provider/producer, requested
+  expirations, deployment revision, and contract identifiers.
+- Added atomic no-replace publication and a per-run JSON manifest describing
+  expected tickers, successes, failures, timing, and complete/partial status.
+  A ticker's daily file advances only after its intraday archive succeeds.
+- Added an in-process lock so scheduled and manual captures cannot overlap in
+  the current single-worker Compose deployment.
+- Persisted the archive through the existing `./data:/app/data` volume at
+  `data/intraday_snapshots/`, excluded it from Git and image builds, and left
+  the GitHub Actions daily workflow unchanged.
+- Added `docs/INTRADAY_DATA.md` covering data layout, provenance, retention,
+  backup requirements, and the Tradier redistribution/licensing constraint.
+
+**Verified:** scoped Python compilation, the eight existing snapshot tests, an
+append/load Parquet smoke, `docker compose config --quiet`, and
+`git diff --check` pass. No test files changed.

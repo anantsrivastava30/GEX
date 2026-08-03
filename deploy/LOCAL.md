@@ -22,6 +22,12 @@ the public entry point.
 Snapshot history and the SQLite fallback database persist under the host's
 `data/` directory across image rebuilds and container replacement.
 
+The backend scheduler dual-writes snapshots: canonical daily CSV files remain
+under `data/snapshots/`, while every successful scheduler/admin run appends
+timestamped Parquet files under `data/intraday_snapshots/`. The intraday archive
+is runtime-only, is not committed to Git, and currently has no automatic
+retention limit. Monitor disk usage and back up that directory separately.
+
 Watchlists, alert rules, and the in-app event inbox persist in
 `data/gex_app.db`. Until Phase 3 authentication, this is one shared workspace
 for every browser connected to the deployment. Set `WORKSPACE_PIN` (or reuse

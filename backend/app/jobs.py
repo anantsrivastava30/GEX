@@ -1,22 +1,22 @@
 """Background jobs (P1.2): intraday snapshots + gamma-gap scoring.
 
 Reuses the Phase 0 snapshot engine every 30 minutes during US market hours.
-Snapshot writes are upserts, so intraday runs simply refresh the day's files;
-each run also appends a row per ticker to ``gamma_gap_analysis`` so the
-gamma-gap signal accrues a verifiable intraday track record (the future
-public track-record page).
+Each successful capture refreshes the canonical daily file and appends an
+immutable Parquet archive. Gamma-gap rows also remain append-only.
 
 Off by default; enable with ``SCHEDULER_ENABLED=true``. Jobs call Tradier
-outside the API token bucket - roughly six requests per ticker per run,
-negligible against the ~120 req/min budget.
+outside the API token bucket and pace the configured universe between tickers.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import time as time_module
-from datetime import datetime, time
+from datetime import datetime, time, timezone
 from pathlib import Path
+from threading import Lock
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -30,6 +30,7 @@ MARKET_TZ = ZoneInfo("America/New_York")
 MARKET_OPEN = time(9, 30)
 MARKET_CLOSE = time(16, 0)
 ALERT_EVALUATION_CLOSE = time(16, 15)
+_CAPTURE_LOCK = Lock()
 
 
 def market_is_open(now: datetime | None = None) -> bool:
@@ -54,7 +55,10 @@ def run_intraday_snapshots() -> None:
         logger.debug("Intraday snapshot skipped: market closed.")
         return
 
-    capture_universe()
+    try:
+        capture_universe()
+    except RuntimeError:
+        logger.info("Intraday snapshot skipped: another capture is already running.")
 
 
 def alert_evaluation_window(now: datetime | None = None) -> bool:
@@ -97,7 +101,18 @@ def warm_congress_cache() -> None:
         logger.exception("Congress cache warm-up failed")
 
 
-def capture_universe() -> dict:
+def capture_universe(producer: str = "scheduler") -> dict:
+    """Serialize scheduler and admin captures within this backend process."""
+
+    if not _CAPTURE_LOCK.acquire(blocking=False):
+        raise RuntimeError("Snapshot capture is already running")
+    try:
+        return _capture_universe(producer)
+    finally:
+        _CAPTURE_LOCK.release()
+
+
+def _capture_universe(producer: str) -> dict:
     """Capture the configured and shared-watchlist universe once.
 
     Shared by the scheduler job and the admin capture endpoint. Off-session
@@ -111,18 +126,29 @@ def capture_universe() -> dict:
 
     settings = get_settings()
     base_dir = Path(settings.snapshot_dir)
+    intraday_base_dir = Path(settings.intraday_snapshot_dir)
     tickers = snapshot_symbols()
-    if snapshot_store.capture_session_date() is None:
+    run_started_at = datetime.now(timezone.utc)
+    session_date = snapshot_store.capture_session_date(run_started_at)
+    if session_date is None:
         logger.info("Snapshot capture skipped: no active market session today")
         return {
             "captured": 0,
             "requested": len(tickers),
             "tickers": list(tickers),
             "gamma_gap_rows": 0,
+            "intraday_archived": 0,
             "as_of": snapshot_store.last_trading_date(),
         }
     gap_rows = []
+    run_id = uuid4().hex
     captured = 0
+    intraday_archived = 0
+    captured_tickers = []
+    archived_tickers = []
+    capture_failed_tickers = []
+    archive_failed_tickers = []
+    daily_failed_tickers = []
     for index, ticker in enumerate(tickers):
         snap = None
         try:
@@ -131,29 +157,50 @@ def capture_universe() -> dict:
             )
         except Exception:
             logger.exception("Snapshot capture failed for %s", ticker)
+            capture_failed_tickers.append(ticker)
         if snap:
+            archive_succeeded = False
             try:
-                snapshot_store.write_snapshot(snap, base_dir)
-                captured += 1
-
-                metrics = snap["metrics"]
-                if metrics.get("gamma_gap_score") is not None:
-                    expirations = str(metrics.get("expirations", ""))
-                    gap_rows.append(
-                        {
-                            "ticker": ticker,
-                            "expiration": expirations,
-                            "dte": None,
-                            "spot": snap.get("spot"),
-                            "magnet_strike": metrics.get("gamma_magnet_strike"),
-                            "magnet_gex": metrics.get("gamma_magnet_gex"),
-                            "distance": metrics.get("gamma_gap_distance"),
-                            "score": metrics.get("gamma_gap_score"),
-                            "positive_zone": metrics.get("gamma_positive_zone"),
-                        }
-                    )
+                snapshot_store.write_intraday_snapshot(
+                    snap,
+                    intraday_base_dir,
+                    producer=producer,
+                    run_id=run_id,
+                )
+                intraday_archived += 1
+                archived_tickers.append(ticker)
+                archive_succeeded = True
             except Exception:
-                logger.exception("Snapshot persistence failed for %s", ticker)
+                archive_failed_tickers.append(ticker)
+                logger.exception("Intraday archive failed for %s", ticker)
+
+            if archive_succeeded:
+                try:
+                    snapshot_store.write_snapshot(snap, base_dir)
+                    captured += 1
+                    captured_tickers.append(ticker)
+
+                    metrics = snap["metrics"]
+                    if metrics.get("gamma_gap_score") is not None:
+                        expirations = str(metrics.get("expirations", ""))
+                        gap_rows.append(
+                            {
+                                "ticker": ticker,
+                                "expiration": expirations,
+                                "dte": None,
+                                "spot": snap.get("spot"),
+                                "magnet_strike": metrics.get("gamma_magnet_strike"),
+                                "magnet_gex": metrics.get("gamma_magnet_gex"),
+                                "distance": metrics.get("gamma_gap_distance"),
+                                "score": metrics.get("gamma_gap_score"),
+                                "positive_zone": metrics.get("gamma_positive_zone"),
+                            }
+                        )
+                except Exception:
+                    daily_failed_tickers.append(ticker)
+                    logger.exception("Snapshot persistence failed for %s", ticker)
+        elif ticker not in capture_failed_tickers:
+            capture_failed_tickers.append(ticker)
 
         # Captures make several upstream calls. Pace the bounded scheduled
         # universe instead of allowing an intraday run to burst the free plan.
@@ -166,10 +213,39 @@ def capture_universe() -> dict:
         except Exception:
             logger.exception("Failed to persist gamma-gap scan rows")
 
+    run_completed_at = datetime.now(timezone.utc)
+    run_complete = captured == len(tickers) and intraday_archived == len(tickers)
+    manifest_written = False
+    try:
+        snapshot_store.write_intraday_run_manifest(
+            {
+                "run_id": run_id,
+                "schema_version": snapshot_store.INTRADAY_SCHEMA_VERSION,
+                "status": "complete" if run_complete else "partial",
+                "producer": producer,
+                "provider": "tradier",
+                "source_revision": os.environ.get("SOURCE_REVISION", ""),
+                "session_date": session_date,
+                "started_at_utc": run_started_at.isoformat(),
+                "completed_at_utc": run_completed_at.isoformat(),
+                "requested_tickers": tickers,
+                "archived_tickers": archived_tickers,
+                "daily_tickers": captured_tickers,
+                "capture_failed_tickers": capture_failed_tickers,
+                "archive_failed_tickers": archive_failed_tickers,
+                "daily_failed_tickers": daily_failed_tickers,
+            },
+            intraday_base_dir,
+        )
+        manifest_written = True
+    except Exception:
+        logger.exception("Failed to persist intraday run manifest %s", run_id)
+
     logger.info(
-        "Snapshot capture done: %d/%d tickers, %d gamma-gap rows",
+        "Snapshot capture done: %d/%d daily, %d intraday, %d gamma-gap rows",
         captured,
         len(tickers),
+        intraday_archived,
         len(gap_rows),
     )
     return {
@@ -177,6 +253,9 @@ def capture_universe() -> dict:
         "requested": len(tickers),
         "tickers": list(tickers),
         "gamma_gap_rows": len(gap_rows),
+        "intraday_archived": intraday_archived,
+        "run_id": run_id,
+        "manifest_written": manifest_written,
         "as_of": snapshot_store.last_trading_date(),
     }
 

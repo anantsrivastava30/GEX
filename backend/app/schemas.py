@@ -594,4 +594,7 @@ class CaptureResponse(BaseModel):
     requested: int
     tickers: List[str]
     gamma_gap_rows: int
+    intraday_archived: int = 0
+    run_id: Optional[str] = None
+    manifest_written: bool = False
     as_of: str

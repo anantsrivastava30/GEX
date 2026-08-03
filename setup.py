@@ -11,6 +11,7 @@ setup(
         "tiktoken",
         "streamlit",
         "pandas",
+        "pyarrow",
         "numpy",
         "plotly",
         "matplotlib",

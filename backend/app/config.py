@@ -13,7 +13,11 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from quant_analysis.config import CONFIG
-from quant_analysis.storage.snapshots import DEFAULT_BASE_DIR, DEFAULT_TICKERS
+from quant_analysis.storage.snapshots import (
+    DEFAULT_BASE_DIR,
+    DEFAULT_INTRADAY_BASE_DIR,
+    DEFAULT_TICKERS,
+)
 
 
 class Settings(BaseSettings):
@@ -24,6 +28,7 @@ class Settings(BaseSettings):
         "api_url", "https://api.tradier.com/v1"
     )
     snapshot_dir: str = str(DEFAULT_BASE_DIR)
+    intraday_snapshot_dir: str = str(DEFAULT_INTRADAY_BASE_DIR)
     cors_origins: List[str] = ["http://localhost:3000"]
 
     # Tradier market-data plans allow ~120 requests/min; keep headroom for

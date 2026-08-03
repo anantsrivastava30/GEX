@@ -44,4 +44,7 @@ def capture_snapshots(
 
     from backend.app.jobs import capture_universe
 
-    return capture_universe()
+    try:
+        return capture_universe(producer="admin")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc

@@ -1,30 +1,37 @@
-"""Daily market-history snapshots.
+"""Daily and intraday market-history snapshots.
 
 Captures option-chain state (OI, volume, IV, greeks) and derived positioning
 metrics into git-versioned, append-only files so history-dependent features
 (IV rank, OI change, historical GEX, gamma-gap track record) run off our own
 accumulated dataset instead of paid history APIs.
 
-Storage layout under ``data/snapshots/`` (configurable via ``config.yaml``):
+Daily storage under ``data/snapshots/`` remains the stable input for existing
+history analytics:
 
     data/snapshots/
     ├── YYYY-MM-DD/
     │   └── {TICKER}.csv.gz     # per-contract chain snapshot for that day
     └── daily_metrics.csv       # one row per (date, ticker): derived metrics
 
-Re-running on the same day overwrites that day's files (upsert semantics),
-so an intraday re-run simply refreshes the day's snapshot.
+Re-running on the same day refreshes the daily file. Backend captures can also
+write immutable, timestamped Parquet files under ``data/intraday_snapshots/``;
+those runtime files are not consumed by daily analytics or committed to Git.
 """
 
 from __future__ import annotations
 
+import json
 import logging
-from datetime import date, datetime, time, timedelta
+import os
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from quant_analysis.config import CONFIG, PROJECT_ROOT
 
@@ -32,6 +39,9 @@ logger = logging.getLogger(__name__)
 
 SNAPSHOT_CONFIG = CONFIG.get("snapshots", {})
 DEFAULT_BASE_DIR = PROJECT_ROOT / SNAPSHOT_CONFIG.get("dir", "data/snapshots")
+DEFAULT_INTRADAY_BASE_DIR = PROJECT_ROOT / SNAPSHOT_CONFIG.get(
+    "intraday_dir", "data/intraday_snapshots"
+)
 DEFAULT_TICKERS = SNAPSHOT_CONFIG.get("tickers", ["SPY", "QQQ"])
 DEFAULT_NUM_EXPIRATIONS = int(SNAPSHOT_CONFIG.get("num_expirations", 4))
 DEFAULT_STRIKE_OFFSET = int(SNAPSHOT_CONFIG.get("strike_offset", 35))
@@ -39,6 +49,7 @@ DEFAULT_STRIKE_OFFSET = int(SNAPSHOT_CONFIG.get("strike_offset", 35))
 MARKET_TZ = ZoneInfo("America/New_York")
 
 METRICS_FILE = "daily_metrics.csv"
+INTRADAY_SCHEMA_VERSION = 1
 
 # Per-contract columns persisted when present in the chain DataFrame.
 CONTRACT_COLUMNS = [
@@ -64,6 +75,55 @@ CONTRACT_COLUMNS = [
 
 # Keys shared by contract files and the join logic in compute_oi_change.
 CONTRACT_KEY = ["expiration_date", "strike", "option_type"]
+
+INTRADAY_SCHEMA = pa.schema(
+    [
+        pa.field("run_id", pa.string()),
+        pa.field("capture_id", pa.string()),
+        pa.field("capture_started_at_utc", pa.timestamp("us", tz="UTC")),
+        pa.field("captured_at_utc", pa.timestamp("us", tz="UTC")),
+        pa.field("session_date", pa.string()),
+        pa.field("ticker", pa.string()),
+        pa.field("spot", pa.float64()),
+        pa.field("provider", pa.string()),
+        pa.field("producer", pa.string()),
+        pa.field("schema_version", pa.int32()),
+        pa.field("requested_expirations", pa.string()),
+        pa.field("source_revision", pa.string()),
+        pa.field("expiration_date", pa.string()),
+        pa.field("strike", pa.float64()),
+        pa.field("option_type", pa.string()),
+        pa.field("open_interest", pa.int64()),
+        pa.field("volume", pa.int64()),
+        pa.field("last", pa.float64()),
+        pa.field("bid", pa.float64()),
+        pa.field("ask", pa.float64()),
+        pa.field("contract_size", pa.int64()),
+        pa.field("delta", pa.float64()),
+        pa.field("gamma", pa.float64()),
+        pa.field("theta", pa.float64()),
+        pa.field("vega", pa.float64()),
+        pa.field("mid_iv", pa.float64()),
+        pa.field("smv_vol", pa.float64()),
+        pa.field("DTE", pa.int64()),
+        pa.field("GammaExposure", pa.float64()),
+        pa.field("DeltaExposure", pa.float64()),
+        pa.field("contract_symbol", pa.string()),
+        pa.field("root_symbol", pa.string()),
+    ]
+)
+_INTRADAY_STRING_COLUMNS = {
+    field.name for field in INTRADAY_SCHEMA if pa.types.is_string(field.type)
+}
+_INTRADAY_INTEGER_COLUMNS = {
+    field.name for field in INTRADAY_SCHEMA if pa.types.is_integer(field.type)
+}
+_INTRADAY_FLOAT_COLUMNS = {
+    field.name for field in INTRADAY_SCHEMA if pa.types.is_floating(field.type)
+}
+_INTRADAY_TIMESTAMP_COLUMNS = {
+    field.name for field in INTRADAY_SCHEMA if pa.types.is_timestamp(field.type)
+}
 
 
 def _observed(day: date) -> date:
@@ -208,6 +268,12 @@ def build_snapshot(
     df["expiration_date"] = pd.to_datetime(df["expiration_date"]).dt.date.astype(str)
     keep = [c for c in CONTRACT_COLUMNS if c in df.columns]
     slim = df[keep].copy()
+    intraday_keep = keep + [
+        column for column in ("symbol", "root_symbol") if column in df.columns
+    ]
+    intraday_contracts = df[intraday_keep].copy().rename(
+        columns={"symbol": "contract_symbol"}
+    )
 
     calls = df[df["option_type"] == "call"]
     puts = df[df["option_type"] == "put"]
@@ -256,6 +322,7 @@ def build_snapshot(
         "date": snapshot_date,
         "spot": spot,
         "contracts": slim,
+        "intraday_contracts": intraday_contracts,
         "metrics": metrics,
     }
 
@@ -297,7 +364,8 @@ def capture_ticker_snapshot(
         load_options_data,
     )
 
-    snapshot_date = capture_session_date()
+    capture_started_at = datetime.now(timezone.utc)
+    snapshot_date = capture_session_date(capture_started_at)
     if snapshot_date is None:
         logger.warning("Off-session snapshot capture skipped for %s", ticker)
         return None
@@ -309,7 +377,18 @@ def capture_ticker_snapshot(
         return None
 
     df = load_options_data(ticker, expirations, token, require_all=True)
-    return build_snapshot(ticker, snapshot_date, spot, df, offset=offset)
+    snapshot = build_snapshot(ticker, snapshot_date, spot, df, offset=offset)
+    if snapshot is not None:
+        snapshot.update(
+            {
+                "capture_id": uuid4().hex,
+                "capture_started_at_utc": capture_started_at.isoformat(),
+                "captured_at_utc": datetime.now(timezone.utc).isoformat(),
+                "provider": "tradier",
+                "requested_expirations": list(expirations),
+            }
+        )
+    return snapshot
 
 
 def write_snapshot(snapshot: Dict[str, Any], base_dir: Path = DEFAULT_BASE_DIR) -> Path:
@@ -323,6 +402,124 @@ def write_snapshot(snapshot: Dict[str, Any], base_dir: Path = DEFAULT_BASE_DIR) 
     snapshot["contracts"].to_csv(path, index=False, compression="gzip")
 
     upsert_daily_metrics([snapshot["metrics"]], base_dir)
+    return path
+
+
+def write_intraday_snapshot(
+    snapshot: Dict[str, Any],
+    base_dir: Path = DEFAULT_INTRADAY_BASE_DIR,
+    producer: str = "scheduler",
+    run_id: Optional[str] = None,
+) -> Path:
+    """Append one immutable, timestamped contract-chain capture as Parquet."""
+
+    base_dir = Path(base_dir)
+    ticker = str(snapshot["ticker"]).upper()
+    session_date = str(snapshot["date"])
+    capture_id = str(snapshot.get("capture_id") or uuid4().hex)
+    captured_at = pd.Timestamp(
+        snapshot.get("captured_at_utc") or datetime.now(timezone.utc)
+    )
+    if captured_at.tzinfo is None:
+        captured_at = captured_at.tz_localize("UTC")
+    else:
+        captured_at = captured_at.tz_convert("UTC")
+    capture_started_at = pd.Timestamp(
+        snapshot.get("capture_started_at_utc") or captured_at
+    )
+    if capture_started_at.tzinfo is None:
+        capture_started_at = capture_started_at.tz_localize("UTC")
+    else:
+        capture_started_at = capture_started_at.tz_convert("UTC")
+
+    frame = snapshot.get("intraday_contracts", snapshot["contracts"]).copy()
+    requested_expirations = snapshot.get("requested_expirations") or []
+    if not requested_expirations:
+        requested_expirations = str(
+            snapshot.get("metrics", {}).get("expirations", "")
+        ).split("|")
+    metadata = {
+        "run_id": run_id or capture_id,
+        "capture_id": capture_id,
+        "capture_started_at_utc": capture_started_at,
+        "captured_at_utc": captured_at,
+        "session_date": session_date,
+        "ticker": ticker,
+        "spot": snapshot.get("spot"),
+        "provider": str(snapshot.get("provider") or "unknown"),
+        "producer": producer,
+        "schema_version": INTRADAY_SCHEMA_VERSION,
+        "requested_expirations": "|".join(
+            str(expiration) for expiration in requested_expirations if expiration
+        ),
+        "source_revision": os.environ.get("SOURCE_REVISION", ""),
+    }
+    for column, value in reversed(list(metadata.items())):
+        frame.insert(0, column, value)
+    for column in INTRADAY_SCHEMA.names:
+        if column not in frame:
+            frame[column] = pd.NA
+    for column in _INTRADAY_STRING_COLUMNS:
+        frame[column] = frame[column].astype("string")
+    for column in _INTRADAY_INTEGER_COLUMNS:
+        frame[column] = pd.to_numeric(frame[column], errors="coerce").astype("Int64")
+    for column in _INTRADAY_FLOAT_COLUMNS:
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    for column in _INTRADAY_TIMESTAMP_COLUMNS:
+        frame[column] = pd.to_datetime(frame[column], utc=True)
+    table = pa.Table.from_pandas(
+        frame[INTRADAY_SCHEMA.names],
+        schema=INTRADAY_SCHEMA,
+        preserve_index=False,
+        safe=True,
+    )
+
+    ticker_dir = base_dir / session_date / ticker
+    ticker_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = captured_at.strftime("%Y%m%dT%H%M%S.%fZ")
+    path = ticker_dir / f"{timestamp}-{capture_id[:12]}.parquet"
+    temporary_path = ticker_dir / f".{path.name}.{uuid4().hex}.tmp"
+    try:
+        pq.write_table(
+            table,
+            temporary_path,
+            compression="zstd",
+        )
+        os.link(temporary_path, path)
+    finally:
+        if temporary_path.exists():
+            temporary_path.unlink()
+    return path
+
+
+def write_intraday_run_manifest(
+    manifest: Dict[str, Any],
+    base_dir: Path = DEFAULT_INTRADAY_BASE_DIR,
+) -> Path:
+    """Publish an immutable JSON summary describing one universe capture."""
+
+    base_dir = Path(base_dir)
+    session_date = str(manifest["session_date"])
+    run_id = str(manifest["run_id"])
+    started_at = pd.Timestamp(manifest["started_at_utc"])
+    if started_at.tzinfo is None:
+        started_at = started_at.tz_localize("UTC")
+    else:
+        started_at = started_at.tz_convert("UTC")
+    run_dir = base_dir / session_date / "_runs"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = started_at.strftime("%Y%m%dT%H%M%S.%fZ")
+    path = run_dir / f"{timestamp}-{run_id}.json"
+    temporary_path = run_dir / f".{path.name}.{uuid4().hex}.tmp"
+    try:
+        temporary_path.write_text(
+            json.dumps(manifest, sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        os.link(temporary_path, path)
+    finally:
+        if temporary_path.exists():
+            temporary_path.unlink()
     return path
 
 
@@ -391,6 +588,34 @@ def load_contract_history(
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, ignore_index=True)
+
+
+def load_intraday_contract_history(
+    ticker: str,
+    base_dir: Path = DEFAULT_INTRADAY_BASE_DIR,
+    session_date: Optional[str] = None,
+) -> pd.DataFrame:
+    """Load immutable intraday captures for a ticker, ordered by capture time."""
+
+    base_dir = Path(base_dir)
+    frames = []
+    if base_dir.exists():
+        day_dirs = (
+            [base_dir / session_date]
+            if session_date
+            else sorted(base_dir.iterdir())
+        )
+        for day_dir in day_dirs:
+            ticker_dir = day_dir / ticker.upper()
+            if not ticker_dir.is_dir():
+                continue
+            for path in sorted(ticker_dir.glob("*.parquet")):
+                frames.append(pd.read_parquet(path, engine="pyarrow"))
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True).sort_values(
+        ["captured_at_utc", "expiration_date", "strike", "option_type"]
+    ).reset_index(drop=True)
 
 
 def compute_oi_change(
