@@ -830,3 +830,21 @@ chains ranking on the ticker Flow tab once real data needs emerge.
 **Verified:** scoped Python compilation, the eight existing snapshot tests, an
 append/load Parquet smoke, `docker compose config --quiet`, and
 `git diff --check` pass. No test files changed.
+
+### Session 16 - 2026-08-03 (O'Neil CAN SLIM feature plan)
+
+- Planning session only, no code changes. Wrote
+  `docs/ONEIL_CANSLIM_PLAN.md`: feasibility tiering of the seven CAN SLIM
+  criteria against the free data budget, UX design (market-direction panel on
+  `/market` with follow-through-day and distribution-day states, per-ticker
+  CAN SLIM report card, `oneil_leaders` screener preset, alert rule types,
+  AI packet regime field), architecture split across `quant_analysis`
+  analytics modules and backend adapters, four small phases, and the honesty
+  requirements (configurable FTD thresholds, per-criterion unavailable
+  states, no advice language).
+- Key call: the "M" market-direction engine ships first and alone - pure
+  OHLCV math, no new data dependencies, and FTD signals are loggable into the
+  existing track-record outcome-scoring pattern.
+
+**Next up:** implement Phase A of the plan (market-direction engine +
+`GET /api/market/direction` + `/market` panel) once the plan is approved.
