@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { IconSearch } from "./icons";
+import ContextHelp from "@/components/ui/ContextHelp";
 
 // US equity regular session in Eastern time, ignoring holidays.
 function marketStatus(now: Date) {
@@ -57,6 +58,8 @@ export default function TopBar() {
           className="w-full rounded-md border border-border bg-surface py-1.5 pl-9 pr-3 text-sm placeholder:text-faint focus:border-accent focus:outline-none"
         />
       </form>
+
+      <ContextHelp />
 
       {status && (
         <div className="ml-auto hidden items-center gap-2 text-xs text-muted sm:flex">

@@ -62,7 +62,11 @@ function StockDataPage({ upper }: { upper: string }) {
   const [snapshot, setSnapshot] = useState<TickerSnapshot | null>(null);
   const [expirations, setExpirations] = useState<string[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
+  const [selectedExpirations, setSelectedExpirations] = useState<string[]>([]);
+  const [compareMode, setCompareMode] = useState(false);
   const [gex, setGex] = useState<GexProfile | null>(null);
+  const [gexProfiles, setGexProfiles] = useState<GexProfile[] | null>(null);
+  const [gexError, setGexError] = useState<string | null>(null);
   const [candles, setCandles] = useState<Candle[] | null>(null);
   const [exposure, setExposure] = useState<ExposureResponse | null>(null);
   const [maxPain, setMaxPain] = useState<MaxPainResponse | null>(null);
@@ -114,7 +118,10 @@ function StockDataPage({ upper }: { upper: string }) {
       .expirations(upper, signal)
       .then((exps) => {
         setExpirations(exps);
-        if (exps.length) setSelected(exps[0]);
+        if (exps.length) {
+          setSelected(exps[0]);
+          setSelectedExpirations([exps[0]]);
+        }
       })
       .catch((e) => {
         if (e.name !== "AbortError") setError(e.message);
@@ -124,16 +131,41 @@ function StockDataPage({ upper }: { upper: string }) {
   }, [upper]);
 
   useEffect(() => {
+    if (!selected || !selectedExpirations.length) return;
+    const controller = new AbortController();
+    const { signal } = controller;
+
+    Promise.allSettled(
+      selectedExpirations.map((expiration) =>
+        api.gexProfile(upper, expiration, 35, signal),
+      ),
+    ).then((results) => {
+      if (signal.aborted) return;
+      const profiles = results.flatMap((result) =>
+        result.status === "fulfilled" ? [result.value] : [],
+      );
+      setGexProfiles(profiles);
+      setGex(
+        profiles.find((profile) => profile.expiration === selected) ??
+          profiles[0] ??
+          null,
+      );
+      const failed = results.length - profiles.length;
+      setGexError(
+        failed
+          ? `${failed} selected expiration${failed === 1 ? "" : "s"} could not be loaded.`
+          : null,
+      );
+    });
+
+    return () => controller.abort();
+  }, [upper, selected, selectedExpirations]);
+
+  useEffect(() => {
     if (!selected) return;
     const controller = new AbortController();
     const { signal } = controller;
 
-    api
-      .gexProfile(upper, selected, 35, signal)
-      .then(setGex)
-      .catch((e) => {
-        if (e.name !== "AbortError") setError(e.message);
-      });
     api
       .exposure(upper, [selected], 35, signal)
       .then(setExposure)
@@ -162,19 +194,65 @@ function StockDataPage({ upper }: { upper: string }) {
     return () => controller.abort();
   }, [upper, selected]);
 
-  function selectExpiration(expiration: string) {
-    if (expiration === selected) return;
+  function clearPrimaryExpirationData() {
     setError(null);
-    setGex(null);
     setExposure(null);
     setMaxPain(null);
     setSkew(null);
+    setDeltaProj(null);
+  }
+
+  function selectExpiration(
+    expiration: string,
+    event: React.MouseEvent<HTMLButtonElement>,
+  ) {
+    const compare =
+      tab === "gex" && (compareMode || event.ctrlKey || event.metaKey);
+    setGexError(null);
+
+    if (compare) {
+      if (selectedExpirations.includes(expiration)) {
+        if (selectedExpirations.length === 1) return;
+        const next = selectedExpirations.filter((item) => item !== expiration);
+        setGexProfiles(null);
+        setGex(null);
+        setSelectedExpirations(next);
+        if (expiration === selected) {
+          clearPrimaryExpirationData();
+          setSelected(next[0]);
+        }
+      } else {
+        setGexProfiles(null);
+        setGex(null);
+        setSelectedExpirations([...selectedExpirations, expiration]);
+      }
+      return;
+    }
+
+    if (expiration === selected && selectedExpirations.length === 1) return;
+    if (expiration !== selected) clearPrimaryExpirationData();
+    setGexProfiles(null);
+    setGex(null);
+    setSelectedExpirations([expiration]);
     setSelected(expiration);
   }
 
   const chg = snapshot?.change_percentage;
   const up = (chg ?? 0) >= 0;
   const spotValue = snapshot?.last ?? gex?.spot ?? null;
+  const gexSeries = (gexProfiles ?? []).map((profile) => ({
+    expiration: profile.expiration,
+    profile: profile.profile,
+  }));
+  const gexValues = new Map(
+    gexSeries.map((item) => [
+      item.expiration,
+      new Map(item.profile.map((point) => [point.strike, point.net_gex])),
+    ]),
+  );
+  const comparisonStrikes = [
+    ...new Set(gexSeries.flatMap((item) => item.profile.map((point) => point.strike))),
+  ].sort((a, b) => b - a);
 
   return (
     <div className="space-y-5">
@@ -225,20 +303,57 @@ function StockDataPage({ upper }: { upper: string }) {
 
       {/* Expiration selector (chain-driven views) */}
       {expirations.length > 0 && tab !== "overview" && (
-        <div className="flex flex-wrap gap-2">
-          {expirations.slice(0, 8).map((exp) => (
-            <button
-              key={exp}
-              onClick={() => selectExpiration(exp)}
-              className={`rounded-full border px-3 py-1 font-mono text-xs transition-colors ${
-                exp === selected
-                  ? "border-accent bg-accent/15 text-foreground"
-                  : "border-border bg-surface text-muted hover:text-foreground"
-              }`}
-            >
-              {exp}
-            </button>
-          ))}
+        <div className="space-y-2">
+          <div className="flex flex-wrap gap-2">
+            {expirations.slice(0, 8).map((exp) => {
+              const included =
+                tab === "gex" ? selectedExpirations.includes(exp) : exp === selected;
+              const primary = exp === selected;
+              return (
+                <button
+                  key={exp}
+                  type="button"
+                  aria-pressed={included}
+                  title={
+                    tab === "gex"
+                      ? "Click for one expiration; Ctrl/Cmd-click to add or remove a comparison"
+                      : undefined
+                  }
+                  onClick={(event) => selectExpiration(exp, event)}
+                  className={`rounded-full border px-3 py-1 font-mono text-xs transition-colors ${
+                    primary
+                      ? "border-accent bg-accent/15 text-foreground"
+                      : included
+                        ? "border-accent/60 bg-accent/5 text-foreground"
+                        : "border-border bg-surface text-muted hover:text-foreground"
+                  }`}
+                >
+                  {exp}
+                </button>
+              );
+            })}
+            {tab === "gex" && (
+              <button
+                type="button"
+                aria-pressed={compareMode}
+                onClick={() => setCompareMode((active) => !active)}
+                className={`rounded-full border px-3 py-1 text-xs transition-colors ${
+                  compareMode
+                    ? "border-warning/70 bg-warning/10 text-warning"
+                    : "border-border bg-surface text-muted hover:text-foreground"
+                }`}
+              >
+                Compare {compareMode ? "on" : "off"}
+              </button>
+            )}
+          </div>
+          {tab === "gex" && (
+            <p className="text-xs text-faint">
+              Click selects one expiration. Ctrl-click or Cmd-click adds/removes
+              comparisons; touch users can enable Compare. The primary expiration (
+              {selected ?? "none"}) drives max pain, greeks, and delta projection.
+            </p>
+          )}
         </div>
       )}
 
@@ -359,42 +474,74 @@ function StockDataPage({ upper }: { upper: string }) {
 
       {tab === "gex" && (
         <div className="space-y-4">
-          {!gex && !error && <p className="text-sm text-muted">Loading GEX profile…</p>}
+          {gexError && (
+            <p className="rounded-md border border-warning/40 bg-warning/5 px-3 py-2 text-sm text-warning">
+              {gexError}
+            </p>
+          )}
+          {!gexProfiles && !error && (
+            <p className="text-sm text-muted">
+              Loading {selectedExpirations.length > 1 ? "GEX profiles" : "GEX profile"}…
+            </p>
+          )}
           {gex && (
             <div className="grid gap-4 lg:grid-cols-3">
               <div className="lg:col-span-2">
                 <Panel
-                  title={`Net GEX by strike — ${gex.expiration}`}
+                  title={
+                    gexSeries.length > 1
+                      ? `Net GEX by strike — ${gexSeries.length} expirations`
+                      : `Net GEX by strike — ${gex.expiration}`
+                  }
                   right={
                     <span className="font-mono text-xs text-muted">
                       spot {gex.spot.toFixed(2)}
                     </span>
                   }
                 >
-                  <GexStrikeChart profile={gex.profile} spot={gex.spot} />
+                  <GexStrikeChart series={gexSeries} spot={gex.spot} />
                   <details className="mt-3 text-xs text-muted">
                     <summary className="cursor-pointer select-none hover:text-foreground">
                       Table view
                     </summary>
-                    <div className="mt-2 max-h-72 overflow-y-auto">
+                    <div className="mt-2 max-h-72 overflow-auto">
                       <table className="w-full text-sm">
                         <thead className="text-left text-xs text-muted">
                           <tr>
                             <th className="py-1">Strike</th>
-                            <th className="py-1 text-right">Net GEX</th>
+                            {gexSeries.map((item) => (
+                              <th
+                                key={item.expiration}
+                                className="whitespace-nowrap py-1 text-right"
+                              >
+                                {item.expiration}
+                              </th>
+                            ))}
                           </tr>
                         </thead>
                         <tbody>
-                          {gex.profile.map((point) => (
-                            <tr key={point.strike} className="border-t border-border">
-                              <td className="py-1 font-mono">{point.strike.toFixed(1)}</td>
-                              <td
-                                className={`py-1 text-right font-mono ${
-                                  point.net_gex >= 0 ? "text-positive" : "text-negative"
-                                }`}
-                              >
-                                {Math.round(point.net_gex).toLocaleString()}
-                              </td>
+                          {comparisonStrikes.map((strike) => (
+                            <tr key={strike} className="border-t border-border">
+                              <td className="py-1 font-mono">{strike.toFixed(1)}</td>
+                              {gexSeries.map((item) => {
+                                const value = gexValues.get(item.expiration)?.get(strike);
+                                return (
+                                  <td
+                                    key={item.expiration}
+                                    className={`whitespace-nowrap py-1 text-right font-mono ${
+                                      value == null
+                                        ? "text-faint"
+                                        : value >= 0
+                                          ? "text-positive"
+                                          : "text-negative"
+                                    }`}
+                                  >
+                                    {value == null
+                                      ? "—"
+                                      : Math.round(value).toLocaleString()}
+                                  </td>
+                                );
+                              })}
                             </tr>
                           ))}
                         </tbody>

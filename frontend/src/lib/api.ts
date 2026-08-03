@@ -264,10 +264,15 @@ export interface CalendarSourceStatus {
 
 export interface EarningsEvent {
   symbol: string;
+  company_name?: string | null;
   earnings_at: string;
+  session?: string | null;
   eps_estimate?: number | null;
   reported_eps?: number | null;
   surprise_pct?: number | null;
+  market_cap?: number | null;
+  fiscal_quarter?: string | null;
+  estimate_count?: number | null;
   url: string;
 }
 
@@ -702,8 +707,12 @@ export const api = {
       signal,
     ),
 
-  flowFeed: (limit = 500, signal?: AbortSignal) =>
-    getJSON<CachedFlowResponse>(`/api/flow/feed${qs({ limit })}`, signal),
+  flowFeed: (limit = 500, signal?: AbortSignal, ticker?: string, expirationDate?: string) => {
+    const params: Record<string, string | number> = { limit };
+    if (ticker) params.ticker = ticker;
+    if (expirationDate) params.expiration_date = expirationDate;
+    return getJSON<CachedFlowResponse>(`/api/flow/feed${qs(params)}`, signal);
+  },
 
   hottestChains: (limit = 200, signal?: AbortSignal) =>
     getJSON<HottestChainsResponse>(

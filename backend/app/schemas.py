@@ -230,10 +230,15 @@ class CalendarSourceStatus(BaseModel):
 
 class EarningsEvent(BaseModel):
     symbol: str
+    company_name: Optional[str] = None
     earnings_at: str
+    session: Optional[str] = None
     eps_estimate: Optional[float] = None
     reported_eps: Optional[float] = None
     surprise_pct: Optional[float] = None
+    market_cap: Optional[float] = None
+    fiscal_quarter: Optional[str] = None
+    estimate_count: Optional[int] = None
     url: str
 
 

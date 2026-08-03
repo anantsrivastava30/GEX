@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Query
 
@@ -20,10 +20,14 @@ def unusual_activity(
 
 
 @router.get("/feed", response_model=CachedFlowResponse)
-def cached_flow_feed(limit: int = Query(100, ge=1, le=500)):
+def cached_flow_feed(
+    limit: int = Query(100, ge=1, le=500),
+    ticker: Optional[str] = Query(None),
+    expiration_date: Optional[str] = Query(None),
+):
     """Cached volume/OI/IV anomaly proxy. This endpoint never scans Tradier."""
 
-    return services.get_cached_flow_feed(limit)
+    return services.get_cached_flow_feed(limit, ticker, expiration_date)
 
 
 @router.get("/hottest-chains", response_model=HottestChainsResponse)
