@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState, type ComponentType } from "react";
+import { useEffect, useRef, useState, type ComponentType } from "react";
 import {
   IconAI,
   IconAlerts,
@@ -59,6 +59,8 @@ const MOBILE_PRIMARY = ["/market", "/flow", "/stock/SPY", "/screener"];
 export default function SidebarNav() {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   const allItems = SECTIONS.flatMap((section) => section.items);
   const primaryItems = MOBILE_PRIMARY.map(
@@ -71,14 +73,47 @@ export default function SidebarNav() {
     pathname.startsWith(item.match ?? item.href),
   );
 
-  // Close the sheet on Escape; navigation closes it from the link handler.
+  // The sheet is a modal dialog, but aria-modal alone does not move, trap, or
+  // restore focus, so do it here: focus the first entry on open, keep Tab
+  // inside the sheet while it is open, and hand focus back to the trigger on
+  // close. Escape closes it; every link closes it from its own handler.
   useEffect(() => {
-    if (!moreOpen) return;
+    const sheet = sheetRef.current;
+    if (!moreOpen || !sheet) return;
+    const trigger = triggerRef.current;
+
+    const focusable = () =>
+      Array.from(sheet.querySelectorAll<HTMLElement>("a[href], button:not([disabled])"));
+    focusable()[0]?.focus();
+
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setMoreOpen(false);
+      if (e.key === "Escape") {
+        setMoreOpen(false);
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const items = focusable();
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      if (!sheet.contains(active)) {
+        e.preventDefault();
+        first.focus();
+      } else if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
     };
+
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      trigger?.focus();
+    };
   }, [moreOpen]);
 
   return (
@@ -143,11 +178,13 @@ export default function SidebarNav() {
       <>
         <button
           type="button"
-          aria-label="Close menu"
+          tabIndex={-1}
+          aria-hidden
           onClick={() => setMoreOpen(false)}
           className="fixed inset-0 z-30 bg-black/60 md:hidden"
         />
         <div
+          ref={sheetRef}
           role="dialog"
           aria-modal="true"
           aria-label="More destinations"
@@ -181,13 +218,14 @@ export default function SidebarNav() {
         const active = pathname.startsWith(item.match ?? item.href);
         const Icon = item.icon;
         return (
-          <Link key={item.href} href={item.href} className={`flex flex-1 flex-col items-center justify-center gap-1 px-1 text-[11px] ${active ? "text-accent" : "text-muted"}`}>
+          <Link key={item.href} href={item.href} onClick={() => setMoreOpen(false)} className={`flex flex-1 flex-col items-center justify-center gap-1 px-1 text-[11px] ${active ? "text-accent" : "text-muted"}`}>
             <Icon className="h-5 w-5" />
             <span className="whitespace-nowrap">{item.label}</span>
           </Link>
         );
       })}
       <button
+        ref={triggerRef}
         type="button"
         onClick={() => setMoreOpen((open) => !open)}
         aria-expanded={moreOpen}
