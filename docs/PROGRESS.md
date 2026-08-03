@@ -752,6 +752,15 @@ pass. No test files changed.
   create Docker Spaces, so the backend path described there is no longer free.
   No replacement host has been chosen.
 - Documented `WORKSPACE_PIN` in `.env.example`.
+- Review follow-ups on PR #42: primary tab links now close the More sheet
+  (it previously stayed over the newly selected page, since `SidebarNav` is
+  mounted by the persistent root layout), and the sheet now moves focus to
+  its first entry on open, traps Tab while open, restores focus to the
+  trigger on close, and keeps the backdrop out of the tab order.
+- Fixed two stale `e2e/smoke.spec.ts` assertions, with the user's explicit
+  approval for test work. PR #41 renamed the flow panels to "Hottest
+  Expiration Chains" and "Strike-Level Contract Feed" without updating the
+  test, leaving master red on `test (frontend)` before this branch existed.
 
 **Verified:** `npx tsc --noEmit`, `npm run lint`, and `npm run build` (14
 routes) pass. Measured in headless Chromium at iPhone 13 width: root and input
