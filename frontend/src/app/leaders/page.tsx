@@ -11,6 +11,7 @@ import { SCORE_BADGE, SCORE_DOT, SCORE_LABEL } from "@/components/direction/scor
 
 const READINESS_BADGE: Record<StockReadiness, string> = {
   buy_candidate: "border-positive/40 bg-positive/10 text-positive",
+  extended: "border-warning/40 bg-warning/10 text-warning",
   near_pivot: "border-accent/40 bg-accent/10 text-accent-strong",
   wait_market: "border-warning/40 bg-warning/10 text-warning",
   not_ready: "border-border bg-surface-2 text-muted",
@@ -95,10 +96,26 @@ function LeaderRow({
       <td className="py-2 pr-2 font-mono">
         {item.institutional_pct != null ? `${item.institutional_pct.toFixed(0)}%` : "–"}
       </td>
-      <td className="py-2">
+      <td className="py-2 pr-2">
         {item.breakout ? (
           <span className="inline-flex items-center whitespace-nowrap rounded-full border border-positive/40 bg-positive/10 px-1.5 py-0.5 text-[10px] text-positive">
             {item.breakout.volume_ratio}x vol · {item.breakout.date}
+          </span>
+        ) : (
+          <span className="text-[11px] text-faint">–</span>
+        )}
+      </td>
+      <td className="py-2" title={item.entry?.detail}>
+        {item.entry ? (
+          <span
+            className={`inline-flex items-center whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[10px] ${
+              item.entry.status === "buyable"
+                ? "border-positive/40 bg-positive/10 text-positive"
+                : "border-warning/40 bg-warning/10 text-warning"
+            }`}
+          >
+            {item.entry.extension_pct > 0 ? "+" : ""}
+            {item.entry.extension_pct}% · stop {item.entry.stop_price}
           </span>
         ) : (
           <span className="text-[11px] text-faint">–</span>
@@ -133,6 +150,7 @@ export default function LeadersPage() {
   const selectedItem = data?.items.find((i) => i.symbol === selected) ?? null;
   const buyCount = data?.items.filter((i) => i.readiness === "buy_candidate").length ?? 0;
   const watchCount = data?.items.filter((i) => i.readiness === "near_pivot").length ?? 0;
+  const extendedCount = data?.items.filter((i) => i.readiness === "extended").length ?? 0;
 
   return (
     <div className="space-y-6">
@@ -173,8 +191,8 @@ export default function LeadersPage() {
             title="Scan results"
             right={
               <span className="text-[11px] text-muted">
-                {buyCount} buy candidate(s) · {watchCount} near pivot · as of{" "}
-                {data.as_of ?? "n/a"}
+                {buyCount} buy candidate(s) · {watchCount} near pivot ·{" "}
+                {extendedCount} extended · as of {data.as_of ?? "n/a"}
               </span>
             }
           >
@@ -188,7 +206,7 @@ export default function LeadersPage() {
               </p>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[860px] text-left text-xs">
+                <table className="w-full min-w-[980px] text-left text-xs">
                   <thead>
                     <tr className="border-b border-border text-[11px] uppercase tracking-wide text-muted">
                       <th className="py-2 pr-2">Stock</th>
@@ -201,7 +219,10 @@ export default function LeadersPage() {
                       <th className="py-2 pr-2">ROE</th>
                       <th className="py-2 pr-2" title="Distance from 52-week high">Off high</th>
                       <th className="py-2 pr-2" title="Institutional ownership">Inst</th>
-                      <th className="py-2">Breakout</th>
+                      <th className="py-2 pr-2">Breakout</th>
+                      <th className="py-2" title="Distance from the pivot and the stop level">
+                        Entry vs pivot
+                      </th>
                     </tr>
                   </thead>
                   <tbody>

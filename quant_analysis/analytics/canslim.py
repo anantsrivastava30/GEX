@@ -31,6 +31,7 @@ from quant_analysis.analytics.market_direction import (
     STATE_LABELS,
     STATE_PRESSURE,
     STATE_RALLY,
+    compute_ema,
     pct_return,
 )
 
@@ -54,10 +55,14 @@ DEFAULTS: Dict[str, Any] = {
     "min_score_buy": 4,
     "min_score_watch": 4,
     "stop_loss_pct": 8.0,
+    # O'Neil's never-chase rule: past this much above the pivot, a 7-8% stop
+    # sits inside the range of a normal pullback.
+    "max_extension_pct": 5.0,
 }
 
 READINESS_LABELS = {
     "buy_candidate": "Buy candidate - breakout",
+    "extended": "Extended - do not chase",
     "near_pivot": "Watch - near pivot",
     "wait_market": "Qualified - wait for the market",
     "not_ready": "Not ready",
@@ -96,12 +101,18 @@ def weighted_rs_score(closes: List[float]) -> Optional[float]:
 def detect_breakout(
     bars: List[Dict[str, Any]], cfg: Dict[str, Any], within: Optional[int] = None
 ) -> Optional[Dict[str, Any]]:
-    """Most recent 52-week-high breakout on heavy volume, if any.
+    """The pivot of the current 52-week-high advance, if there is one.
 
     A breakout session closes above the highest close of the prior 252
     sessions with volume at least ``breakout_volume_ratio`` times its own
     50-day average. Only the last ``within`` sessions are scanned (default
     from config) so stale breakouts do not read as fresh flags.
+
+    The reported pivot is the ORIGIN of the advance, not the latest new
+    high: during a run-up every session prints a new high, and anchoring on
+    the newest one would report a stock 12% extended as sitting at its
+    pivot. Walking back to where the advance began keeps the extension and
+    stop measured from the price O'Neil would have bought.
     """
 
     within = within or int(cfg["breakout_recent_sessions"])
@@ -110,27 +121,40 @@ def detect_breakout(
         return None
     closes = [float(b["close"]) for b in bars]
     volumes = [float(b.get("volume") or 0) for b in bars]
+
+    def prior_high_at(i: int) -> float:
+        return max(closes[max(0, i - 252):i])
+
+    def avg_vol_at(i: int) -> float:
+        start = max(0, i - 50)
+        return sum(volumes[start:i]) / max(1, i - start)
+
     for offset in range(0, min(within, n - 60)):
         i = n - 1 - offset
-        lookback_start = max(0, i - 252)
-        prior_high = max(closes[lookback_start:i])
-        avg_start = max(0, i - 50)
-        avg_vol = sum(volumes[avg_start:i]) / max(1, i - avg_start)
-        if (
-            closes[i] > prior_high
+        avg_vol = avg_vol_at(i)
+        if not (
+            closes[i] > prior_high_at(i)
             and avg_vol > 0
             and volumes[i] >= cfg["breakout_volume_ratio"] * avg_vol
         ):
-            return {
-                "date": bars[i]["date"],
-                "price": round(closes[i], 2),
-                "prior_high": round(prior_high, 2),
-                "volume_ratio": round(volumes[i] / avg_vol, 2),
-                "sessions_ago": offset,
-                "stop_price": round(
-                    closes[i] * (1.0 - cfg["stop_loss_pct"] / 100.0), 2
-                ),
-            }
+            continue
+        # Walk back to the first session of this uninterrupted advance.
+        pivot_i = i
+        while pivot_i - 1 > 60 and closes[pivot_i - 1] > prior_high_at(pivot_i - 1):
+            pivot_i -= 1
+        pivot_avg_vol = avg_vol_at(pivot_i)
+        return {
+            "date": bars[pivot_i]["date"],
+            "price": round(closes[pivot_i], 2),
+            "prior_high": round(prior_high_at(pivot_i), 2),
+            "volume_ratio": round(volumes[pivot_i] / pivot_avg_vol, 2)
+            if pivot_avg_vol
+            else None,
+            "sessions_ago": n - 1 - pivot_i,
+            "stop_price": round(
+                closes[pivot_i] * (1.0 - cfg["stop_loss_pct"] / 100.0), 2
+            ),
+        }
     return None
 
 
@@ -320,12 +344,53 @@ def evaluate_stock_canslim(
     met = sum(1 for r in rows if r["status"] == "met")
     scored = sum(1 for r in rows if r["status"] != "unavailable")
     gate_open = market_state in (STATE_CONFIRMED, STATE_PRESSURE)
-    near_pivot = off_high is not None and off_high >= -cfg["new_high_near_pct"]
+    # A stock stretched far above its 20-day EMA is extended from any sane
+    # entry, even when it sits at a new high, so it is never "near pivot".
+    ema20 = compute_ema(closes, 20)[-1] if len(closes) >= 20 else None
+    stretched = bool(
+        ema20 and (closes[-1] / ema20 - 1.0) * 100.0 > cfg["max_extension_pct"]
+    )
+    near_pivot = (
+        off_high is not None
+        and off_high >= -cfg["new_high_near_pct"]
+        and not stretched
+    )
+
+    # Extension from the pivot decides whether a qualified breakout is still
+    # buyable. Buying 10% past the pivot with a 7-8% stop is how a correct
+    # signal turns into a stop-out on an ordinary pullback.
+    entry: Optional[Dict[str, Any]] = None
+    extension_pct = None
+    if breakout and closes:
+        extension_pct = (closes[-1] / float(breakout["price"]) - 1.0) * 100.0
+        buy_limit = float(breakout["price"]) * (1.0 + cfg["max_extension_pct"] / 100.0)
+        within = extension_pct <= cfg["max_extension_pct"]
+        entry = {
+            "status": "buyable" if within else "extended",
+            "pivot": breakout["price"],
+            "buy_limit": round(buy_limit, 2),
+            "stop_price": breakout["stop_price"],
+            "extension_pct": round(extension_pct, 1),
+            "detail": (
+                f"{extension_pct:+.1f}% from the {breakout['price']} pivot; the buy range runs to "
+                f"{buy_limit:.2f} with a stop at {breakout['stop_price']}."
+                if within
+                else (
+                    f"Already {extension_pct:+.1f}% past the {breakout['price']} pivot - beyond O'Neil's "
+                    f"{cfg['max_extension_pct']:.0f}% chase limit. A {cfg['stop_loss_pct']:.0f}% stop from "
+                    "here sits inside a normal pullback; wait for a base or a pullback to the 20/50-day EMA."
+                )
+            ),
+        }
 
     if scored < 4:
         readiness = "insufficient_data"
     elif breakout and gate_open and met >= cfg["min_score_buy"]:
-        readiness = "buy_candidate"
+        readiness = (
+            "buy_candidate"
+            if (entry is None or entry["status"] == "buyable")
+            else "extended"
+        )
     elif gate_open and near_pivot and met >= cfg["min_score_watch"]:
         readiness = "near_pivot"
     elif met >= cfg["min_score_watch"] and not gate_open:
@@ -339,6 +404,7 @@ def evaluate_stock_canslim(
         "readiness": readiness,
         "readiness_label": READINESS_LABELS[readiness],
         "breakout": breakout,
+        "entry": entry,
         "off_high_pct": round(off_high, 1) if off_high is not None else None,
         "rs_percentile": round(rs_percentile, 0) if rs_percentile is not None else None,
         "stop_loss_pct": cfg["stop_loss_pct"],
@@ -355,15 +421,34 @@ def build_stock_narrative(
     breakout = result.get("breakout")
     cfg = result["config"]
 
+    entry = result.get("entry")
     if readiness == "buy_candidate" and breakout:
         lines.append(
             f"{label} is a CAN SLIM buy candidate: it broke out to a new 52-week high on "
             f"{breakout['date']} at {breakout['price']} on {breakout['volume_ratio']}x average volume, "
             f"with {score['met']} of {score['scored']} scored criteria met and the market gate open."
         )
+        if entry:
+            lines.append(
+                f"Entry discipline: buy within {cfg['max_extension_pct']:.0f}% of the pivot (up to "
+                f"{entry['buy_limit']}), currently {entry['extension_pct']:+.1f}% from it. The stop belongs "
+                f"{cfg['stop_loss_pct']:.0f}% below the pivot at {breakout['stop_price']} - measured from the "
+                "pivot, not from wherever you buy, which is why chasing breaks the math."
+            )
+        else:
+            lines.append(
+                f"O'Neil's risk rule: cut the loss at {cfg['stop_loss_pct']:.0f}% below the pivot "
+                f"({breakout['stop_price']}), no exceptions."
+            )
+    elif readiness == "extended" and breakout and entry:
         lines.append(
-            f"O'Neil's risk rule: cut the loss at {cfg['stop_loss_pct']:.0f}% below the pivot "
-            f"({breakout['stop_price']}), no exceptions."
+            f"{label} qualifies on {score['met']} of {score['scored']} criteria and broke out on "
+            f"{breakout['date']}, but it is now {entry['extension_pct']:+.1f}% past the {breakout['price']} "
+            f"pivot - beyond the {cfg['max_extension_pct']:.0f}% chase limit."
+        )
+        lines.append(
+            f"Buying here would put the {cfg['stop_loss_pct']:.0f}% stop ({breakout['stop_price']}) inside "
+            "the range of an ordinary pullback. Wait for a new base or a test of the 20/50-day EMA."
         )
     elif readiness == "near_pivot":
         lines.append(

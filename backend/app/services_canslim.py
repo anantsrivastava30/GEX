@@ -46,10 +46,11 @@ _GATE_MESSAGES = {
 
 _READINESS_ORDER = {
     "buy_candidate": 0,
-    "near_pivot": 1,
-    "wait_market": 2,
-    "not_ready": 3,
-    "insufficient_data": 4,
+    "extended": 1,
+    "near_pivot": 2,
+    "wait_market": 3,
+    "not_ready": 4,
+    "insufficient_data": 5,
 }
 
 
@@ -127,6 +128,7 @@ def _leader_item(
         "roe_pct": _round(fundamentals.get("roe_pct")),
         "institutional_pct": _round(fundamentals.get("institutional_pct")),
         "breakout": result["breakout"],
+        "entry": result.get("entry"),
         "last_close": round(closes[-1], 2) if closes else None,
         "change_pct": round(change_pct, 2) if change_pct is not None else None,
         "narrative": build_stock_narrative(label, result, market_state),
@@ -295,7 +297,9 @@ def evaluate_stock_signals() -> Dict[str, Any]:
             _fetch_bars(item["symbol"], direction_config()["history_days"])
         )
         breakout = detect_breakout(bars, result["config"], within=1)
-        if not breakout:
+        # Only the session that started the advance is signal-worthy; a
+        # stock mid-run resolves to an older pivot and must not re-alert.
+        if not breakout or breakout.get("sessions_ago", 0) != 0:
             continue
         label = item.get("name") or item["symbol"]
         completed_result = {**result, "breakout": breakout}

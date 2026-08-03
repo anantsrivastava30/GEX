@@ -12,6 +12,7 @@ import {
 import Panel from "@/components/ui/Panel";
 import DirectionChart from "@/components/direction/DirectionChart";
 import StatePill from "@/components/direction/StatePill";
+import EntryChip from "@/components/direction/EntryChip";
 import { SCORE_BADGE, SCORE_DOT, SCORE_LABEL } from "@/components/direction/scorecard";
 
 // O'Neil market direction: the follow-through-day state machine, EMA touch
@@ -85,6 +86,15 @@ function IndexCard({
         <div className="self-start rounded border border-border bg-surface-2 px-1.5 py-0.5 text-[10px] leading-snug text-faint">
           Rules: {index.domain}
         </div>
+      )}
+
+      {index.entry && (
+        <EntryChip
+          status={index.entry.status}
+          label={index.entry.label}
+          detail={index.entry.detail}
+          className="self-start"
+        />
       )}
 
       <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
@@ -261,7 +271,20 @@ export default function DirectionPage() {
                 >
                   RSI {benchmark.rsi != null ? benchmark.rsi.toFixed(0) : "–"} · {benchmark.timing_label}
                 </span>
+                {benchmark.entry && (
+                  <EntryChip
+                    status={benchmark.entry.status}
+                    label={benchmark.entry.label}
+                    detail={benchmark.entry.detail}
+                  />
+                )}
               </div>
+              {benchmark.entry && (
+                <p className="rounded-md border border-border bg-surface-2 px-3 py-2 text-xs text-muted">
+                  <span className="text-foreground">Entry: </span>
+                  {benchmark.entry.detail}
+                </p>
+              )}
               <div className="space-y-1 text-sm text-foreground/90">
                 {benchmark.narrative.map((line, i) => (
                   <p key={i}>{line}</p>

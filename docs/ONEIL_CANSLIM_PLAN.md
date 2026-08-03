@@ -37,9 +37,23 @@ Second pass in the same PR delivered the per-stock layer as well:
 - Frontend `/leaders` page: market-gate banner, ranked stock table with
   readiness badges and letter dots, full per-stock letter table.
 
-Remaining future work: outcome scoring of logged breakout and FTD signals on
-the track-record page, and a richer institutional-sponsorship trend once a
-better free 13F source is found.
+Third pass added the entry-discipline and measurement layer, which closes
+the "bought the uptrend at a top and got stopped out" gap:
+
+- Entry assessment separating regime from entry price (buyable / pullback
+  entry / extended / wait / no entry) on indices, and pivot-relative entry
+  (buy limit, stop, extension) on stocks, with an `extended` readiness that
+  withholds the buy flag when a name is past the chase limit.
+- The follow-through signal now reads as permission plus a pilot position
+  with the rally-attempt low as its invalidation, not as an index buy with
+  a 7-8% stop; EMA touches in an uptrend read as the second-chance entry.
+- `GET /api/direction/outcomes` and the track-record outcomes panel score
+  logged follow-throughs and breakouts against their own invalidation
+  levels and report hold rate, average drawdown, and stop-fire rate.
+
+Remaining future work: a richer institutional-sponsorship trend once a
+better free 13F source is found, and threshold tuning driven by the accrued
+outcome history (the FTD gain threshold in particular).
 
 ## Verdict: feasible, in three tiers
 

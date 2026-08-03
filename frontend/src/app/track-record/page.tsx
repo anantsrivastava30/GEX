@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, GammaGapOutcomeRow, GammaGapOutcomesResponse } from "@/lib/api";
 import Panel from "@/components/ui/Panel";
 import StatTile from "@/components/ui/StatTile";
+import OutcomesPanel from "@/components/direction/OutcomesPanel";
 
 // The public differentiator: every gamma-gap scan is logged, then scored
 // against realized daily ranges. A hit means the magnet strike traded
@@ -98,7 +99,16 @@ export default function TrackRecordPage() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-lg font-semibold">Gamma Gap Track Record</h1>
+        <h1 className="text-lg font-semibold">Track Record</h1>
+        <p className="mt-1 text-sm text-muted">
+          Logged signals scored against what actually happened - gamma-gap
+          magnets below, O&apos;Neil follow-throughs and breakouts at the
+          bottom of the page.
+        </p>
+      </div>
+
+      <div>
+        <h2 className="text-base font-semibold">Gamma Gap</h2>
         <p className="mt-1 max-w-3xl text-sm text-muted">
           Every scheduler scan is logged, then scored against realized daily
           ranges: a hit means the magnet strike traded within{" "}
@@ -287,6 +297,8 @@ export default function TrackRecordPage() {
           </div>
         )}
       </Panel>
+
+      <OutcomesPanel />
     </div>
   );
 }

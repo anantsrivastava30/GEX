@@ -23,6 +23,7 @@ from quant_analysis.analytics.market_direction import (
     describe_signal,
     ema_series,
     ema_statuses,
+    entry_assessment,
     evaluate_index_scorecard,
     merged_config,
     pct_return,
@@ -171,7 +172,11 @@ def _analyze(
     change_pct = (
         (closes[-1] / closes[-2] - 1.0) * 100.0 if len(closes) > 1 and closes[-2] else None
     )
+    entry_read = (
+        entry_assessment(state, emas, closes[-1], cfg) if closes else None
+    )
     return {
+        "entry": entry_read,
         "symbol": entry["symbol"],
         "label": entry["label"],
         "group": entry["group"],
@@ -527,6 +532,75 @@ def list_direction_signals(limit: int, symbol: Optional[str] = None) -> Dict[str
 
     items = storage.list_direction_signals(limit, symbol.upper() if symbol else None)
     return {"items": items, "count": len(items)}
+
+
+_SCORABLE_TYPES = {"follow_through_day", "stock_breakout"}
+
+
+def get_signal_outcomes(
+    signal_type: Optional[str], horizon: int, limit: int
+) -> Dict[str, Any]:
+    """Realized outcomes for logged follow-through and breakout signals.
+
+    Each signal carries its own entry and invalidation level, so the score
+    is against the rule that produced it: a follow-through fails when the
+    index closes back below the rally-attempt low, a breakout fails when
+    the stock closes below its stop. Excursion stats answer the practical
+    question - buying the signal, how deep was the drawdown before it
+    worked, and would a mechanical 7-8% stop have fired?
+    """
+
+    from backend.app import storage
+    from quant_analysis.analytics.track_record import (
+        evaluate_direction_signal_outcome,
+        summarize_direction_outcomes,
+    )
+
+    cfg = direction_config()
+    stop_pct = float(
+        (CONFIG.get("canslim", {}) or {}).get("stop_loss_pct", 8.0)
+    )
+    wanted = {signal_type} if signal_type else _SCORABLE_TYPES
+    raw = storage.list_direction_signals(limit * 4, None)
+    signals = [s for s in raw if s["signal_type"] in wanted][:limit]
+
+    rows: List[Dict[str, Any]] = []
+    for signal in signals:
+        payload = signal.get("payload") or {}
+        entry_price = payload.get("close") or payload.get("price")
+        invalidation = payload.get("anchor_low") or payload.get("stop_price")
+        if entry_price is None or invalidation is None:
+            continue
+        bars = _completed_bars(_fetch_bars(signal["symbol"], cfg["history_days"]))
+        if not bars:
+            continue
+        outcome = evaluate_direction_signal_outcome(
+            signal["signal_date"],
+            float(entry_price),
+            float(invalidation),
+            bars,
+            horizon_sessions=horizon,
+            stop_pct=stop_pct,
+        )
+        rows.append(
+            {
+                "id": signal["id"],
+                "symbol": signal["symbol"],
+                "label": signal["label"],
+                "signal_type": signal["signal_type"],
+                "signal_date": signal["signal_date"],
+                "entry_price": round(float(entry_price), 2),
+                "invalidation_level": round(float(invalidation), 2),
+                **outcome,
+            }
+        )
+
+    return {
+        "horizon_sessions": horizon,
+        "stop_pct": stop_pct,
+        "summary": summarize_direction_outcomes(rows),
+        "rows": rows,
+    }
 
 
 def state_labels() -> Dict[str, str]:

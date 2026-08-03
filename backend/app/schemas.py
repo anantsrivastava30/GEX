@@ -652,11 +652,24 @@ class BottomDurability(BaseModel):
     assessment: Optional[str] = None
 
 
+class EntryAssessment(BaseModel):
+    """Whether the index is buyable here or extended past its entry.
+
+    A confirmed uptrend is permission to buy, not an entry price; this
+    separates the regime call from the chase risk.
+    """
+
+    status: Literal["buyable", "extended", "pullback_entry", "wait", "no_entry"]
+    label: str
+    detail: str
+
+
 class IndexDirection(BaseModel):
     symbol: str
     label: str
     group: str
     domain: Optional[str] = None
+    entry: Optional[EntryAssessment] = None
     state: str
     state_label: str
     state_since: Optional[str] = None
@@ -765,13 +778,29 @@ class StockBreakout(BaseModel):
     stop_price: float
 
 
+class StockEntry(BaseModel):
+    """Pivot-relative entry discipline for a breakout candidate."""
+
+    status: Literal["buyable", "extended"]
+    pivot: float
+    buy_limit: float
+    stop_price: float
+    extension_pct: float
+    detail: str
+
+
 class StockLeader(BaseModel):
     """One stock's CAN SLIM evaluation and buy-readiness verdict."""
 
     symbol: str
     name: Optional[str] = None
     readiness: Literal[
-        "buy_candidate", "near_pivot", "wait_market", "not_ready", "insufficient_data"
+        "buy_candidate",
+        "extended",
+        "near_pivot",
+        "wait_market",
+        "not_ready",
+        "insufficient_data",
     ]
     readiness_label: str
     score: ScorecardSummary
@@ -784,6 +813,7 @@ class StockLeader(BaseModel):
     roe_pct: Optional[float] = None
     institutional_pct: Optional[float] = None
     breakout: Optional[StockBreakout] = None
+    entry: Optional[StockEntry] = None
     last_close: Optional[float] = None
     change_pct: Optional[float] = None
     narrative: List[str] = []
@@ -805,3 +835,46 @@ class LeadersResponse(BaseModel):
     unavailable: List[str] = []
     stop_loss_pct: float
     methodology: str
+
+
+class DirectionOutcomeRow(BaseModel):
+    id: int
+    symbol: str
+    label: str
+    signal_type: str
+    signal_date: str
+    entry_price: float
+    invalidation_level: float
+    outcome: Literal["held", "failed", "pending"]
+    sessions_to_fail: Optional[int] = None
+    evaluated_sessions: int
+    max_gain_pct: Optional[float] = None
+    max_drawdown_pct: Optional[float] = None
+    latest_gain_pct: Optional[float] = None
+    stop_hit: Optional[bool] = None
+
+
+class DirectionOutcomeSummary(BaseModel):
+    signals: int
+    decided: int
+    held: int
+    failed: int
+    pending: int
+    hold_rate: Optional[float] = None
+    avg_max_drawdown_pct: Optional[float] = None
+    avg_max_gain_pct: Optional[float] = None
+    stop_hit_rate: Optional[float] = None
+
+
+class DirectionOutcomesResponse(BaseModel):
+    """Realized outcomes for logged follow-through and breakout signals.
+
+    Failure is measured against each signal's own invalidation level; a
+    signal without a full horizon of completed sessions stays pending and
+    is excluded from the rates.
+    """
+
+    horizon_sessions: int
+    stop_pct: float
+    summary: DirectionOutcomeSummary
+    rows: List[DirectionOutcomeRow]

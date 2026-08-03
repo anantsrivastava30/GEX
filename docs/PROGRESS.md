@@ -937,6 +937,52 @@ routes); headless screenshots at 1280px/390px: zero overflow, no console
 errors. Live Yahoo fundamentals could not be exercised here (proxy blocks
 Yahoo); every field degrades to a labeled unavailable state by design.
 
+### Session 19 - 2026-08-03 (entry discipline + realized signal outcomes)
+
+Closes the gap the owner identified: a confirmed uptrend was being read as a
+buy signal, so a user could enter extended and be stopped out by an ordinary
+pullback while the system was technically right.
+
+- **Entry vs regime (`entry_assessment`)**: indices now report buyable
+  (within 5% of the follow-through close), pullback entry (testing a rising
+  20/50-day EMA), extended (past the chase limit), wait (rally attempt), or
+  no entry (correction). Rendered as an `EntryChip` on every index card and
+  the benchmark hero, with the reasoning inline.
+- **Stock entry discipline**: `evaluate_stock_canslim` returns pivot, buy
+  limit (pivot + 5%), stop price, and extension percent; a qualified stock
+  past the chase limit becomes readiness `extended` ("Extended - do not
+  chase") instead of a buy flag. `/leaders` gained an Entry vs pivot column.
+  Fixed a real flaw found by the smoke: `detect_breakout` returned the most
+  recent new high, which re-anchored the pivot every session during a run-up
+  and reported a stock 12.6% extended as sitting at its pivot. It now walks
+  back to the origin of the advance, so extension and stop are measured from
+  the price O'Neil would have bought. Stock breakout signals additionally
+  require `sessions_ago == 0` so a mid-run stock cannot re-alert, and a name
+  stretched above its 20-day EMA can no longer read as "near pivot".
+- **Signal text reframed**: the follow-through message now says it is
+  permission to start buying rather than a signal to buy the index, names
+  the pilot-position practice, and gives the rally-attempt low as the
+  invalidation level while stating that index exposure is not managed by the
+  7-8% stock stop. EMA touches inside an uptrend are labeled the standard
+  second-chance entry.
+- **Realized outcomes**: `evaluate_direction_signal_outcome` /
+  `summarize_direction_outcomes` in `track_record.py` score each logged
+  follow-through and breakout against its own invalidation level, plus max
+  gain, max drawdown, and whether a mechanical 8% stop would have fired.
+  New `GET /api/direction/outcomes` and an `OutcomesPanel` on
+  `/track-record` (renamed from the gamma-gap-only page) publish hold rate,
+  average drawdown, and stop-fire rate, so the whipsaw cost becomes a
+  measured number as history accrues.
+
+**Verified:** dedicated smokes for all four items - entry states across
+buyable/pullback/extended/wait/no-entry, reframed FTD and EMA-touch text,
+persisted-then-scored outcomes (18 signals: 17 held, 1 pending, avg drawdown
+-0.4%, stop never fired), and the pivot-anchor fix (NVDA buyable at 0%, AMD
+extended at +12.6% from the same pivot). Prior smokes re-run green; backend
+pytest 20/21 (known pre-existing failure); frontend tsc/lint/build clean;
+screenshots of `/direction`, `/leaders`, `/track-record` at 1280px and
+`/leaders` at 390px with zero overflow and no console errors.
+
 **Verified:** synthetic-series unit smoke (correction -> rally day 1 -> FTD on
 day 5 -> confirmed uptrend, truncations land in each intermediate state; EMA
 and RSI seed boundaries checked); FastAPI TestClient smoke over the real app

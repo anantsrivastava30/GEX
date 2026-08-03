@@ -723,11 +723,25 @@ export interface BottomDurability {
   assessment?: string | null;
 }
 
+export type EntryStatus =
+  | "buyable"
+  | "extended"
+  | "pullback_entry"
+  | "wait"
+  | "no_entry";
+
+export interface EntryAssessment {
+  status: EntryStatus;
+  label: string;
+  detail: string;
+}
+
 export interface IndexDirection {
   symbol: string;
   label: string;
   group: string;
   domain?: string | null;
+  entry?: EntryAssessment | null;
   state: string;
   state_label: string;
   state_since?: string | null;
@@ -820,6 +834,42 @@ export interface DirectionSignalsResponse {
   count: number;
 }
 
+export interface DirectionOutcomeRow {
+  id: number;
+  symbol: string;
+  label: string;
+  signal_type: string;
+  signal_date: string;
+  entry_price: number;
+  invalidation_level: number;
+  outcome: "held" | "failed" | "pending";
+  sessions_to_fail?: number | null;
+  evaluated_sessions: number;
+  max_gain_pct?: number | null;
+  max_drawdown_pct?: number | null;
+  latest_gain_pct?: number | null;
+  stop_hit?: boolean | null;
+}
+
+export interface DirectionOutcomeSummary {
+  signals: number;
+  decided: number;
+  held: number;
+  failed: number;
+  pending: number;
+  hold_rate?: number | null;
+  avg_max_drawdown_pct?: number | null;
+  avg_max_gain_pct?: number | null;
+  stop_hit_rate?: number | null;
+}
+
+export interface DirectionOutcomesResponse {
+  horizon_sessions: number;
+  stop_pct: number;
+  summary: DirectionOutcomeSummary;
+  rows: DirectionOutcomeRow[];
+}
+
 // Per-stock CAN SLIM scan (buy flags gated by market direction).
 
 export interface StockBreakout {
@@ -833,10 +883,20 @@ export interface StockBreakout {
 
 export type StockReadiness =
   | "buy_candidate"
+  | "extended"
   | "near_pivot"
   | "wait_market"
   | "not_ready"
   | "insufficient_data";
+
+export interface StockEntry {
+  status: "buyable" | "extended";
+  pivot: number;
+  buy_limit: number;
+  stop_price: number;
+  extension_pct: number;
+  detail: string;
+}
 
 export interface StockLeader {
   symbol: string;
@@ -853,6 +913,7 @@ export interface StockLeader {
   roe_pct?: number | null;
   institutional_pct?: number | null;
   breakout?: StockBreakout | null;
+  entry?: StockEntry | null;
   last_close?: number | null;
   change_pct?: number | null;
   narrative: string[];
@@ -1019,6 +1080,20 @@ export const api = {
 
   canslimDetail: (symbol: string, signal?: AbortSignal) =>
     getJSON<StockLeader>(`/api/canslim/${symbol}`, signal),
+
+  directionOutcomes: (
+    filters: { signalType?: string; horizon?: number; limit?: number } = {},
+    signal?: AbortSignal,
+  ) => {
+    const params: Record<string, string | number> = {};
+    if (filters.signalType) params.signal_type = filters.signalType;
+    if (filters.horizon != null) params.horizon = filters.horizon;
+    if (filters.limit != null) params.limit = filters.limit;
+    return getJSON<DirectionOutcomesResponse>(
+      `/api/direction/outcomes${qs(params)}`,
+      signal,
+    );
+  },
 
   directionSignals: (limit = 50, symbol?: string, signal?: AbortSignal) => {
     const params: Record<string, string | number> = { limit };

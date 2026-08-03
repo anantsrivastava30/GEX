@@ -60,6 +60,11 @@ DEFAULTS: Dict[str, Any] = {
     "rsi_period": 14,
     "rsi_oversold": 30.0,
     "rsi_overbought": 70.0,
+    # How far above the follow-through close an index still counts as
+    # buyable - O'Neil's never-chase-more-than-5%-past-the-pivot rule
+    # applied at the index level.
+    "entry_extended_pct": 5.0,
+    "ema_pullback_band_pct": 1.5,
 }
 
 
@@ -291,6 +296,12 @@ def classify_market_state(
                             "volume_ratio": last_ftd["volume_ratio"],
                             "day_number": rally_days,
                             "quality": quality,
+                            # Entry and invalidation levels ride along so
+                            # persisted signals can be outcome-scored later.
+                            "close": round(close, 2),
+                            "anchor_low": round(rally_day1_low, 2)
+                            if rally_day1_low is not None
+                            else None,
                         },
                     )
                     rally_days = 0
@@ -454,6 +465,103 @@ def timing_assessment(
     else:
         zone, label = "neutral", "Neutral - wait"
     return {"rsi": round(value, 1), "zone": zone, "label": label}
+
+
+# ---------------------------------------------------------------------------
+# Entry assessment: is this index buyable here, or extended?
+# ---------------------------------------------------------------------------
+
+
+def entry_assessment(
+    state: Dict[str, Any],
+    emas: List[Dict[str, Any]],
+    last_close: float,
+    cfg: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, str]]:
+    """Separate the regime call from the entry price.
+
+    A confirmed uptrend is permission, not an entry: the buyable window is
+    within ``entry_extended_pct`` of the follow-through close, and the
+    second-chance entry is the first pullback to a rising 20/50-day EMA.
+    Everything past that is extended - the exact "bought high, got stopped"
+    trap this label exists to prevent.
+    """
+
+    cfg = merged_config(cfg)
+    s = state.get("state")
+    if s == STATE_RALLY:
+        return {
+            "status": "wait",
+            "label": "Wait for a follow-through day",
+            "detail": "A rally attempt is not confirmation; days 1-3 bounces fail more often than not.",
+        }
+    if s == STATE_CORRECTION:
+        return {
+            "status": "no_entry",
+            "label": "No entries - correction",
+            "detail": "O'Neil made no new buys while the market was in a correction.",
+        }
+    if s not in (STATE_CONFIRMED, STATE_PRESSURE):
+        return None
+
+    pullback = next(
+        (
+            e
+            for e in emas
+            if e.get("value") is not None
+            and e["period"] in (20, 50)
+            and (e.get("touched") or abs(e.get("distance_pct") or 99) <= cfg["ema_pullback_band_pct"])
+            and e.get("above", True)
+        ),
+        None,
+    )
+    if pullback:
+        return {
+            "status": "pullback_entry",
+            "label": f"Pullback entry - testing the {pullback['period']}-day EMA",
+            "detail": (
+                f"The first orderly test of the {pullback['period']}-day EMA in an uptrend is the classic "
+                "second-chance entry for those who missed the follow-through day."
+            ),
+        }
+
+    ftd = state.get("last_ftd") or {}
+    ftd_close = ftd.get("close")
+    if ftd_close:
+        extension = (last_close / float(ftd_close) - 1.0) * 100.0
+        if extension <= cfg["entry_extended_pct"]:
+            return {
+                "status": "buyable",
+                "label": f"Buyable - {extension:+.1f}% vs the follow-through close",
+                "detail": (
+                    f"Still within {cfg['entry_extended_pct']:.0f}% of the follow-through close, so an entry "
+                    "here is not chasing."
+                ),
+            }
+        return {
+            "status": "extended",
+            "label": f"Extended - {extension:+.1f}% past the follow-through close",
+            "detail": (
+                f"More than {cfg['entry_extended_pct']:.0f}% above the confirmation. Chasing here puts a "
+                "7-8% stop inside the range of a normal pullback; wait for a test of the 20/50-day EMA."
+            ),
+        }
+
+    ema20 = next((e for e in emas if e.get("period") == 20 and e.get("value") is not None), None)
+    if ema20 is not None:
+        distance = ema20.get("distance_pct") or 0.0
+        if distance > cfg["entry_extended_pct"]:
+            return {
+                "status": "extended",
+                "label": f"Extended - {distance:+.1f}% above the 20-day EMA",
+                "detail": "Stretched above its short-term average; wait for a pullback.",
+            }
+        return {
+            "status": "buyable",
+            "label": "In trend - near the 20-day EMA",
+            "detail": "Trading close to a rising short-term average, not extended.",
+        }
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -708,11 +816,21 @@ def describe_signal(
 
     if etype == "follow_through_day":
         title = f"{label}: follow-through day (day {detail.get('day_number')})"
+        anchor = detail.get("anchor_low")
+        invalidation = (
+            f"The rally-attempt low of {anchor} is the level that invalidates this signal"
+            if anchor is not None
+            else "An undercut of the rally-attempt low invalidates this signal"
+        )
         message = (
             f"{label} rose {detail.get('gain_pct')}% on volume above the prior day, on day "
             f"{detail.get('day_number')} of the rally attempt - a follow-through day by the O'Neil rule, "
-            "confirming a new uptrend. Not every follow-through works: a distribution cluster in the "
-            "next sessions is the classic warning that the bottom is not holding."
+            "confirming a new uptrend. This is permission to start buying, not a signal to buy the index "
+            "itself: O'Neil took a pilot position here and added only as the rally proved itself, with new "
+            f"money going into leading stocks clearing their own pivots. {invalidation} - index exposure is "
+            "managed by that level and by distribution days, not by the 7-8% stock stop. Not every "
+            "follow-through works; a distribution cluster in the next sessions is the classic warning that "
+            "the bottom is not holding."
         )
     elif etype == "rally_day1":
         title = f"{label}: rally attempt, day 1"
@@ -746,13 +864,26 @@ def describe_signal(
         )
     elif etype.startswith("ema_touch_"):
         period = detail.get("period")
-        side = "above" if detail.get("above") else "below"
-        role = "support" if detail.get("above") else "resistance"
+        above = bool(detail.get("above"))
+        side = "above" if above else "below"
+        role = "support" if above else "resistance"
         title = f"{label}: tagged the {period}-day EMA"
         message = (
             f"{label} traded into its {period}-day EMA ({detail.get('value')}) and closed {side} it - a "
             f"widely watched {role} test."
         )
+        # In an uptrend, the first orderly pullback to a rising 20/50-day EMA
+        # is the textbook second-chance entry - the answer to "the trend
+        # confirmed while I was not watching, do I chase?"
+        if above and period in (20, 50) and state.get("state") in (
+            STATE_CONFIRMED,
+            STATE_PRESSURE,
+        ):
+            message += (
+                f" With the trend intact, a pullback to the {period}-day EMA is the standard "
+                "second-chance entry for anyone who missed the follow-through day - an entry here sits "
+                "near support rather than extended above it, so a stop has room to work."
+            )
         if timing.get("zone") == "oversold":
             message += f" RSI is {timing.get('rsi')} (oversold), the zone where durable bottoms tend to start."
     else:

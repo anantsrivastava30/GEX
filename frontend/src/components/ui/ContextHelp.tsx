@@ -23,6 +23,11 @@ const HELP: Record<string, HelpContent> = {
         "Distribution days are meaningful declines on rising volume. A growing cluster degrades a confirmed uptrend to under pressure and eventually to correction.",
         "Not every follow-through works. The durability checklist (gains held, distribution low, breadth improving) is how the page judges whether a bottom is holding.",
       ] },
+      { heading: "Entry vs regime", bullets: [
+        "A confirmed uptrend is permission to buy, not an entry price. The entry chip separates the two: Buyable means price is still within 5% of the follow-through close, Extended means chasing it would put a normal stop inside the range of an ordinary pullback.",
+        "Pullback entry appears when an index in an uptrend tests its rising 20 or 50-day EMA - the standard second chance for anyone who missed the turn.",
+        "Index exposure is managed by the rally-attempt low and distribution days, not by the 7-8% stock stop; that stop belongs to stock buys measured from their pivot.",
+      ] },
       { heading: "Scorecard and timing", bullets: [
         "CAN SLIM is adapted to indices: C and A are 3- and 12-month trend, N is 52-week-high proximity, S is up/down volume, L is relative strength vs SPY, I is accumulation-vs-distribution days, M is the broad-market state.",
         "RSI timing chips are zones, not orders: oversold marks a buy zone, neutral means wait, overbought means caution.",
@@ -47,8 +52,9 @@ const HELP: Record<string, HelpContent> = {
         "N: new 52-week highs on breakout volume; the qualitative 'new' (products, management) is not computable and belongs to the news feed. S: up-day vs down-day volume and float. L: weighted 12-month relative strength within the scanned universe. I: institutional ownership (13F, lagged). M: the follow-through-day market state.",
         "Fundamentals come from Yahoo on a best-effort basis; a letter that cannot be fetched shows No data and is excluded from the score, never guessed.",
       ] },
-      { heading: "Risk", bullets: [
-        "Every flag carries O'Neil's stop discipline: cut the loss 7-8% below the pivot, no exceptions.",
+      { heading: "Risk and entry discipline", bullets: [
+        "The stop is measured from the pivot, not from your fill. That is why the Entry vs pivot column matters: a stock more than 5% past its pivot is marked Extended - do not chase, because a 7-8% stop from there sits inside a normal pullback.",
+        "Every buy flag shows the buy limit (pivot plus 5%) and the stop price so the risk is defined before entry.",
         "Flags are rule-based screens over incomplete free data, not recommendations.",
       ] },
     ],
@@ -102,13 +108,20 @@ const HELP: Record<string, HelpContent> = {
     ] }],
   },
   "track-record": {
-    label: "Gamma-Gap Track Record",
-    sections: [{ bullets: [
-      "A Hit means the magnet traded within the next five sessions; the signal day never counts.",
-      "Pending signals are excluded from hit rate until their full evaluation window closes.",
-      "Compare score buckets and use the ticker filter to test whether performance is concentrated.",
-      "Repeated scans of one setup are observations, not independent trades.",
-    ] }],
+    label: "Track Record",
+    sections: [
+      { heading: "Gamma gap", bullets: [
+        "A Hit means the magnet traded within the next five sessions; the signal day never counts.",
+        "Pending signals are excluded from hit rate until their full evaluation window closes.",
+        "Compare score buckets and use the ticker filter to test whether performance is concentrated.",
+        "Repeated scans of one setup are observations, not independent trades.",
+      ] },
+      { heading: "O'Neil signal outcomes", bullets: [
+        "Each follow-through and breakout is scored against its own invalidation level: the rally-attempt low for an index, the stop price for a stock.",
+        "Hold rate, average max drawdown, and how often a mechanical stop fired are measured from logged signals, so the whipsaw rate is a number rather than an assumption.",
+        "O'Neil expected a share of follow-throughs to fail; the panel exists to show that cost honestly as history accrues.",
+      ] },
+    ],
   },
   ai: {
     label: "AI Analysis",
