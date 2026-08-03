@@ -14,6 +14,26 @@ const HELP: Record<string, HelpContent> = {
       "A missing value means its upstream source is unavailable, not that the value is zero.",
     ] }],
   },
+  direction: {
+    label: "Market Direction",
+    sections: [
+      { heading: "States", bullets: [
+        "Correction means the index broke down from its high, its follow-through anchor, or a distribution cluster. The first up close afterward starts a rally attempt at day 1.",
+        "A follow-through day confirms a new uptrend: from day 4 of an attempt, a strong gain on volume above the prior day. Days 1-3 never confirm; an undercut of the day-1 low resets the count.",
+        "Distribution days are meaningful declines on rising volume. A growing cluster degrades a confirmed uptrend to under pressure and eventually to correction.",
+        "Not every follow-through works. The durability checklist (gains held, distribution low, breadth improving) is how the page judges whether a bottom is holding.",
+      ] },
+      { heading: "Scorecard and timing", bullets: [
+        "CAN SLIM is adapted to indices: C and A are 3- and 12-month trend, N is 52-week-high proximity, S is up/down volume, L is relative strength vs SPY, I is accumulation-vs-distribution days, M is the broad-market state.",
+        "RSI timing chips are zones, not orders: oversold marks a buy zone, neutral means wait, overbought means caution.",
+        "EMA chips show position vs the 20, 50, and 200-day EMAs; touches of those levels are recorded as signals so support tests are not missed.",
+      ] },
+      { heading: "Signals", bullets: [
+        "Signals are written once per completed session, never from intraday bars, and can be delivered to Discord or email when the server configures it.",
+        "The exact thresholds in use are printed at the bottom of the page. This is research tooling, not investment advice.",
+      ] },
+    ],
+  },
   flow: {
     label: "Flow",
     sections: [{ bullets: [

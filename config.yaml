@@ -90,6 +90,38 @@ calendar:
     - 192
     - 291
 
+# O'Neil market direction (see docs/ONEIL_CANSLIM_PLAN.md). Sector and
+# market index ETFs tracked by the rally-attempt / follow-through-day state
+# machine, EMA touch alerts, and the index-adapted CAN SLIM scorecard.
+# Thresholds are surfaced in the UI help, never hidden.
+market_direction:
+  benchmark: SPY
+  history_days: 730
+  ftd_gain_pct: 1.25
+  ema_periods: [20, 50, 200]
+  ema_touch_band_pct: 0.4
+  rsi_period: 14
+  correction_drawdown_pct: 8.0
+  distribution_pressure_count: 4
+  distribution_correction_count: 6
+  indices:
+    - { symbol: SPY, label: "S&P 500", group: "Broad market" }
+    - { symbol: QQQ, label: "Nasdaq-100", group: "Broad market" }
+    - { symbol: DIA, label: "Dow Industrials", group: "Broad market" }
+    - { symbol: IWM, label: "Russell 2000", group: "Broad market" }
+    - { symbol: SMH, label: "Semiconductors", group: "Sector" }
+    - { symbol: XLK, label: "Technology", group: "Sector" }
+    - { symbol: XLF, label: "Financials", group: "Sector" }
+    - { symbol: XLE, label: "Energy", group: "Sector" }
+    - { symbol: XLV, label: "Health care", group: "Sector" }
+    - { symbol: XLI, label: "Industrials", group: "Sector" }
+    - { symbol: XLY, label: "Consumer discretionary", group: "Sector" }
+    - { symbol: XLP, label: "Consumer staples", group: "Sector" }
+    - { symbol: XLU, label: "Utilities", group: "Sector" }
+    - { symbol: XLB, label: "Materials", group: "Sector" }
+    - { symbol: XBI, label: "Biotech", group: "Sector" }
+    - { symbol: XLRE, label: "Real estate", group: "Sector" }
+
 # Daily own-data history collection (see docs/UW_PARITY_PLAN.md).
 # Keep the universe small enough that one run stays inside Tradier's
 # rate limit: each ticker costs 2 + num_expirations requests.

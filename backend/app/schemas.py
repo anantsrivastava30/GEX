@@ -598,3 +598,158 @@ class CaptureResponse(BaseModel):
     run_id: Optional[str] = None
     manifest_written: bool = False
     as_of: str
+
+
+class EmaStatus(BaseModel):
+    period: int
+    value: Optional[float] = None
+    distance_pct: Optional[float] = None
+    above: Optional[bool] = None
+    touched: bool = False
+    new_touch: bool = False
+    crossed_up: bool = False
+    crossed_down: bool = False
+
+
+class ScorecardRow(BaseModel):
+    letter: str
+    name: str
+    status: Literal["met", "not_met", "borderline", "unavailable"]
+    value: str
+    detail: str
+
+
+class ScorecardSummary(BaseModel):
+    met: int
+    scored: int
+    total: int
+
+
+class FollowThroughDay(BaseModel):
+    date: str
+    gain_pct: float
+    volume_ratio: Optional[float] = None
+    day_number: int
+    quality: str
+    anchor_low: Optional[float] = None
+    close: Optional[float] = None
+
+
+class DurabilityCheck(BaseModel):
+    name: str
+    passed: bool
+    detail: str
+
+
+class BottomDurability(BaseModel):
+    """Post-follow-through confirmation checklist for the benchmark index."""
+
+    ftd_date: str
+    sessions_since: int
+    distribution_since: int
+    gains_held: bool
+    checks: List[DurabilityCheck] = []
+    assessment: Optional[str] = None
+
+
+class IndexDirection(BaseModel):
+    symbol: str
+    label: str
+    group: str
+    state: str
+    state_label: str
+    state_since: Optional[str] = None
+    as_of: Optional[str] = None
+    last_close: Optional[float] = None
+    change_pct: Optional[float] = None
+    return_3m: Optional[float] = None
+    drawdown_pct: Optional[float] = None
+    rally_day: Optional[int] = None
+    rally_day1_low: Optional[float] = None
+    rally_day1_date: Optional[str] = None
+    distribution_count: Optional[int] = None
+    last_ftd: Optional[FollowThroughDay] = None
+    durability: Optional[BottomDurability] = None
+    rsi: Optional[float] = None
+    rsi_zone: str = "unavailable"
+    timing_label: str = ""
+    emas: List[EmaStatus] = []
+    scorecard: List[ScorecardRow] = []
+    score: Optional[ScorecardSummary] = None
+    narrative: List[str] = []
+
+
+class DirectionBreadth(BaseModel):
+    uptrend_count: int
+    rally_count: int
+    total: int
+    above_ema50: int
+    reading: str
+
+
+class DirectionThresholds(BaseModel):
+    ftd_gain_pct: float
+    ftd_min_day: int
+    ftd_ideal_max_day: int
+    distribution_decline_pct: float
+    distribution_lookback: int
+    distribution_pressure_count: int
+    correction_drawdown_pct: float
+    ema_periods: List[int]
+    ema_touch_band_pct: float
+    rsi_period: int
+
+
+class DirectionOverview(BaseModel):
+    """O'Neil market-direction read for the tracked index universe.
+
+    States follow the published vocabulary: confirmed uptrend, uptrend under
+    pressure, rally attempt, correction. Signals persist per completed
+    session; intraday reads are flagged provisional.
+    """
+
+    as_of: Optional[str] = None
+    provisional: bool = False
+    benchmark: str
+    breadth: DirectionBreadth
+    durability: Optional[BottomDurability] = None
+    indices: List[IndexDirection]
+    unavailable: List[str] = []
+    thresholds: DirectionThresholds
+
+
+class EmaSeriesModel(BaseModel):
+    period: int
+    values: List[Optional[float]]
+
+
+class DirectionMarker(BaseModel):
+    date: str
+    kind: str
+    label: str
+
+
+class DirectionDetail(BaseModel):
+    index: IndexDirection
+    candles: List[Candle]
+    ema_series: List[EmaSeriesModel]
+    markers: List[DirectionMarker]
+    provisional: bool = False
+
+
+class DirectionSignal(BaseModel):
+    id: int
+    symbol: str
+    label: str
+    signal_type: str
+    signal_date: str
+    state: str
+    title: str
+    message: str
+    payload: Dict[str, Any] = {}
+    created_at: str
+
+
+class DirectionSignalsResponse(BaseModel):
+    items: List[DirectionSignal]
+    count: int

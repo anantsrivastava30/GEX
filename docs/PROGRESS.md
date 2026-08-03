@@ -830,3 +830,84 @@ chains ranking on the ticker Flow tab once real data needs emerge.
 **Verified:** scoped Python compilation, the eight existing snapshot tests, an
 append/load Parquet smoke, `docker compose config --quiet`, and
 `git diff --check` pass. No test files changed.
+
+### Session 16 - 2026-08-03 (O'Neil CAN SLIM feature plan)
+
+- Planning session only, no code changes. Wrote
+  `docs/ONEIL_CANSLIM_PLAN.md`: feasibility tiering of the seven CAN SLIM
+  criteria against the free data budget, UX design (market-direction panel on
+  `/market` with follow-through-day and distribution-day states, per-ticker
+  CAN SLIM report card, `oneil_leaders` screener preset, alert rule types,
+  AI packet regime field), architecture split across `quant_analysis`
+  analytics modules and backend adapters, four small phases, and the honesty
+  requirements (configurable FTD thresholds, per-criterion unavailable
+  states, no advice language).
+- Key call: the "M" market-direction engine ships first and alone - pure
+  OHLCV math, no new data dependencies, and FTD signals are loggable into the
+  existing track-record outcome-scoring pattern.
+
+**Next up:** implement Phase A of the plan (market-direction engine +
+`GET /api/market/direction` + `/market` panel) once the plan is approved.
+
+### Session 17 - 2026-08-03 (O'Neil market direction shipped, single PR)
+
+Owner redirected the plan: one PR, algorithms as the heart, applied to the
+indices that govern stock groups. Delivered end to end:
+
+- `quant_analysis/analytics/market_direction.py` (pure, no I/O): rally-attempt
+  / follow-through-day / distribution-day state machine with dated event log,
+  EMA (SMA-seeded) and Wilder RSI, EMA touch edge detection, index-adapted
+  CAN SLIM scorecard (C/A trend, N 52w-high proximity, S up/down volume, L RS
+  vs SPY with universe rank, I accumulation-vs-distribution days, M benchmark
+  state), narrative and signal-text builders. All thresholds configurable and
+  surfaced, never hidden.
+- Config: `market_direction` block in `config.yaml` - 16 index ETFs
+  (SPY/QQQ/DIA/IWM broad; SMH/XLK/XLF/XLE/XLV/XLI/XLY/XLP/XLU/XLB/XBI/XLRE
+  sectors), FTD 1.25% day-4+ on rising volume, distribution 0.2% decline on
+  rising volume with 25-session window and 5% recovery expiry, pressure at 4,
+  correction at 6 or 8% drawdown, EMA 20/50/200 with 0.4% touch band, RSI 14.
+- Backend: `services_direction.py` (Tradier candles with yfinance fallback,
+  cached 30 min; overview with breadth + benchmark bottom-durability checks;
+  per-index detail with trimmed candles, aligned EMA series, event markers;
+  signal evaluation on completed sessions only - intraday bars never persist),
+  `direction_signals` table (unique symbol+type+date, insert-or-ignore),
+  routers `/api/direction` + `/{symbol}` + `/signals`, scheduler job 16:20 ET
+  weekdays plus an idempotent lazy evaluation on overview reads so signals
+  accrue without the scheduler. Optional Discord/email delivery reuses the
+  alert transports (extracted `post_discord_message`/`send_email_message`;
+  gated by new `DIRECTION_ALERT_DISCORD`/`DIRECTION_ALERT_EMAIL`, in
+  `.env.example`).
+- Frontend: `/direction` page - benchmark hero (state pill, narrative, RSI
+  buy/wait chip, breadth line, three-check bottom-durability card), grouped
+  index card grid (state pill, RSI zone chip, 20/50/200 EMA above/below chips,
+  seven-letter scorecard dots, met count), detail panel with an annotated
+  candle + EMA + volume chart (FTD guide line, marker glyph key, EMA palette
+  validated against the dark surface via the dataviz checks, collision-
+  resolved line-end labels, crosshair tooltip incl. markers), full scorecard
+  table, persisted signal feed, thresholds footnote. Sidebar Direction entry,
+  ContextHelp section, market-page link card. Loading/error/empty states per
+  Session 12 conventions; state clearing kept out of effects per the repo lint
+  rule.
+- Docs: revision note in `docs/ONEIL_CANSLIM_PLAN.md` (per-stock fundamental
+  letters remain future work).
+
+**Verified:** synthetic-series unit smoke (correction -> rally day 1 -> FTD on
+day 5 -> confirmed uptrend, truncations land in each intermediate state; EMA
+and RSI seed boundaries checked); FastAPI TestClient smoke over the real app
+(overview 16 indices, detail markers, 404 on unknown symbol, signal insert
+idempotency: 16 inserted once, rerun 0); backend pytest 20/21 (the flow
+snapshot-date test also fails on the unmodified base tree in this sandbox -
+pre-existing, environment-dependent); frontend `tsc`, lint, and build clean
+(15 routes incl. `/direction`); headless Chromium screenshots of the
+production build at 1280px and 390px against mocked APIs - zero horizontal
+overflow, no console errors, chart/labels eyeballed after fixing an EMA
+label collision. Live provider data could not be exercised here: the sandbox
+proxy blocks Yahoo (CONNECT 403) and no Tradier token is present; the
+endpoints degrade exactly as designed (200 with symbols listed unavailable).
+
+**Next up:**
+1. Exercise `/direction` against live data on the self-host box (scheduler on)
+   and confirm the first persisted real signals.
+2. Track-record integration: score follow-through-day outcomes like gamma-gap
+   signals once real FTDs accrue.
+3. Per-stock CAN SLIM fundamentals (yfinance C/A/ROE/13F) per the plan doc.
