@@ -75,3 +75,20 @@ table {
 *::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* Phones only (below Tailwind's md = 48rem). The 14px terminal density is
+   hard to read on a handset, and Safari force-zooms the page whenever a
+   focused input renders under 16px. Written in rem to match the breakpoint
+   syntax Tailwind emits, and unlayered so it wins over utility classes.
+   Nothing here applies at md and up, so the desktop layout is untouched. */
+@media (width < 48rem) {
+  html {
+    font-size: 16px;
+  }
+
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}

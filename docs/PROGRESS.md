@@ -734,3 +734,40 @@ test files changed or broad test suites run.
 
 **Verified:** frontend `npm run lint`, `npm run build`, and `git diff --check`
 pass. No test files changed.
+
+### Session 13 - 2026-08-03 (mobile readability pass)
+
+- Mobile pass scoped entirely below the `md` breakpoint, so the desktop shell
+  renders identically:
+  - `globals.css`: root font 14px -> 16px on phones, and inputs/selects/
+    textareas pinned to 16px so Safari stops force-zooming the page on focus.
+    Written as `@media (width < 48rem)` to match the breakpoint syntax
+    Tailwind v4 emits; a `max-width: 767px` block is dropped by the compiler.
+  - Phone tab bar rebuilt: four primary destinations (Market, Flow, Tickers,
+    Screener) plus a More sheet holding the other eight. The previous bar put
+    all twelve in one horizontal scroller, hiding half of them off-screen.
+  - Raised the `text-[9px]`/`text-[10px]`/`text-[11px]` floors on phones only
+    in `Tabs`, `StatTile`, `/alerts`, `/tools/binomial`.
+- Recorded in `deploy/DEPLOY.md` that Hugging Face now requires a paid plan to
+  create Docker Spaces, so the backend path described there is no longer free.
+  No replacement host has been chosen.
+- Documented `WORKSPACE_PIN` in `.env.example`.
+
+**Verified:** `npx tsc --noEmit`, `npm run lint`, and `npm run build` (14
+routes) pass. Measured in headless Chromium at iPhone 13 width: root and input
+font-size both 16px, zero horizontal page overflow on `/market`, `/stock/SPY`,
+`/flow`, `/screener`, `/news`, `/track-record`, and sub-12px text nodes down
+from 17-41 per page to 8-9 (the rest are chart SVG labels, left alone).
+Desktop at 1440px re-measured unchanged: root 14px, sidebar visible, phone tab
+bar hidden. No test files changed and no broad test suites run.
+
+**Next up:**
+1. Add `TRADIER_TOKEN` under GitHub Settings > Secrets and variables > Actions,
+   then dispatch Daily market snapshot and verify a bot data commit. The cron
+   has never produced one; `data/snapshots/` holds only the seeded 2026-07-13
+   date, so IV rank, OI change, and historical GEX have no history to read.
+2. Decide where the backend is hosted now that HF Spaces requires a paid plan.
+3. Chart SVG labels render at roughly 5px on a phone because they scale with
+   the viewBox; needs a separate pass with live data to avoid label collisions.
+4. Begin Phase 3 with Supabase Auth so watchlists and alerts gain user
+   ownership.

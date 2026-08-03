@@ -121,3 +121,11 @@ export const IconSearch = base(
     <path d="M21 21l-4.3-4.3" />
   </>,
 );
+
+export const IconMore = base(
+  <>
+    <circle cx="5" cy="12" r="1" />
+    <circle cx="12" cy="12" r="1" />
+    <circle cx="19" cy="12" r="1" />
+  </>,
+);

@@ -1,13 +1,20 @@
 # Free deployment guide
 
-Zero-cost hosting for the legacy Streamlit app **and** the new stack, all from
+> **Update 2026-08:** creating Docker (and Gradio) Spaces now requires a paid
+> Hugging Face plan; the CPU Basic hardware itself is still not billed hourly.
+> The backend section below therefore no longer describes a free path. The
+> Vercel, GitHub Actions, and Streamlit Community Cloud pieces are unaffected.
+> A self-hosted backend option has not been chosen yet. For running the whole
+> stack on your own machine or box today, see [LOCAL.md](LOCAL.md).
+
+Hosting for the legacy Streamlit app **and** the new stack, all from
 one repo. The three products never share a runtime — only source and snapshot
 data — so each can be developed and shipped independently.
 
 | Piece | Host | Deploys from | Cost |
 | --- | --- | --- | --- |
 | Legacy Streamlit (`legacy/app.py`) | Streamlit Community Cloud | `streamlit-prod` branch | Free |
-| Backend (FastAPI) | Hugging Face Spaces (Docker) | `master` (path-filtered) | Free — 2 vCPU / 16 GB RAM, sleeps after ~48h idle |
+| Backend (FastAPI) | Hugging Face Spaces (Docker) | `master` (path-filtered) | Paid HF plan required |
 | Frontend (Next.js) | Vercel Hobby | `master`, root dir `frontend/` | Free |
 | Daily snapshot cron | GitHub Actions | `master` | Free |
 
