@@ -88,6 +88,7 @@ export default function FlowPage() {
   const [detailFeed, setDetailFeed] = useState<CachedFlowResponse | null>(null);
   const [chains, setChains] = useState<HottestChainsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [symbol, setSymbol] = useState("");
@@ -107,6 +108,7 @@ export default function FlowPage() {
     controller.current = nextController;
     detailController.current?.abort();
     setDetailFeed(null);
+    setDetailError(null);
     setLoading(true);
     setError(null);
     try {
@@ -225,6 +227,7 @@ export default function FlowPage() {
     setSymbol(row.ticker);
     setExpiration(row.expiration_date);
     setDetailFeed(null);
+    setDetailError(null);
     setDetailLoading(true);
     window.requestAnimationFrame(() => {
       contractFeedRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -238,8 +241,8 @@ export default function FlowPage() {
       );
       if (detailController.current === nextController) setDetailFeed(nextFeed);
     } catch (cause) {
-      if (!(cause instanceof DOMException && cause.name === "AbortError")) {
-        setError(cause instanceof Error ? cause.message : String(cause));
+      if (detailController.current === nextController && !(cause instanceof DOMException && cause.name === "AbortError")) {
+        setDetailError(cause instanceof Error ? cause.message : String(cause));
       }
     } finally {
       if (detailController.current === nextController) {
@@ -257,16 +260,17 @@ export default function FlowPage() {
           <p className="mt-1 max-w-3xl text-sm text-muted">
             Cached multi-ticker contract anomalies ranked from volume, open interest, and IV changes. This is not trade tape, sweep, execution, or aggressor data.
           </p>
+          <p className="mt-1 text-xs text-faint">Cached data loads automatically. Reload only repeats the cached-data request; it does not capture a new market snapshot.</p>
         </div>
         <button onClick={load} disabled={loading} className="rounded-md border border-accent bg-accent/15 px-3 py-1.5 text-sm hover:bg-accent/25 disabled:opacity-50">
-          {loading ? "Refreshing..." : "Refresh cache"}
+          {loading ? "Loading..." : "Reload cached data"}
         </button>
       </div>
 
       <Status data={feed} />
       {error && <p className="rounded-md border border-rose-500/50 bg-surface px-4 py-3 text-sm text-rose-300">Unable to load cached positioning: {error}</p>}
 
-      <Panel title="Hottest Expiration Chains" right={<span className="font-mono text-xs text-muted">{sortedChains.length} cached chains</span>} bodyClassName="p-0">
+      <Panel title="Hottest Expiration Chains" right={<span className="font-mono text-xs text-muted">{loading && !chains ? "..." : `${sortedChains.length} cached chains`}</span>} bodyClassName="p-0">
         <p className="border-b border-border px-3 py-2 text-xs text-muted">
           One row aggregates every call and put strike for a symbol-expiration pair.
           Listed contracts is the number of option rows; volume and OI are totals.
@@ -275,26 +279,26 @@ export default function FlowPage() {
         <div className="max-h-80 overflow-auto">
           <table className="w-full min-w-[850px] text-sm">
             <thead className="sticky top-0 bg-surface-2 text-left text-xs text-muted"><tr>{CHAIN_COLUMNS.map((column) => <th key={column.key} onClick={() => toggleChainSort(column.key)} className="cursor-pointer select-none whitespace-nowrap px-3 py-2 text-right font-medium hover:text-foreground">{column.label} {chainSort === column.key ? (chainAsc ? "▲" : "▼") : ""}</th>)}</tr></thead>
-            <tbody>{sortedChains.map((row) => <tr key={`${row.ticker}-${row.expiration_date}`} role="button" tabIndex={0} aria-label={`Inspect ${row.ticker} ${row.expiration_date} strikes`} onClick={() => inspectChain(row)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); inspectChain(row); } }} className={`cursor-pointer border-t border-border hover:bg-surface-hover focus:bg-surface-hover focus:outline-none ${symbol.trim().toUpperCase() === row.ticker && expiration === row.expiration_date ? "bg-accent/10" : ""}`}>{CHAIN_COLUMNS.map((column) => <td key={column.key} className="whitespace-nowrap px-3 py-1.5 text-right font-mono text-muted">{formatCell(column.key, row[column.key], column.digits)}</td>)}</tr>)}{!loading && sortedChains.length === 0 && <tr><td colSpan={CHAIN_COLUMNS.length} className="px-4 py-8 text-center text-muted">No cached chain rankings are available.</td></tr>}</tbody>
+            <tbody>{loading && !chains && <tr><td colSpan={CHAIN_COLUMNS.length} className="px-4 py-10 text-center text-muted">Loading expiration-chain rankings...</td></tr>}{sortedChains.map((row) => <tr key={`${row.ticker}-${row.expiration_date}`} role="button" tabIndex={0} aria-label={`Inspect ${row.ticker} ${row.expiration_date} strikes`} onClick={() => inspectChain(row)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); inspectChain(row); } }} className={`cursor-pointer border-t border-border hover:bg-surface-hover focus:bg-surface-hover focus:outline-none ${symbol.trim().toUpperCase() === row.ticker && expiration === row.expiration_date ? "bg-accent/10" : ""}`}>{CHAIN_COLUMNS.map((column) => <td key={column.key} className="whitespace-nowrap px-3 py-1.5 text-right font-mono text-muted">{formatCell(column.key, row[column.key], column.digits)}</td>)}</tr>)}{!loading && !error && chains && sortedChains.length === 0 && <tr><td colSpan={CHAIN_COLUMNS.length} className="px-4 py-8 text-center text-muted">No cached chain rankings are available.</td></tr>}</tbody>
           </table>
         </div>
       </Panel>
 
       <div ref={contractFeedRef} className="scroll-mt-20">
-      <Panel title="Strike-Level Contract Feed" right={<span className="font-mono text-xs text-muted">{detailLoading ? "Loading chain..." : `${filteredFeed.length} of ${detailFeed?.rows.length ?? feed?.rows.length ?? 0} contracts`}</span>} bodyClassName="p-0">
+      <Panel title="Strike-Level Contract Feed" right={<span className="font-mono text-xs text-muted">{detailLoading || (loading && !feed) ? "Loading..." : `${filteredFeed.length} of ${detailFeed?.rows.length ?? feed?.rows.length ?? 0} contracts`}</span>} bodyClassName="p-0">
         <div className="flex flex-wrap gap-2 border-b border-border p-3">
-          <input value={symbol} onChange={(event) => { detailController.current?.abort(); setDetailFeed(null); setDetailLoading(false); setSymbol(event.target.value); setExpiration(""); }} placeholder="Filter symbol" className="w-32 rounded border border-border bg-surface px-2 py-1 text-sm uppercase outline-none focus:border-accent" />
-          <select value={expiration} onChange={(event) => { const nextExpiration = event.target.value; if (!nextExpiration) { detailController.current?.abort(); setDetailFeed(null); setDetailLoading(false); } setExpiration(nextExpiration); }} aria-label="Filter expiration" className="rounded border border-border bg-surface px-2 py-1 text-sm"><option value="">All expirations</option>{expirationOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select>
+          <input value={symbol} onChange={(event) => { detailController.current?.abort(); setDetailFeed(null); setDetailError(null); setDetailLoading(false); setSymbol(event.target.value); setExpiration(""); }} placeholder="Filter symbol" className="w-32 rounded border border-border bg-surface px-2 py-1 text-sm uppercase outline-none focus:border-accent" />
+          <select value={expiration} onChange={(event) => { const nextExpiration = event.target.value; if (!nextExpiration) { detailController.current?.abort(); setDetailFeed(null); setDetailError(null); setDetailLoading(false); } setExpiration(nextExpiration); }} aria-label="Filter expiration" className="rounded border border-border bg-surface px-2 py-1 text-sm"><option value="">All expirations</option>{expirationOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select>
           <select value={side} onChange={(event) => setSide(event.target.value as SideFilter)} className="rounded border border-border bg-surface px-2 py-1 text-sm"><option value="all">All sides</option><option value="call">Calls</option><option value="put">Puts</option></select>
           <input type="number" min="0" value={minVolumeOi} onChange={(event) => setMinVolumeOi(event.target.value)} aria-label="Minimum volume to open interest" placeholder="Min vol/OI" className="w-28 rounded border border-border bg-surface px-2 py-1 text-sm" />
           <input type="number" min="0" value={minOiChange} onChange={(event) => setMinOiChange(event.target.value)} aria-label="Minimum absolute open interest change" placeholder="Min |OI chg|" className="w-28 rounded border border-border bg-surface px-2 py-1 text-sm" />
           <input type="number" min="0" step="0.01" value={minIvChange} onChange={(event) => setMinIvChange(event.target.value)} aria-label="Minimum absolute implied volatility change" placeholder="Min |IV chg|" className="w-28 rounded border border-border bg-surface px-2 py-1 text-sm" />
-          {(symbol || expiration || side !== "all" || minVolumeOi !== "0" || minOiChange !== "0" || minIvChange !== "0") && <button type="button" onClick={() => { detailController.current?.abort(); setDetailFeed(null); setDetailLoading(false); setSymbol(""); setExpiration(""); setSide("all"); setMinVolumeOi("0"); setMinOiChange("0"); setMinIvChange("0"); }} className="rounded border border-border px-2 py-1 text-xs text-muted hover:text-foreground">Clear filters</button>}
+          {(symbol || expiration || side !== "all" || minVolumeOi !== "0" || minOiChange !== "0" || minIvChange !== "0") && <button type="button" onClick={() => { detailController.current?.abort(); setDetailFeed(null); setDetailError(null); setDetailLoading(false); setSymbol(""); setExpiration(""); setSide("all"); setMinVolumeOi("0"); setMinOiChange("0"); setMinIvChange("0"); }} className="rounded border border-border px-2 py-1 text-xs text-muted hover:text-foreground">Clear filters</button>}
         </div>
         <div className="max-h-[34rem] overflow-auto">
           <table className="w-full min-w-[1050px] text-sm">
             <thead className="sticky top-0 bg-surface-2 text-left text-xs text-muted"><tr>{FEED_COLUMNS.map((column) => <th key={column.key} onClick={() => toggleFeedSort(column.key)} className="cursor-pointer select-none whitespace-nowrap px-3 py-2 text-right font-medium hover:text-foreground">{column.label} {feedSort === column.key ? (feedAsc ? "▲" : "▼") : ""}</th>)}</tr></thead>
-            <tbody>{filteredFeed.map((row) => <tr key={`${row.ticker}-${row.expiration_date}-${row.strike}-${row.option_type}`} className="border-t border-border hover:bg-surface-hover">{FEED_COLUMNS.map((column) => <td key={column.key} className="whitespace-nowrap px-3 py-1.5 text-right font-mono text-muted">{formatCell(column.key, row[column.key], column.digits)}</td>)}</tr>)}{!loading && filteredFeed.length === 0 && <tr><td colSpan={FEED_COLUMNS.length} className="px-4 py-8 text-center text-muted">No cached contracts match the active filters.</td></tr>}</tbody>
+            <tbody>{(detailLoading || (loading && !feed)) && <tr><td colSpan={FEED_COLUMNS.length} className="px-4 py-10 text-center text-muted">{detailLoading ? `Loading ${symbol} ${expiration} contracts...` : "Loading cached contracts..."}</td></tr>}{detailError && <tr><td colSpan={FEED_COLUMNS.length} className="px-4 py-8 text-center text-rose-300">Unable to load the selected chain: {detailError}</td></tr>}{!detailLoading && !detailError && filteredFeed.map((row) => <tr key={`${row.ticker}-${row.expiration_date}-${row.strike}-${row.option_type}`} className="border-t border-border hover:bg-surface-hover">{FEED_COLUMNS.map((column) => <td key={column.key} className="whitespace-nowrap px-3 py-1.5 text-right font-mono text-muted">{formatCell(column.key, row[column.key], column.digits)}</td>)}</tr>)}{!loading && !detailLoading && !error && !detailError && feed && filteredFeed.length === 0 && <tr><td colSpan={FEED_COLUMNS.length} className="px-4 py-8 text-center text-muted">No cached contracts match the active filters.</td></tr>}</tbody>
           </table>
         </div>
       </Panel>

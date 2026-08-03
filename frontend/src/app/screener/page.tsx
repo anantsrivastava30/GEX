@@ -65,12 +65,15 @@ function customValue(value: string | number | boolean | null): string {
 
 export default function ScreenerPage() {
   const controller = useRef<AbortController | null>(null);
+  const fieldSequence = useRef(0);
   const [mode, setMode] = useState<ScreenerPreset | "custom">("high_vol_oi");
   const [minVolOi, setMinVolOi] = useState("");
   const [minOI, setMinOI] = useState("");
   const [data, setData] = useState<ScreenerResponse | null>(null);
   const [customData, setCustomData] = useState<CustomScreenerResponse | null>(null);
   const [fields, setFields] = useState<ScreenerFieldSpec[]>([]);
+  const [fieldsLoading, setFieldsLoading] = useState(true);
+  const [fieldsError, setFieldsError] = useState(false);
   const [query, setQuery] = useState<CustomScreenerRequest>(CUSTOM_DEFAULT);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -98,7 +101,14 @@ export default function ScreenerPage() {
 
   useEffect(() => {
     const nextController = new AbortController();
-    api.screenerFields(nextController.signal).then((response) => setFields(response.fields)).catch(() => setFields([]));
+    const sequence = ++fieldSequence.current;
+    api.screenerFields(nextController.signal).then((response) => {
+      if (fieldSequence.current === sequence) setFields(response.fields);
+    }).catch((cause) => {
+      if (fieldSequence.current === sequence && !(cause instanceof DOMException && cause.name === "AbortError")) setFieldsError(true);
+    }).finally(() => {
+      if (fieldSequence.current === sequence) setFieldsLoading(false);
+    });
     return () => nextController.abort();
   }, []);
 
@@ -114,6 +124,8 @@ export default function ScreenerPage() {
     controller.current?.abort();
     setError(null);
     setLoading(next !== "custom");
+    setData(null);
+    setCustomData(null);
     setMode(next);
   }
 
@@ -123,6 +135,7 @@ export default function ScreenerPage() {
     controller.current = nextController;
     setLoading(true);
     setError(null);
+    setCustomData(null);
     api.customScreener(query, nextController.signal).then((response) => {
       if (controller.current === nextController) setCustomData(response);
     }).catch((cause) => {
@@ -160,16 +173,17 @@ export default function ScreenerPage() {
           Custom Builder
         </button>
       </div>
+      <p className="text-xs text-muted">Preset tabs run automatically. Threshold inputs require Apply; custom conditions require Run custom screen.</p>
 
       {mode === "custom" ? (
         <Panel title="Custom snapshot filter">
-          <FilterBuilder fields={fields} value={query} onChange={setQuery} />
+          {fieldsLoading ? <p className="text-sm text-muted">Loading available filter fields...</p> : fieldsError ? <p className="rounded border border-rose-500/40 px-3 py-2 text-sm text-rose-300">Unable to load custom screener fields. Reload the page to try again.</p> : <FilterBuilder fields={fields} value={query} onChange={setQuery} />}
           <button onClick={runCustom} disabled={loading || !fields.length} className="mt-4 rounded-md border border-accent bg-accent/15 px-3 py-1.5 text-sm hover:bg-accent/25 disabled:opacity-50">
             {loading ? "Screening..." : "Run custom screen"}
           </button>
         </Panel>
       ) : (
-        <form onSubmit={(event) => { event.preventDefault(); setLoading(true); setError(null); fetchPreset(mode, minVolOi, minOI); }} className="flex flex-wrap items-center gap-2">
+        <form onSubmit={(event) => { event.preventDefault(); setLoading(true); setError(null); setData(null); fetchPreset(mode, minVolOi, minOI); }} className="flex flex-wrap items-center gap-2">
           <input type="number" min="0" step="0.1" value={minVolOi} onChange={(event) => setMinVolOi(event.target.value)} placeholder="Min vol/OI" aria-label="Minimum volume to open interest" className="w-28 rounded border border-border bg-surface px-2 py-1 text-sm outline-none focus:border-accent" />
           <input type="number" min="0" value={minOI} onChange={(event) => setMinOI(event.target.value)} placeholder="Min OI" aria-label="Minimum open interest" className="w-28 rounded border border-border bg-surface px-2 py-1 text-sm outline-none focus:border-accent" />
           <button type="submit" disabled={loading} className="rounded-md border border-accent bg-accent/15 px-3 py-1 text-sm hover:bg-accent/25 disabled:opacity-50">{loading ? "Screening..." : "Apply"}</button>
@@ -186,17 +200,17 @@ export default function ScreenerPage() {
 
       {error && <p className="rounded-md border border-rose-500/50 bg-surface px-4 py-3 text-sm text-rose-300">Unable to screen: {error}</p>}
 
-      <Panel title={mode === "custom" ? "Custom results" : PRESETS.find((preset) => preset.id === mode)?.label} right={<span className="font-mono text-xs text-muted">{resultCount ?? 0} candidates</span>} bodyClassName="p-0">
+      <Panel title={mode === "custom" ? "Custom results" : PRESETS.find((preset) => preset.id === mode)?.label} right={<span className="font-mono text-xs text-muted">{loading ? "..." : `${resultCount ?? 0} candidates`}</span>} bodyClassName="p-0">
         <div className="max-h-[38rem] overflow-auto">
           {mode === "custom" ? (
             <table className="w-full min-w-[760px] text-sm">
               <thead className="sticky top-0 bg-surface-2 text-left text-xs text-muted"><tr><th className="px-3 py-2">Symbol</th>{customColumns.filter((column) => column !== "symbol").map((column) => <th key={column} className="px-3 py-2 text-right font-medium">{column.replaceAll("_", " ")}</th>)}</tr></thead>
-              <tbody>{(customData?.rows ?? []).map((row) => <tr key={row.row_key} className="border-t border-border hover:bg-surface-hover"><td className="px-3 py-1.5 font-mono text-foreground">{row.symbol}</td>{customColumns.filter((column) => column !== "symbol").map((column) => <td key={column} className="whitespace-nowrap px-3 py-1.5 text-right font-mono text-muted">{customValue(row.values[column])}</td>)}</tr>)}{!loading && !(customData?.rows.length) && <tr><td colSpan={Math.max(1, customColumns.length)} className="px-4 py-8 text-center text-muted">Run a custom screen or relax its conditions.</td></tr>}</tbody>
+               <tbody>{loading && <tr><td colSpan={Math.max(1, customColumns.length)} className="px-4 py-10 text-center text-muted">Running custom screen...</td></tr>}{(customData?.rows ?? []).map((row) => <tr key={row.row_key} className="border-t border-border hover:bg-surface-hover"><td className="px-3 py-1.5 font-mono text-foreground">{row.symbol}</td>{customColumns.filter((column) => column !== "symbol").map((column) => <td key={column} className="whitespace-nowrap px-3 py-1.5 text-right font-mono text-muted">{customValue(row.values[column])}</td>)}</tr>)}{!loading && !error && !(customData?.rows.length) && <tr><td colSpan={Math.max(1, customColumns.length)} className="px-4 py-8 text-center text-muted">{fieldsError ? "Custom screening is unavailable because filter fields could not be loaded." : customData ? "No candidates match the custom conditions." : "Set the custom filters above, then choose Run custom screen."}</td></tr>}</tbody>
             </table>
           ) : (
             <table className="w-full min-w-[720px] text-sm">
               <thead className="sticky top-0 bg-surface-2 text-left text-xs text-muted"><tr>{columns.map((column) => <th key={column.key} className="whitespace-nowrap px-3 py-2 text-right font-medium first:text-left">{column.label}</th>)}</tr></thead>
-              <tbody>{(data?.rows ?? []).map((row, index) => <tr key={`${row.symbol}-${row.expiration_date ?? ""}-${row.strike ?? ""}-${index}`} className="border-t border-border hover:bg-surface-hover">{columns.map((column) => <td key={column.key} className="whitespace-nowrap px-3 py-1.5 text-right font-mono text-muted first:text-left first:text-foreground">{cell(row, column)}</td>)}</tr>)}{!loading && !(data?.rows.length) && <tr><td colSpan={columns.length} className="px-4 py-8 text-center text-muted">No candidates match this screen yet.</td></tr>}</tbody>
+               <tbody>{loading && <tr><td colSpan={columns.length} className="px-4 py-10 text-center text-muted">Screening cached snapshots...</td></tr>}{(data?.rows ?? []).map((row, index) => <tr key={`${row.symbol}-${row.expiration_date ?? ""}-${row.strike ?? ""}-${index}`} className="border-t border-border hover:bg-surface-hover">{columns.map((column) => <td key={column.key} className="whitespace-nowrap px-3 py-1.5 text-right font-mono text-muted first:text-left first:text-foreground">{cell(row, column)}</td>)}</tr>)}{!loading && !error && data && !data.rows.length && <tr><td colSpan={columns.length} className="px-4 py-8 text-center text-muted">No candidates match this screen yet.</td></tr>}</tbody>
             </table>
           )}
         </div>

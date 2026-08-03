@@ -224,9 +224,11 @@ def get_unusual(symbol: str, expirations: List[str], top_n: int) -> Dict[str, An
 
 
 def _configured_snapshot_tickers() -> List[str]:
-    """The flow proxy is deliberately limited to the configured snapshot universe."""
+    """Symbols covered by configured and shared-watchlist snapshots."""
 
-    return list(dict.fromkeys(ticker.upper() for ticker in get_settings().snapshot_tickers))
+    from backend.app.services_watchlists import snapshot_symbols
+
+    return snapshot_symbols()
 
 
 def _cached_contract_proxy_data() -> tuple[pd.DataFrame, Dict[str, Any]]:
@@ -355,7 +357,7 @@ def get_cached_flow_feed(
 
 
 def get_hottest_chains(limit: int) -> Dict[str, Any]:
-    """Cached chain-level ranking over the configured snapshot universe."""
+    """Cached chain-level ranking over the scheduled snapshot universe."""
 
     contracts, status = _cached_contract_proxy_data()
     if contracts.empty:

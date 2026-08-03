@@ -306,6 +306,9 @@ export interface Watchlist extends WatchlistMutation {
 export interface WatchlistListResponse {
   workspace: "shared";
   available_symbols: string[];
+  snapshot_symbol_limit: number;
+  scheduler_enabled: boolean;
+  tradier_configured: boolean;
   items: Watchlist[];
 }
 

@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional
 import pandas as pd
 
 from backend.app.config import get_settings
+from backend.app.services_watchlists import snapshot_symbols
 from quant_analysis.storage import snapshots as snapshot_store
 
 ScreenerPreset = Literal["high_vol_oi", "unusually_bullish", "gamma_squeeze"]
@@ -73,7 +74,7 @@ _METHODOLOGY = {
 
 
 def _configured_symbols() -> List[str]:
-    return list(dict.fromkeys(symbol.upper() for symbol in get_settings().snapshot_tickers))
+    return snapshot_symbols()
 
 
 def _snapshot_dir() -> Path:
@@ -399,7 +400,7 @@ def get_screener(
     min_open_interest: Optional[float],
     limit: int,
 ) -> Dict[str, Any]:
-    """Return candidates from persisted snapshots in the configured universe only."""
+    """Return candidates from persisted snapshots in the scheduled universe only."""
 
     configured = _configured_symbols()
     requested = list(dict.fromkeys(symbol.upper() for symbol in symbols)) if symbols else configured

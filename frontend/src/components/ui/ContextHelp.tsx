@@ -29,6 +29,7 @@ const HELP: Record<string, HelpContent> = {
     sections: [{ bullets: [
       "High Vol/OI finds contracts trading heavily relative to resting open interest; call activity alone does not prove bullish intent.",
       "Gamma Squeeze Candidates are model candidates, not squeeze forecasts.",
+      "Preset tabs run immediately, threshold inputs require Apply, and Custom Builder runs only when you choose Run custom screen.",
       "Custom Builder applies every condition together. Use contract scope for individual options and ticker scope for aggregate positioning.",
       "All results come from persisted snapshots, so check the as-of and stale badges first.",
     ] }],
@@ -37,7 +38,9 @@ const HELP: Record<string, HelpContent> = {
     label: "Watchlists",
     sections: [{ bullets: [
       "Create focused symbol groups for alert evaluation and repeatable research.",
-      "Only symbols in the scheduled snapshot universe are available.",
+      "Type any ticker-shaped symbol. Custom entries join scheduled server captures; invalid or non-optionable tickers remain unavailable and can make that watchlist's alerts skip.",
+      "New symbols need two consecutive market sessions for change metrics and more observations for meaningful ranks or history.",
+      "Removing a custom symbol from every watchlist stops future captures but preserves existing snapshot files. Baseline symbols continue to run.",
       "The workspace is shared; changes require the workspace PIN.",
       "Move or remove dependent alert rules before deleting a watchlist.",
     ] }],
@@ -80,7 +83,7 @@ const HELP: Record<string, HelpContent> = {
   calendar: {
     label: "Market Calendar",
     sections: [{ bullets: [
-      "Choose Past or Upcoming and a 7, 14, or 30-day window. With no ticker filter, earnings cover the full Nasdaq calendar.",
+      "Past/Upcoming and 7/14/30-day controls load immediately. Ticker text changes the calendar only after Apply; leave it blank for all Nasdaq companies.",
       "Add comma-separated symbols only when you want to narrow the market-wide earnings list.",
       "Date-only earnings entries show the supplied session or time TBD. Confirm timing through the Nasdaq source link.",
       "FRED supplies curated release dates, not consensus, actual, prior, impact, or exact publication time.",
@@ -91,6 +94,7 @@ const HELP: Record<string, HelpContent> = {
     label: "Congress Trades",
     sections: [{ bullets: [
       "Filter by chamber, lookback window, and ticker to narrow periodic transaction reports.",
+      "Chamber and lookback controls load immediately; ticker text is not applied until you choose Apply.",
       "Disclosures can arrive up to 45 days after a transaction and are not a live feed.",
       "Amounts are reported ranges; Buy or Sell is a filing classification, not a recommendation.",
       "Check latest-date and source badges before interpreting missing or stale records.",

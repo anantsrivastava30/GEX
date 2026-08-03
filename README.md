@@ -107,6 +107,12 @@ every weekday after the close and commits the results — add a `TRADIER_TOKEN`
 repository secret to enable it. Consumers live in `quant_analysis/storage/snapshots.py`
 (`compute_oi_change`, `compute_iv_rank`, `load_contract_history`).
 
+The backend scheduler captures the configured baseline plus custom symbols saved
+in the shared Watchlists page, up to the configured snapshot capacity. Custom
+symbols require a persistent server and `SCHEDULER_ENABLED=true`; GitHub Actions
+captures only the static `config.yaml` baseline because it cannot read the
+server-local watchlist database.
+
 ## Roadmap
 
 The project is being rebuilt into an Unusual Whales–style platform (FastAPI +

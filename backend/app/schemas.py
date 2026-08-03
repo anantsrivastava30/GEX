@@ -274,6 +274,9 @@ class Watchlist(BaseModel):
 class WatchlistListResponse(BaseModel):
     workspace: Literal["shared"] = "shared"
     available_symbols: List[str]
+    snapshot_symbol_limit: int
+    scheduler_enabled: bool
+    tradier_configured: bool
     items: List[Watchlist]
 
 

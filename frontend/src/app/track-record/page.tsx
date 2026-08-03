@@ -50,6 +50,7 @@ export default function TrackRecordPage() {
   const [activeTicker, setActiveTicker] = useState("");
   const [data, setData] = useState<GammaGapOutcomesResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const controller = useRef<AbortController | null>(null);
 
   function fetchOutcomes(symbol?: string) {
@@ -66,6 +67,12 @@ export default function TrackRecordPage() {
         if (controller.current === nextController) {
           setError(cause instanceof Error ? cause.message : String(cause));
         }
+      })
+      .finally(() => {
+        if (controller.current === nextController) {
+          controller.current = null;
+          setLoading(false);
+        }
       });
   }
 
@@ -73,6 +80,7 @@ export default function TrackRecordPage() {
     // Event-handler path: reset visible state, then fetch.
     setData(null);
     setError(null);
+    setLoading(true);
     fetchOutcomes(symbol);
   }
 
@@ -117,9 +125,10 @@ export default function TrackRecordPage() {
         />
         <button
           type="submit"
-          className="rounded-md border border-accent bg-accent/15 px-4 py-1.5 text-sm text-foreground hover:bg-accent/25"
+          disabled={loading}
+          className="rounded-md border border-accent bg-accent/15 px-4 py-1.5 text-sm text-foreground hover:bg-accent/25 disabled:opacity-50"
         >
-          Apply
+          {loading ? "Loading..." : "Apply ticker filter"}
         </button>
         {activeTicker && (
           <button
@@ -143,7 +152,11 @@ export default function TrackRecordPage() {
           sub={
             summary
               ? `${summary.hits} of ${summary.decided} decided signals`
-              : "Loading…"
+              : loading
+                ? "Loading..."
+                : error
+                  ? "Unavailable"
+                  : "No decided signals"
           }
           accent
         />
@@ -200,7 +213,7 @@ export default function TrackRecordPage() {
       <Panel
         title={activeTicker ? `${activeTicker} signal log` : "Signal log"}
         right={
-          data && (
+          !loading && data && (
             <span className="font-mono text-xs text-muted">
               Most recent {rows.length} scans
             </span>
@@ -208,12 +221,15 @@ export default function TrackRecordPage() {
         }
         bodyClassName="p-0"
       >
-        {data == null && !error ? (
-          <div className="h-72 animate-pulse bg-surface-2" />
+        {loading ? (
+          <div role="status" aria-label="Loading signal history" className="h-72 animate-pulse bg-surface-2" />
+        ) : error ? (
+          <p className="px-4 py-12 text-center text-sm text-muted">Signal history could not be loaded.</p>
         ) : rows.length === 0 ? (
           <p className="px-4 py-12 text-center text-sm text-muted">
-            No logged gamma-gap signals yet. Start the scheduler during market
-            hours to build this record.
+            {activeTicker
+              ? `No logged gamma-gap signals match ${activeTicker}.`
+              : "No logged gamma-gap signals yet. Start the scheduler during market hours to build this record."}
           </p>
         ) : (
           <div className="max-h-[36rem] overflow-auto">

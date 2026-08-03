@@ -683,3 +683,54 @@ test suites were not run.
 
 **Verified:** `npm run lint`, `npm run build`, and `git diff --check` pass. No
 test files changed.
+
+### Session 11 - 2026-08-02 (flow clarity + custom snapshot symbols)
+
+- Renamed Hottest Chains to Hottest Expiration Chains and documented that each
+  row aggregates every call/put strike for one symbol and expiration. Rows now
+  fetch and scroll to a symbol/expiration-filtered strike-level contract feed.
+- Added INTC, MU, SNDK, PENG, SMH, SOXL, AVGO, and the explicitly requested
+  MRVLL symbol to the configured snapshot baseline.
+- Replaced the fixed Watchlists symbol picker with comma/space ticker entry,
+  removable chips, scheduled-symbol suggestions, and a 50-unique-symbol server
+  capacity. Symbols receive strict path-safe syntax validation but are not
+  silently corrected or assumed to be provider-valid.
+- The backend snapshot universe is now the configured baseline plus unique
+  symbols from persisted shared watchlists. Snapshot capture, cached Flow,
+  screeners, and alerts use that same dynamic universe. Removing a custom
+  symbol from every watchlist stops future captures without deleting history.
+- Added Watchlists warnings for history accrual, alert skips caused by an
+  unavailable symbol, disabled scheduling, and missing Tradier credentials.
+  Increased backend capture pacing to six seconds between symbols so the
+  expanded universe leaves more provider headroom.
+- Documented that server-custom symbols require the backend scheduler; the
+  GitHub Actions snapshot job still sees only the static config baseline.
+
+**Verified:** frontend `npm run lint` and `npm run build`, scoped Python
+`py_compile`, `docker compose config --quiet`, and `git diff --check` pass. No
+test files changed or broad test suites run.
+
+### Session 12 - 2026-08-03 (loading and empty-state clarity)
+
+- Audited every frontend route for initial loading, successful emptiness,
+  request errors, and controls that require an explicit user action.
+- Calendar and Congress now explain which controls load immediately versus
+  which ticker fields require Apply. Requests show loading rows and ellipsis
+  counts instead of blank tables or false zero results, and stale rows are
+  cleared when filters change.
+- Screener tabs now clear prior-mode results, distinguish field loading from
+  field failure, explain preset/threshold/custom execution behavior, and show
+  separate pre-run, loading, and no-match result states.
+- Flow shows initial chain/feed loading rows, labels its reload as a cached-data
+  request, and gives selected-chain requests an isolated loading/error state.
+- Watchlists, Alerts, News, and Track Record now distinguish initial loading
+  from a valid empty workspace/feed. Alerts no longer report scheduler and
+  integration settings as disabled before status loading finishes.
+- Ticker pages now distinguish expiration loading, no expirations, and request
+  failure. Gamma Gap no longer remains on Loading when a valid profile has no
+  signal, and max-pain/history panels distinguish loading from unavailable.
+- Added request identity guards where Strict Mode or superseded requests could
+  otherwise clear loading early or overwrite newer data.
+
+**Verified:** frontend `npm run lint`, `npm run build`, and `git diff --check`
+pass. No test files changed.

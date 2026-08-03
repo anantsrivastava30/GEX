@@ -19,12 +19,12 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 def capture_snapshots(
     pin: Optional[str] = Header(None, alias="X-AI-PIN", max_length=128),
 ):
-    """Capture the configured snapshot universe now.
+    """Capture the configured and shared-watchlist snapshot universe now.
 
     Runs only after the current US market session has started. Off-session
     captures are rejected because the provider can roll its expiration
     universe and overwrite the previous session with non-comparable data.
-    Synchronous; a full universe refresh takes on the order of a minute.
+    Synchronous; a full universe refresh can take several minutes.
     """
 
     verify_ai_pin(pin)

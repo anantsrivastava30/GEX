@@ -43,12 +43,13 @@ async def lifespan(app: FastAPI):
     scheduler = None
     if settings.scheduler_enabled:
         from backend.app.jobs import create_scheduler
+        from backend.app.services_watchlists import snapshot_symbols
 
         scheduler = create_scheduler()
         scheduler.start()
         logger.info(
             "Scheduler started: intraday snapshots for %s",
-            ", ".join(settings.snapshot_tickers),
+            ", ".join(snapshot_symbols()),
         )
     try:
         yield
