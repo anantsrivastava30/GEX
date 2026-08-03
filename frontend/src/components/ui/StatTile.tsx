@@ -40,7 +40,7 @@ export default function StatTile({
         accent ? "border-accent/40" : "border-border"
       }`}
     >
-      <p className="text-[11px] uppercase tracking-wide text-muted">{label}</p>
+      <p className="text-[13px] md:text-[11px] uppercase tracking-wide text-muted">{label}</p>
       <div className="mt-1.5 flex items-baseline gap-2">
         <span className="font-mono text-xl leading-none text-foreground">
           {value}

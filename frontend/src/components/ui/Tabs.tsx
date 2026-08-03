@@ -37,7 +37,7 @@ export default function Tabs({
           >
             {tab.label}
             {tab.soon && (
-              <span className="ml-1.5 rounded bg-border px-1 py-0.5 text-[9px] uppercase text-faint">
+              <span className="ml-1.5 rounded bg-border px-1 py-0.5 text-[11px] md:text-[9px] uppercase text-faint">
                 soon
               </span>
             )}

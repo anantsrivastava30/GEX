@@ -172,8 +172,8 @@ test("flow renders the cached feed and hottest chains", async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: "Options Positioning Proxy" }),
   ).toBeVisible();
-  await expect(page.getByText("Hottest Chains")).toBeVisible();
-  await expect(page.getByText("Contract-Level Feed")).toBeVisible();
+  await expect(page.getByText("Hottest Expiration Chains")).toBeVisible();
+  await expect(page.getByText("Strike-Level Contract Feed")).toBeVisible();
   await expect(page.getByText("Current cache")).toBeVisible();
   await expect(page.getByRole("cell", { name: "600.00" })).toBeVisible();
 });
