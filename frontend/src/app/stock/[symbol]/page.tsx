@@ -4,6 +4,7 @@ import { use, useEffect, useState } from "react";
 import {
   api,
   APIError,
+  CachedFlowResponse,
   Candle,
   DailyMetricsPoint,
   DeltaProjectionResponse,
@@ -22,6 +23,7 @@ import DeltaProjectionChart from "@/components/charts/DeltaProjectionChart";
 import HistoricalGexChart from "@/components/charts/HistoricalGexChart";
 import SkewChart from "@/components/charts/SkewChart";
 import TermStructureChart from "@/components/charts/TermStructureChart";
+import ProxyFeedTable from "@/components/flow/ProxyFeedTable";
 import Panel from "@/components/ui/Panel";
 import StatTile from "@/components/ui/StatTile";
 import Tabs, { Tab } from "@/components/ui/Tabs";
@@ -30,7 +32,7 @@ const TABS: Tab[] = [
   { id: "overview", label: "Overview" },
   { id: "gex", label: "GEX" },
   { id: "vol", label: "Volatility" },
-  { id: "flow", label: "Flow", soon: true },
+  { id: "flow", label: "Flow" },
 ];
 
 type ExpirationStatus = "loading" | "ready" | "empty" | "error";
@@ -84,6 +86,8 @@ function StockDataPage({ upper }: { upper: string }) {
   >(null);
   const [metrics, setMetrics] = useState<DailyMetricsPoint[] | null>(null);
   const [metricsStatus, setMetricsStatus] = useState<ResourceStatus>("loading");
+  const [flow, setFlow] = useState<CachedFlowResponse | null>(null);
+  const [flowStatus, setFlowStatus] = useState<ResourceStatus>("loading");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -211,6 +215,24 @@ function StockDataPage({ upper }: { upper: string }) {
     return () => controller.abort();
   }, [upper, selected]);
 
+  // The proxy feed is cache-only on the backend, so refetching on each tab
+  // entry is cheap and picks up fresh intraday snapshots. The tab-change
+  // handler resets flow state to loading before this runs.
+  useEffect(() => {
+    if (tab !== "flow") return;
+    const controller = new AbortController();
+    api
+      .flowFeed(200, controller.signal, upper)
+      .then((result) => {
+        setFlow(result);
+        setFlowStatus("ready");
+      })
+      .catch((e) => {
+        if (e.name !== "AbortError") setFlowStatus("error");
+      });
+    return () => controller.abort();
+  }, [upper, tab]);
+
   function clearPrimaryExpirationData() {
     setError(null);
     setExposure(null);
@@ -312,7 +334,17 @@ function StockDataPage({ upper }: { upper: string }) {
       </div>
       <p className="text-xs text-faint">Quote, price history, expirations, and the nearest-expiration analytics load automatically.</p>
 
-      <Tabs tabs={TABS} active={tab} onChange={setTab} />
+      <Tabs
+        tabs={TABS}
+        active={tab}
+        onChange={(id) => {
+          if (id === "flow") {
+            setFlow(null);
+            setFlowStatus("loading");
+          }
+          setTab(id);
+        }}
+      />
 
       {error && (
         <p className="rounded-md border border-border bg-surface px-4 py-3 text-sm text-muted">
@@ -320,7 +352,7 @@ function StockDataPage({ upper }: { upper: string }) {
         </p>
       )}
 
-      {(tab !== "overview" || expirationStatus === "error") && expirationStatus !== "ready" && (
+      {(!["overview", "flow"].includes(tab) || expirationStatus === "error") && expirationStatus !== "ready" && (
         <p role={expirationStatus === "error" ? "alert" : "status"} className={`rounded border px-4 py-3 text-sm ${expirationStatus === "error" ? "border-rose-500/50 text-rose-300" : "border-border bg-surface text-muted"}`}>
           {expirationStatus === "loading"
             ? "Loading option expirations..."
@@ -331,7 +363,7 @@ function StockDataPage({ upper }: { upper: string }) {
       )}
 
       {/* Expiration selector (chain-driven views) */}
-      {expirations.length > 0 && tab !== "overview" && (
+      {expirations.length > 0 && !["overview", "flow"].includes(tab) && (
         <div className="space-y-2">
           <div className="flex flex-wrap gap-2">
             {expirations.slice(0, 8).map((exp) => {
@@ -811,6 +843,46 @@ function StockDataPage({ upper }: { upper: string }) {
             )}
           </Panel>
         </div>
+      )}
+
+      {tab === "flow" && (
+        <Panel
+          title="Positioning Proxy Feed"
+          right={
+            <span className="font-mono text-xs text-muted">
+              {flowStatus === "loading"
+                ? "Loading..."
+                : `${flow?.rows.length ?? 0} contracts`}
+            </span>
+          }
+          bodyClassName="p-0"
+        >
+          <p className="border-b border-border px-4 py-3 text-xs leading-5 text-muted">
+            Snapshot-derived positioning proxy, not a live trade tape. Contracts
+            are ranked by volume/OI, day-over-day OI change, and IV change from
+            this app&apos;s own snapshots, so it shows where unusual positioning
+            accumulated. Trade direction, aggressor side, sweeps, blocks, and
+            0DTE activity require licensed trade-tape data (planned; see
+            docs/FLOW_DATA.md in the repo).
+          </p>
+          {flowStatus === "error" ? (
+            <p role="alert" className="px-4 py-8 text-center text-sm text-rose-300">
+              Unable to load the cached proxy feed for {upper}.
+            </p>
+          ) : flowStatus === "loading" ? (
+            <p role="status" className="px-4 py-8 text-center text-sm text-muted">
+              Loading cached proxy rows…
+            </p>
+          ) : flow && flow.rows.length === 0 ? (
+            <p className="px-4 py-8 text-center text-sm text-muted">
+              No cached proxy rows for {upper}. The feed covers only symbols in
+              the snapshot universe (config watchlist plus server watchlists)
+              and needs at least one captured snapshot.
+            </p>
+          ) : flow ? (
+            <ProxyFeedTable data={flow} />
+          ) : null}
+        </Panel>
       )}
     </div>
   );
