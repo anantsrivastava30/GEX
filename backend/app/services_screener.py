@@ -24,38 +24,53 @@ _COMPARATORS: Dict[str, Callable[[Any, Any], Any]] = {
 }
 _NUMERIC_OPERATORS = ["eq", "ne", "gt", "gte", "lt", "lte"]
 _EQUALITY_OPERATORS = ["eq", "ne"]
+_LOWERCASE_FIELDS = {"symbol", "option_type", "sma_50_cross", "sma_200_cross"}
 
 FIELD_SPECS: List[Dict[str, Any]] = [
-    {"name": "symbol", "label": "Symbol", "type": "string", "scopes": ["contract", "ticker"], "operators": _EQUALITY_OPERATORS},
+    {"name": "symbol", "label": "Symbol", "type": "string", "scopes": ["contract", "ticker"], "operators": _EQUALITY_OPERATORS, "description": "Narrow the selected watchlist to one ticker.", "example": "NVDA"},
     {"name": "expiration_date", "label": "Expiration", "type": "date", "scopes": ["contract"], "operators": _EQUALITY_OPERATORS},
-    {"name": "option_type", "label": "Option side", "type": "string", "scopes": ["contract"], "operators": _EQUALITY_OPERATORS},
+    {"name": "option_type", "label": "Option side", "type": "string", "scopes": ["contract"], "operators": _EQUALITY_OPERATORS, "description": "Match call or put contracts.", "choices": ["call", "put"]},
     {"name": "strike", "label": "Strike", "type": "number", "scopes": ["contract"], "operators": _NUMERIC_OPERATORS},
     {"name": "dte", "label": "DTE", "type": "number", "scopes": ["contract"], "operators": _NUMERIC_OPERATORS},
     {"name": "volume", "label": "Volume", "type": "number", "scopes": ["contract"], "operators": _NUMERIC_OPERATORS},
     {"name": "open_interest", "label": "Open interest", "type": "number", "scopes": ["contract"], "operators": _NUMERIC_OPERATORS},
-    {"name": "volume_oi", "label": "Vol/OI", "type": "number", "scopes": ["contract"], "operators": _NUMERIC_OPERATORS},
-    {"name": "mid_iv", "label": "Implied volatility", "type": "number", "scopes": ["contract"], "operators": _NUMERIC_OPERATORS},
+    {"name": "volume_oi", "label": "Vol/OI", "type": "number", "scopes": ["contract"], "operators": _NUMERIC_OPERATORS, "description": "Session volume divided by current open interest. A value of 2 means volume is twice OI.", "unit": "ratio", "example": 2},
+    {"name": "mid_iv", "label": "Implied volatility", "type": "number", "scopes": ["contract"], "operators": _NUMERIC_OPERATORS, "description": "Contract IV as a decimal. Enter 0.50 for 50%.", "unit": "decimal", "example": 0.5},
     {"name": "delta", "label": "Delta", "type": "number", "scopes": ["contract"], "operators": _NUMERIC_OPERATORS},
     {"name": "gamma", "label": "Gamma", "type": "number", "scopes": ["contract"], "operators": _NUMERIC_OPERATORS},
-    {"name": "oi_change", "label": "OI change", "type": "number", "scopes": ["contract"], "operators": _NUMERIC_OPERATORS},
-    {"name": "abs_oi_change", "label": "Absolute OI change", "type": "number", "scopes": ["contract"], "operators": _NUMERIC_OPERATORS},
-    {"name": "iv_change", "label": "IV change", "type": "number", "scopes": ["contract"], "operators": _NUMERIC_OPERATORS},
-    {"name": "abs_iv_change", "label": "Absolute IV change", "type": "number", "scopes": ["contract"], "operators": _NUMERIC_OPERATORS},
+    {"name": "oi_change", "label": "OI change", "type": "number", "scopes": ["contract"], "operators": _NUMERIC_OPERATORS, "description": "Change from the previous market session.", "requires_history": True},
+    {"name": "abs_oi_change", "label": "Absolute OI change", "type": "number", "scopes": ["contract"], "operators": _NUMERIC_OPERATORS, "description": "Magnitude of the change from the previous market session.", "requires_history": True},
+    {"name": "iv_change", "label": "IV change", "type": "number", "scopes": ["contract"], "operators": _NUMERIC_OPERATORS, "description": "Decimal IV change from the previous market session.", "unit": "decimal", "requires_history": True},
+    {"name": "abs_iv_change", "label": "Absolute IV change", "type": "number", "scopes": ["contract"], "operators": _NUMERIC_OPERATORS, "description": "Magnitude of decimal IV change from the previous market session.", "unit": "decimal", "requires_history": True},
     {"name": "spot", "label": "Spot", "type": "number", "scopes": ["ticker"], "operators": _NUMERIC_OPERATORS},
     {"name": "call_volume", "label": "Call volume", "type": "number", "scopes": ["ticker"], "operators": _NUMERIC_OPERATORS},
     {"name": "put_volume", "label": "Put volume", "type": "number", "scopes": ["ticker"], "operators": _NUMERIC_OPERATORS},
     {"name": "call_oi", "label": "Call OI", "type": "number", "scopes": ["ticker"], "operators": _NUMERIC_OPERATORS},
     {"name": "put_oi", "label": "Put OI", "type": "number", "scopes": ["ticker"], "operators": _NUMERIC_OPERATORS},
-    {"name": "pc_volume_ratio", "label": "Put/call volume", "type": "number", "scopes": ["ticker"], "operators": _NUMERIC_OPERATORS},
-    {"name": "pc_oi_ratio", "label": "Put/call OI", "type": "number", "scopes": ["ticker"], "operators": _NUMERIC_OPERATORS},
-    {"name": "atm_iv", "label": "ATM IV", "type": "number", "scopes": ["ticker"], "operators": _NUMERIC_OPERATORS},
+    {"name": "pc_volume_ratio", "label": "Put/call volume", "type": "number", "scopes": ["ticker"], "operators": _NUMERIC_OPERATORS, "description": "Put volume divided by call volume. Above 1 means more put volume.", "unit": "ratio", "example": 1.25},
+    {"name": "pc_oi_ratio", "label": "Put/call OI", "type": "number", "scopes": ["ticker"], "operators": _NUMERIC_OPERATORS, "description": "Put open interest divided by call open interest.", "unit": "ratio", "example": 1.25},
+    {"name": "atm_iv", "label": "ATM IV", "type": "number", "scopes": ["ticker"], "operators": _NUMERIC_OPERATORS, "description": "Nearest-expiration at-the-money IV as a decimal. Enter 0.30 for 30%.", "unit": "decimal", "example": 0.3},
     {"name": "net_gex_total", "label": "Net GEX", "type": "number", "scopes": ["ticker"], "operators": _NUMERIC_OPERATORS},
     {"name": "gamma_magnet_strike", "label": "Gamma magnet", "type": "number", "scopes": ["ticker"], "operators": _NUMERIC_OPERATORS},
-    {"name": "gamma_gap_distance", "label": "Gamma-gap distance", "type": "number", "scopes": ["ticker"], "operators": _NUMERIC_OPERATORS},
-    {"name": "gamma_gap_score", "label": "Gamma-gap score", "type": "number", "scopes": ["ticker"], "operators": _NUMERIC_OPERATORS},
-    {"name": "gamma_positive_zone", "label": "Positive gamma zone", "type": "boolean", "scopes": ["ticker"], "operators": _EQUALITY_OPERATORS},
+    {"name": "gamma_gap_distance", "label": "Gamma-gap distance", "type": "number", "scopes": ["ticker"], "operators": _NUMERIC_OPERATORS, "description": "Magnet minus spot in price points. Positive values place the magnet above spot.", "unit": "price points", "example": 2},
+    {"name": "gamma_gap_score", "label": "Gamma-gap score", "type": "number", "scopes": ["ticker"], "operators": _NUMERIC_OPERATORS, "description": "Internal magnet score from 0 to 120. Higher values indicate a stronger nearby setup.", "unit": "0-120", "example": 25},
+    {"name": "gamma_positive_zone", "label": "Positive gamma zone", "type": "boolean", "scopes": ["ticker"], "operators": _EQUALITY_OPERATORS, "description": "Whether the local strike region around spot has positive net gamma."},
+    {"name": "sma_50", "label": "50-day SMA", "type": "number", "scopes": ["ticker"], "operators": _NUMERIC_OPERATORS, "description": "Rolling 50-session average using completed Tradier closes and the latest snapshot spot.", "unit": "price", "requires_history": True, "history_requirement": "Requires 50 completed daily closes."},
+    {"name": "price_vs_sma_50_pct", "label": "Price vs 50-day SMA", "type": "number", "scopes": ["ticker"], "operators": _NUMERIC_OPERATORS, "description": "Latest spot percentage above or below the rolling 50-day average.", "unit": "percent", "example": 0, "requires_history": True, "history_requirement": "Requires 50 completed daily closes."},
+    {"name": "sma_50_cross", "label": "Price crossed 50-day SMA", "type": "string", "scopes": ["ticker"], "operators": _EQUALITY_OPERATORS, "description": "Above or below when price moved across the 50-day average since the prior completed close.", "choices": ["above", "below"], "requires_history": True, "history_requirement": "Requires 50 completed daily closes."},
+    {"name": "sma_200", "label": "200-day SMA", "type": "number", "scopes": ["ticker"], "operators": _NUMERIC_OPERATORS, "description": "Rolling 200-session average using completed Tradier closes and the latest snapshot spot.", "unit": "price", "requires_history": True, "history_requirement": "Requires 200 completed daily closes."},
+    {"name": "price_vs_sma_200_pct", "label": "Price vs 200-day SMA", "type": "number", "scopes": ["ticker"], "operators": _NUMERIC_OPERATORS, "description": "Latest spot percentage above or below the rolling 200-day average.", "unit": "percent", "example": 0, "requires_history": True, "history_requirement": "Requires 200 completed daily closes."},
+    {"name": "sma_200_cross", "label": "Price crossed 200-day SMA", "type": "string", "scopes": ["ticker"], "operators": _EQUALITY_OPERATORS, "description": "Above or below when price moved across the 200-day average since the prior completed close.", "choices": ["above", "below"], "requires_history": True, "history_requirement": "Requires 200 completed daily closes."},
 ]
 _FIELD_BY_NAME = {spec["name"]: spec for spec in FIELD_SPECS}
+_SMA_FIELD_WINDOWS = {
+    "sma_50": 50,
+    "price_vs_sma_50_pct": 50,
+    "sma_50_cross": 50,
+    "sma_200": 200,
+    "price_vs_sma_200_pct": 200,
+    "sma_200_cross": 200,
+}
 
 _METHODOLOGY = {
     "high_vol_oi": (
@@ -134,10 +149,11 @@ def _custom_contracts(
 
 
 def _custom_ticker_metrics(
-    symbols: List[str], base_dir: Path
-) -> tuple[pd.DataFrame, List[str]]:
+    symbols: List[str], base_dir: Path, technical_windows: set[int]
+) -> tuple[pd.DataFrame, List[str], List[str]]:
     rows = []
     unavailable = []
+    technical_unavailable = []
     for symbol in symbols:
         metric, snapshot_date = _latest_metric(symbol, base_dir)
         if metric is None or snapshot_date is None:
@@ -150,8 +166,15 @@ def _custom_ticker_metrics(
         row["gamma_positive_zone"] = (
             None if positive_zone is None or pd.isna(positive_zone) else bool(positive_zone)
         )
+        if technical_windows:
+            from backend.app.services_technicals import get_sma_metrics
+
+            technical, ready_windows = get_sma_metrics(symbol, row.get("spot"))
+            row.update(technical)
+            if not technical_windows.issubset(ready_windows):
+                technical_unavailable.append(symbol)
         rows.append(row)
-    return pd.DataFrame(rows), unavailable
+    return pd.DataFrame(rows), unavailable, technical_unavailable
 
 
 def _coerce_condition_value(spec: Dict[str, Any], value: Any) -> Any:
@@ -168,7 +191,10 @@ def _coerce_condition_value(spec: Dict[str, Any], value: Any) -> Any:
         if str(value).lower() in {"false", "0", "no"}:
             return False
         raise ValueError(f"{spec['label']} requires true or false")
-    return str(value).lower() if spec["name"] in {"symbol", "option_type"} else str(value)
+    text = str(value).strip()
+    if not text:
+        raise ValueError(f"{spec['label']} requires a value")
+    return text.lower() if spec["name"] in _LOWERCASE_FIELDS else text
 
 
 def _apply_conditions(
@@ -192,7 +218,7 @@ def _apply_conditions(
             series = pd.to_numeric(series, errors="coerce")
         elif spec["type"] == "boolean":
             series = series.astype("boolean")
-        elif spec["name"] in {"symbol", "option_type"}:
+        elif spec["name"] in _LOWERCASE_FIELDS:
             series = series.astype(str).str.lower()
         mask = _COMPARATORS[condition.operator](series, value)
         work = work[(mask & available).fillna(False)]
@@ -218,6 +244,15 @@ def run_custom_screener(request: Any) -> Dict[str, Any]:
     )
     selected = [symbol for symbol in requested if symbol in configured]
     unavailable = [symbol for symbol in requested if symbol not in configured]
+    requested_fields = {condition.field for condition in request.conditions}
+    if request.sort:
+        requested_fields.add(request.sort.field)
+    technical_windows = {
+        _SMA_FIELD_WINDOWS[field]
+        for field in requested_fields
+        if field in _SMA_FIELD_WINDOWS
+    }
+    technical_unavailable: List[str] = []
     base_dir = _snapshot_dir()
 
     if request.scope == "contract":
@@ -230,7 +265,9 @@ def run_custom_screener(request: Any) -> Dict[str, Any]:
             frames.append(frame)
         work = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     else:
-        work, missing = _custom_ticker_metrics(selected, base_dir)
+        work, missing, technical_unavailable = _custom_ticker_metrics(
+            selected, base_dir, technical_windows
+        )
         unavailable.extend(missing)
 
     source_dates = [
@@ -290,6 +327,9 @@ def run_custom_screener(request: Any) -> Dict[str, Any]:
         or bool(unavailable)
         or any(value != current_date for value in source_dates),
         "unavailable_symbols": list(dict.fromkeys(unavailable)),
+        "technical_unavailable_symbols": list(
+            dict.fromkeys(technical_unavailable)
+        ),
         "methodology": (
             "Filtered from the latest persisted option snapshots. No live chain scan was performed."
         ),

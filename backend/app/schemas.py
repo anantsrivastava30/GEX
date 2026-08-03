@@ -179,6 +179,12 @@ class ScreenerFieldSpec(BaseModel):
     type: Literal["number", "string", "boolean", "date"]
     scopes: List[Literal["contract", "ticker"]]
     operators: List[Literal["eq", "ne", "gt", "gte", "lt", "lte"]]
+    description: Optional[str] = None
+    unit: Optional[str] = None
+    example: Optional[Any] = None
+    choices: Optional[List[str]] = None
+    requires_history: bool = False
+    history_requirement: Optional[str] = None
 
 
 class ScreenerFieldsResponse(BaseModel):
@@ -216,6 +222,7 @@ class CustomScreenerResponse(BaseModel):
     as_of: Optional[str] = None
     stale: bool
     unavailable_symbols: List[str]
+    technical_unavailable_symbols: List[str] = Field(default_factory=list)
     methodology: str
     rows: List[CustomScreenerRow]
 
@@ -283,7 +290,7 @@ class WatchlistListResponse(BaseModel):
 class AlertRuleMutation(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     enabled: bool = True
-    watchlist_id: int = Field(ge=1)
+    watchlist_id: Optional[int] = Field(default=None, ge=1)
     query: CustomScreenerRequest
     notify_discord: bool = False
     notify_email: bool = False
@@ -293,7 +300,7 @@ class AlertRule(BaseModel):
     id: int
     name: str
     enabled: bool
-    watchlist_id: int
+    watchlist_id: Optional[int] = None
     watchlist_name: str
     query: CustomScreenerRequest
     notify_discord: bool

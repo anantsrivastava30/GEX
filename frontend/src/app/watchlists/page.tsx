@@ -4,8 +4,15 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import Panel from "@/components/ui/Panel";
 import { api, Watchlist, WatchlistListResponse } from "@/lib/api";
 
+const STARTER_LISTS = [
+  { name: "Index pulse", symbols: ["SPY", "QQQ", "IWM", "DIA"] },
+  { name: "Semiconductors", symbols: ["NVDA", "AMD", "AVGO", "INTC", "MU", "MRVL", "SMH"] },
+  { name: "Mega-cap tech", symbols: ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA"] },
+];
+
 export default function WatchlistsPage() {
   const loadSequence = useRef(0);
+  const formRef = useRef<HTMLDivElement>(null);
   const [data, setData] = useState<WatchlistListResponse | null>(null);
   const [editing, setEditing] = useState<Watchlist | null>(null);
   const [name, setName] = useState("");
@@ -60,6 +67,15 @@ export default function WatchlistsPage() {
     setError(null);
   }
 
+  function applyStarterList(starter: (typeof STARTER_LISTS)[number]) {
+    setEditing(null);
+    setName(starter.name);
+    setSymbols(starter.symbols);
+    setSymbolInput("");
+    setError(null);
+    formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   function save() {
     setError(null);
     startTransition(async () => {
@@ -94,9 +110,17 @@ export default function WatchlistsPage() {
       <div>
         <h1 className="text-lg font-semibold">Watchlists</h1>
         <p className="mt-1 max-w-3xl text-sm text-muted">
-          Persisted symbol groups for snapshot screens and alert rules. Add any ticker-shaped symbol; custom entries join the server&apos;s scheduled capture universe.
+          Group related symbols by the market question you want to monitor. A watchlist defines an alert&apos;s audience, but it does not trigger notifications by itself.
         </p>
       </div>
+
+      <Panel title="How watchlists work">
+        <div className="grid gap-3 text-sm md:grid-cols-3">
+          <div><p className="font-medium text-foreground">1. Choose a purpose</p><p className="mt-1 text-xs text-muted">Use a focused theme such as index risk, semiconductors, or your active holdings.</p></div>
+          <div><p className="font-medium text-foreground">2. Accumulate snapshots</p><p className="mt-1 text-xs text-muted">The server adds these symbols to scheduled option-chain captures. New symbols become useful after their first capture.</p></div>
+          <div><p className="font-medium text-foreground">3. Create a rule</p><p className="mt-1 text-xs text-muted">Choose Create alert on a saved list, select a starter condition, and preview current matches before saving.</p></div>
+        </div>
+      </Panel>
 
       <p className="rounded border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs text-amber-200">
         Shared server workspace: every connected browser can view these lists, while changes require the server workspace PIN.
@@ -112,17 +136,19 @@ export default function WatchlistsPage() {
       {data && !data.scheduler_enabled && <p className="rounded border border-rose-500/40 bg-rose-500/5 px-3 py-2 text-xs text-rose-200">The server snapshot scheduler is disabled. Custom symbols can be saved, but they will not accrue snapshots until scheduled capture is enabled.</p>}
       {data?.scheduler_enabled && !data.tradier_configured && <p className="rounded border border-rose-500/40 bg-rose-500/5 px-3 py-2 text-xs text-rose-200">The snapshot scheduler is enabled, but Tradier credentials are missing. No symbols will accrue snapshots until `TRADIER_TOKEN` is configured.</p>}
 
-      <label className="block max-w-xs text-xs text-muted">Workspace PIN<input type="password" value={pin} onChange={(event) => setPin(event.target.value)} maxLength={128} autoComplete="current-password" className="mt-1 w-full rounded border border-border bg-surface px-2 py-1.5 text-sm text-foreground" /></label>
+      <label className="block max-w-xs text-xs text-muted">Workspace PIN<input type="password" value={pin} onChange={(event) => setPin(event.target.value)} maxLength={128} autoComplete="current-password" className="mt-1 w-full rounded border border-border bg-surface px-2 py-1.5 text-sm text-foreground" /><span className="mt-1 block text-[12px] text-faint">The server operator provides this PIN. It is required only when saving changes.</span></label>
 
       {error && <p className="rounded border border-rose-500/50 px-3 py-2 text-sm text-rose-300">{error}</p>}
 
       <div className="grid gap-4 xl:grid-cols-[22rem_1fr]">
+        <div ref={formRef} className="scroll-mt-4">
         <Panel title={editing ? `Edit ${editing.name}` : "New watchlist"}>
           <fieldset disabled={pending || loading} className="space-y-3 disabled:opacity-70">
+            {!editing && <div><p className="mb-2 text-xs text-muted">Start with a focused example</p><div className="flex flex-wrap gap-2">{STARTER_LISTS.map((starter) => <button key={starter.name} type="button" onClick={() => applyStarterList(starter)} className="rounded-full border border-border px-2.5 py-1 text-xs text-muted hover:border-accent hover:text-foreground">{starter.name}</button>)}</div></div>}
             <label className="block text-xs text-muted">Name<input value={name} onChange={(event) => setName(event.target.value)} maxLength={64} className="mt-1 w-full rounded border border-border bg-surface-2 px-2 py-1.5 text-sm text-foreground" /></label>
             <div>
               <div className="mb-2 flex items-center justify-between gap-2 text-xs text-muted">
-                <span>Monitored symbols</span>
+                <span>Symbols this list will monitor</span>
                 <span className="font-mono">{loading ? "... scheduled" : `${data?.available_symbols.length ?? 0}/${data?.snapshot_symbol_limit ?? 50} scheduled`}</span>
               </div>
               <div className="flex gap-2">
@@ -146,14 +172,15 @@ export default function WatchlistsPage() {
             </div>
           </fieldset>
         </Panel>
+        </div>
 
         <Panel title="Saved watchlists" right={<span className="font-mono text-xs text-muted">{loading ? "..." : `${data?.items.length ?? 0} lists`}</span>} bodyClassName="p-0">
           <div className="divide-y divide-border">
             {loading && <p className="px-4 py-10 text-center text-sm text-muted">Loading watchlists...</p>}
             {(data?.items ?? []).map((item) => (
               <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-                <div><p className="font-medium text-foreground">{item.name}</p><div className="mt-1 flex flex-wrap gap-1">{item.symbols.map((symbol) => <span key={symbol} className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-xs text-muted">{symbol}</span>)}</div></div>
-                <div className="flex gap-2"><button disabled={pending} onClick={() => { setEditing(item); setName(item.name); setSymbols(item.symbols); setSymbolInput(""); }} className="rounded border border-border px-2 py-1 text-xs text-muted hover:text-foreground disabled:opacity-40">Edit</button><button disabled={pending || !pin} onClick={() => remove(item)} className="rounded border border-border px-2 py-1 text-xs text-muted hover:text-negative disabled:opacity-40">Delete</button></div>
+                <div><div className="flex flex-wrap items-center gap-2"><p className="font-medium text-foreground">{item.name}</p><span className="text-[12px] text-faint">{item.symbols.length} symbols</span></div><div className="mt-1 flex flex-wrap gap-1">{item.symbols.map((symbol) => <span key={symbol} className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-xs text-muted">{symbol}</span>)}</div></div>
+                <div className="flex flex-wrap gap-2"><a href={`/alerts?watchlist=${item.id}`} className="rounded border border-accent bg-accent/10 px-2 py-1 text-xs text-foreground hover:bg-accent/20">Create alert</a><button disabled={pending} onClick={() => { setEditing(item); setName(item.name); setSymbols(item.symbols); setSymbolInput(""); formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }} className="rounded border border-border px-2 py-1 text-xs text-muted hover:text-foreground disabled:opacity-40">Edit</button><button disabled={pending || !pin} onClick={() => remove(item)} className="rounded border border-border px-2 py-1 text-xs text-muted hover:text-negative disabled:opacity-40">Delete</button></div>
               </div>
             ))}
             {!loading && !error && data && !data.items.length && <p className="px-4 py-10 text-center text-sm text-muted">No saved watchlists yet. Create one using the form.</p>}

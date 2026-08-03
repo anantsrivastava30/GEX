@@ -222,6 +222,12 @@ export interface ScreenerFieldSpec {
   type: "number" | "string" | "boolean" | "date";
   scopes: ScreenerScope[];
   operators: ScreenerOperator[];
+  description?: string | null;
+  unit?: string | null;
+  example?: string | number | boolean | null;
+  choices?: string[] | null;
+  requires_history?: boolean;
+  history_requirement?: string | null;
 }
 
 export interface ScreenerCondition {
@@ -250,6 +256,7 @@ export interface CustomScreenerResponse {
   as_of?: string | null;
   stale: boolean;
   unavailable_symbols: string[];
+  technical_unavailable_symbols: string[];
   methodology: string;
   rows: CustomScreenerRow[];
 }
@@ -315,7 +322,7 @@ export interface WatchlistListResponse {
 export interface AlertRuleMutation {
   name: string;
   enabled: boolean;
-  watchlist_id: number;
+  watchlist_id?: number | null;
   query: CustomScreenerRequest;
   notify_discord: boolean;
   notify_email: boolean;

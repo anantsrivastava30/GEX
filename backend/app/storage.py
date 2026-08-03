@@ -31,6 +31,49 @@ def connection() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def _migrate_nullable_alert_watchlist(conn: sqlite3.Connection) -> None:
+    columns = {
+        row[1]: row for row in conn.execute("PRAGMA table_info(alert_rules)").fetchall()
+    }
+    watchlist_column = columns.get("watchlist_id")
+    if watchlist_column is None or not watchlist_column[3]:
+        return
+
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.executescript(
+            """
+            BEGIN;
+            CREATE TABLE alert_rules_new (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                enabled INTEGER NOT NULL,
+                watchlist_id INTEGER,
+                query_json TEXT NOT NULL,
+                notify_discord INTEGER NOT NULL,
+                notify_email INTEGER NOT NULL,
+                version INTEGER NOT NULL DEFAULT 1,
+                last_evaluated_at TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (watchlist_id) REFERENCES watchlists(id) ON DELETE RESTRICT
+            );
+            INSERT INTO alert_rules_new
+            SELECT * FROM alert_rules;
+            DROP TABLE alert_rules;
+            ALTER TABLE alert_rules_new RENAME TO alert_rules;
+            COMMIT;
+            """
+        )
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        raise RuntimeError("Alert-rule storage migration violated foreign keys")
+
+
 def init_app_storage() -> None:
     with connection() as conn:
         conn.execute("PRAGMA journal_mode = WAL")
@@ -48,7 +91,7 @@ def init_app_storage() -> None:
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL,
                 enabled INTEGER NOT NULL,
-                watchlist_id INTEGER NOT NULL,
+                watchlist_id INTEGER,
                 query_json TEXT NOT NULL,
                 notify_discord INTEGER NOT NULL,
                 notify_email INTEGER NOT NULL,
@@ -89,8 +132,20 @@ def init_app_storage() -> None:
             ON alert_events(read_at, created_at DESC);
             CREATE INDEX IF NOT EXISTS alert_events_rule_idx
             ON alert_events(alert_rule_id, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS daily_price_bars (
+                symbol TEXT NOT NULL,
+                session_date TEXT NOT NULL,
+                close REAL NOT NULL,
+                provider TEXT NOT NULL,
+                fetched_at TEXT NOT NULL,
+                PRIMARY KEY (symbol, session_date)
+            );
+            CREATE INDEX IF NOT EXISTS daily_price_bars_date_idx
+            ON daily_price_bars(session_date, symbol);
             """
         )
+        _migrate_nullable_alert_watchlist(conn)
         columns = {
             row[1] for row in conn.execute("PRAGMA table_info(alert_events)").fetchall()
         }
@@ -129,6 +184,54 @@ def ensure_default_watchlist(symbols: List[str]) -> None:
             "INSERT INTO watchlists(name, symbols_json, created_at, updated_at) VALUES (?, ?, ?, ?)",
             ("Default", json.dumps(symbols), now, now),
         )
+
+
+def latest_daily_price_date(symbol: str) -> Optional[str]:
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT MAX(session_date) FROM daily_price_bars WHERE symbol = ?",
+            (symbol.upper(),),
+        ).fetchone()
+    return str(row[0]) if row and row[0] else None
+
+
+def upsert_daily_price_bars(symbol: str, rows: List[Dict[str, Any]]) -> int:
+    if not rows:
+        return 0
+    fetched_at = _now()
+    values = [
+        (symbol.upper(), row["date"], row["close"], "tradier", fetched_at)
+        for row in rows
+    ]
+    with connection() as conn:
+        conn.executemany(
+            """
+            INSERT INTO daily_price_bars(
+                symbol, session_date, close, provider, fetched_at
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(symbol, session_date) DO UPDATE SET
+                close = excluded.close,
+                provider = excluded.provider,
+                fetched_at = excluded.fetched_at
+            """,
+            values,
+        )
+    return len(values)
+
+
+def load_daily_closes(symbol: str, limit: int = 200) -> List[Dict[str, Any]]:
+    with connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT session_date AS date, close
+            FROM daily_price_bars
+            WHERE symbol = ?
+            ORDER BY session_date DESC
+            LIMIT ?
+            """,
+            (symbol.upper(), limit),
+        ).fetchall()
+    return [dict(row) for row in reversed(rows)]
 
 
 def create_watchlist(name: str, symbols: List[str]) -> Dict[str, Any]:
@@ -178,8 +281,8 @@ def _rule(row: sqlite3.Row) -> Dict[str, Any]:
 
 
 _RULE_SELECT = """
-    SELECT r.*, w.name AS watchlist_name
-    FROM alert_rules r JOIN watchlists w ON w.id = r.watchlist_id
+    SELECT r.*, COALESCE(w.name, 'All scheduled symbols') AS watchlist_name
+    FROM alert_rules r LEFT JOIN watchlists w ON w.id = r.watchlist_id
 """
 
 

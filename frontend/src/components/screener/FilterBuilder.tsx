@@ -18,8 +18,16 @@ const OPERATOR_LABELS = {
 
 function defaultValue(field?: ScreenerFieldSpec): string | number | boolean {
   if (field?.type === "boolean") return true;
-  if (field?.type === "number") return 0;
+  if (field?.example != null) return field.example;
+  if (field?.choices?.length) return field.choices[0];
+  if (field?.type === "number") return "";
   return "";
+}
+
+function preferredField(fields: ScreenerFieldSpec[], scope: ScreenerScope) {
+  const preferred = scope === "contract" ? "volume_oi" : "gamma_gap_score";
+  return fields.find((field) => field.name === preferred && field.scopes.includes(scope))
+    ?? fields.find((field) => field.scopes.includes(scope));
 }
 
 export default function FilterBuilder({
@@ -37,7 +45,7 @@ export default function FilterBuilder({
   const sortable = available;
 
   function changeScope(scope: ScreenerScope) {
-    const first = fields.find((field) => field.scopes.includes(scope));
+    const first = preferredField(fields, scope);
     onChange({
       scope,
       conditions: first
@@ -58,7 +66,9 @@ export default function FilterBuilder({
   }
 
   function addCondition() {
-    const field = available[0];
+    const field = available.find(
+      (candidate) => !value.conditions.some((condition) => condition.field === candidate.name),
+    ) ?? available[0];
     if (!field || value.conditions.length >= 12) return;
     onChange({
       ...value,
@@ -95,14 +105,16 @@ export default function FilterBuilder({
         </div>
       )}
 
+      <p className="text-xs text-muted">
+        Every condition below must match. Sorting only controls which matches appear first.
+      </p>
+
       <div className="space-y-2">
         {value.conditions.map((condition, index) => {
           const field = available.find((item) => item.name === condition.field);
           return (
-            <div
-              key={`${index}-${condition.field}`}
-              className="grid gap-2 sm:grid-cols-[minmax(10rem,1fr)_5rem_minmax(8rem,1fr)_auto]"
-            >
+            <div key={`${index}-${condition.field}`} className="space-y-1">
+              <div className="grid gap-2 sm:grid-cols-[minmax(10rem,1fr)_5rem_minmax(8rem,1fr)_auto]">
               <select
                 aria-label={`Condition ${index + 1} field`}
                 value={condition.field}
@@ -157,18 +169,28 @@ export default function FilterBuilder({
                   <option value="true">True</option>
                   <option value="false">False</option>
                 </select>
+              ) : field?.choices?.length ? (
+                <select
+                  aria-label={`Condition ${index + 1} value`}
+                  value={String(condition.value)}
+                  onChange={(event) => updateCondition(index, { ...condition, value: event.target.value })}
+                  className="rounded border border-border bg-surface px-2 py-1.5 text-sm"
+                >
+                  {field.choices.map((choice) => <option key={choice} value={choice}>{choice.toUpperCase()}</option>)}
+                </select>
               ) : (
                 <input
                   aria-label={`Condition ${index + 1} value`}
                   type={field?.type === "number" ? "number" : field?.type === "date" ? "date" : "text"}
                   step={field?.type === "number" ? "any" : undefined}
+                  placeholder={field?.example == null ? undefined : String(field.example)}
                   value={String(condition.value)}
                   onChange={(event) =>
                     updateCondition(index, {
                       ...condition,
-                      value:
-                        field?.type === "number"
-                          ? Number(event.target.value)
+                        value:
+                          field?.type === "number"
+                          ? event.target.value === "" ? "" : Number(event.target.value)
                           : event.target.value,
                     })
                   }
@@ -187,6 +209,12 @@ export default function FilterBuilder({
               >
                 Remove
               </button>
+              </div>
+              {(field?.description || field?.requires_history) && (
+                <p className="text-[12px] text-faint">
+                  {field.description}{field.history_requirement ? ` ${field.history_requirement}` : field.requires_history ? " Requires two consecutive market-session snapshots." : ""}
+                </p>
+              )}
             </div>
           );
         })}

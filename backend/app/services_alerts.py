@@ -42,7 +42,9 @@ def get_alert_status() -> Dict[str, Any]:
 
 
 def _validated_rule(request: AlertRuleMutation) -> Dict[str, Any]:
-    if not storage.get_watchlist(request.watchlist_id):
+    if request.watchlist_id is not None and not storage.get_watchlist(
+        request.watchlist_id
+    ):
         raise ValueError("Watchlist not found")
     if request.notify_discord and not get_settings().alert_discord_webhook_url:
         raise ValueError("Discord notifications are not configured on the server")
@@ -51,6 +53,8 @@ def _validated_rule(request: AlertRuleMutation) -> Dict[str, Any]:
 
     query = request.query.model_copy(deep=True)
     query.symbols = None
+    if not query.conditions:
+        raise ValueError("An alert rule requires at least one condition")
     # Validation stays in the same whitelist/filter implementation used by
     # evaluation. It performs persisted reads only, never a live chain scan.
     run_custom_screener(query)
@@ -98,6 +102,13 @@ def _event_message(rule: Dict[str, Any], row: Dict[str, Any]) -> str:
             f"Vol/OI {values.get('volume_oi', 'n/a')}, volume "
             f"{values.get('volume', 'n/a')}, OI {values.get('open_interest', 'n/a')}."
         )
+    for window in (50, 200):
+        cross = values.get(f"sma_{window}_cross")
+        if cross in {"above", "below"}:
+            return (
+                f"Spot {values.get('spot', 'n/a')} crossed {cross} the "
+                f"{window}-day SMA at {values.get(f'sma_{window}', 'n/a')}."
+            )
     return (
         f"Gamma-gap score {values.get('gamma_gap_score', 'n/a')}, "
         f"magnet {values.get('gamma_magnet_strike', 'n/a')}, "
@@ -107,7 +118,12 @@ def _event_message(rule: Dict[str, Any], row: Dict[str, Any]) -> str:
 
 def _insert_events(rule: Dict[str, Any], result: Dict[str, Any]) -> List[Dict[str, Any]]:
     inserted = []
-    for row in result["rows"][:_MAX_EVENTS_PER_RULE]:
+    event_limit = (
+        get_settings().snapshot_max_symbols
+        if result["scope"] == "ticker"
+        else _MAX_EVENTS_PER_RULE
+    )
+    for row in result["rows"][:event_limit]:
         fingerprint_data = [
             rule["id"],
             rule["version"],
@@ -230,15 +246,26 @@ def evaluate_enabled_alerts() -> Dict[str, int]:
     emitted = 0
     current_date = last_trading_date()
     for rule in storage.list_alert_rules(enabled_only=True):
-        watchlist = storage.get_watchlist(rule["watchlist_id"])
-        if not watchlist:
-            storage.update_rule_evaluation(rule["id"], "Watchlist not found")
-            continue
         try:
             query = CustomScreenerRequest.model_validate(rule["query"])
-            query.symbols = watchlist["symbols"]
-            query.limit = min(query.limit, 100)
+            if rule["watchlist_id"] is None:
+                query.symbols = None
+            else:
+                watchlist = storage.get_watchlist(rule["watchlist_id"])
+                if not watchlist:
+                    storage.update_rule_evaluation(rule["id"], "Watchlist not found")
+                    continue
+                query.symbols = watchlist["symbols"]
+            if query.scope == "ticker":
+                query.limit = min(
+                    max(query.limit, get_settings().snapshot_max_symbols), 100
+                )
+            else:
+                query.limit = min(query.limit, 100)
             result = run_custom_screener(query)
+        except ValueError as exc:
+            storage.update_rule_evaluation(rule["id"], f"Invalid rule: {exc}")
+            continue
         except Exception:
             logger.exception("Alert evaluation failed for rule %s", rule["id"])
             storage.update_rule_evaluation(rule["id"], "Evaluation failed")

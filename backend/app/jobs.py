@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 MARKET_TZ = ZoneInfo("America/New_York")
 MARKET_OPEN = time(9, 30)
-MARKET_CLOSE = time(16, 0)
+MARKET_CAPTURE_CUTOFF = time(16, 1)
 ALERT_EVALUATION_CLOSE = time(16, 15)
 _CAPTURE_LOCK = Lock()
 
@@ -41,7 +41,9 @@ def market_is_open(now: datetime | None = None) -> bool:
 
     if not is_market_session(now.date()):
         return False
-    return MARKET_OPEN <= now.time() <= MARKET_CLOSE
+    # Cron jobs start just after the scheduled second, so an exact 16:00:00
+    # comparison would reject the closing capture on every normal run.
+    return MARKET_OPEN <= now.time() < MARKET_CAPTURE_CUTOFF
 
 
 def run_intraday_snapshots() -> None:
@@ -99,6 +101,20 @@ def warm_congress_cache() -> None:
         )
     except Exception:
         logger.exception("Congress cache warm-up failed")
+
+
+def refresh_technical_history() -> None:
+    """Backfill prior-session closes; current symbols become no-op retries."""
+
+    if not get_settings().tradier_token:
+        logger.info("Daily price history skipped: TRADIER_TOKEN not configured.")
+        return
+    try:
+        from backend.app.services_technicals import refresh_daily_price_history
+
+        refresh_daily_price_history()
+    except Exception:
+        logger.exception("Daily price-history refresh failed")
 
 
 def capture_universe(producer: str = "scheduler") -> dict:
@@ -289,6 +305,19 @@ def create_scheduler() -> BackgroundScheduler:
         coalesce=True,
         max_instances=1,
         misfire_grace_time=300,
+    )
+    scheduler.add_job(
+        refresh_technical_history,
+        CronTrigger(
+            day_of_week="mon-fri",
+            hour="8-16",
+            minute=20,
+            timezone=str(MARKET_TZ),
+        ),
+        id="daily_price_history",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=900,
     )
     scheduler.add_job(
         warm_congress_cache,

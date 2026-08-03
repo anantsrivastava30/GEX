@@ -830,3 +830,62 @@ chains ranking on the ticker Flow tab once real data needs emerge.
 **Verified:** scoped Python compilation, the eight existing snapshot tests, an
 append/load Parquet smoke, `docker compose config --quiet`, and
 `git diff --check` pass. No test files changed.
+
+### Session 16 - 2026-08-03 (watchlist and alert onboarding)
+
+- Traced the first live alert day end to end. Snapshots and scheduled rule
+  evaluation were current, but the only enabled rule had been saved as
+  `Symbol = ""`, so it could never match. In-app was the only active delivery
+  channel because Discord and email were not configured.
+- Alert rules now reject empty conditions in the backend. Existing malformed
+  rules surface as invalid during evaluation instead of silently recording a
+  successful zero-match check.
+- Reworked Watchlists around a clear purpose -> snapshot -> alert workflow,
+  added focused starter lists, and added a direct Create alert action for each
+  saved list.
+- Added three alert starter rules, plain-language condition summaries, field
+  definitions and units, safe scope defaults, current-snapshot match previews,
+  explicit channel behavior, and visible `NEEDS SETUP` / `BLOCKED` states.
+- Fixed the closing scheduler boundary so the 16:00 ET capture is allowed the
+  minute of execution instead of being rejected a fraction of a second after
+  the hour.
+
+**Verified:** scoped Python compilation and validation smokes, frontend
+`npm run lint`, `npx tsc --noEmit`, `npm run build` (14 routes), close-boundary
+smoke, and `git diff --check` pass. No test files changed or broad test suites
+run.
+
+**Next up:** edit the existing malformed alert through the new flow and choose
+the intended starter rule. Before external customer access, implement Phase 3
+authentication and per-user ownership because watchlists, rules, events, and
+delivery destinations are still shared server state.
+
+### Session 17 - 2026-08-03 (all-symbol and SMA crossing alerts)
+
+- Added a dynamic `All scheduled symbols` alert audience. It resolves the
+  configured baseline plus every shared-watchlist symbol at preview and
+  evaluation time, while existing rules retain their focused watchlist target.
+- Migrated persisted alert rules to allow a nullable watchlist reference without
+  losing existing rules or event foreign keys. Ticker rules now evaluate up to
+  the configured 50-symbol capacity instead of silently stopping at 25.
+- Added true price-cross-above and price-cross-below conditions for 50-day and
+  200-day SMAs. They compare the previous completed close and SMA with the latest
+  snapshot spot and rolling SMA, rather than conflating price crosses with the
+  50/200 golden-cross signal.
+- Added a server-local daily-close archive in `gex_app.db`. An idempotent hourly
+  scheduler check at minute 20 fetches prior-session Tradier history only for
+  missing/stale symbols; previews and evaluations remain local and make no
+  history API calls.
+- Added four SMA starter rules, field definitions, exact history requirements,
+  all-symbol preview support, and per-symbol history-readiness warnings. Symbols
+  without enough history are skipped without blocking ready symbols.
+
+**Verified:** scoped Python compilation; legacy-schema migration with retained
+event foreign keys; pure SMA crossing, persisted screener, price-history refresh,
+no-op retry, scheduler registration, OpenAPI, and 21/21 all-symbol evaluation
+smokes; frontend `npm run lint`, `npx tsc --noEmit`, and `npm run build`; and
+`git diff --check` pass. No test files changed or broad test suites run.
+
+**Next up:** rebuild/restart the stack so storage migration and history backfill
+run, then preview an SMA template after the next minute-20 scheduler check.
+External customer access still requires Phase 3 authentication and ownership.
