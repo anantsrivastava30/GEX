@@ -656,6 +656,7 @@ class IndexDirection(BaseModel):
     symbol: str
     label: str
     group: str
+    domain: Optional[str] = None
     state: str
     state_label: str
     state_since: Optional[str] = None

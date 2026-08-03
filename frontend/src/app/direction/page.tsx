@@ -94,12 +94,18 @@ function IndexCard({
       }`}
     >
       <div className="flex items-start justify-between gap-2">
-        <div>
+        <div className="min-w-0">
           <div className="font-mono text-sm font-semibold">{index.symbol}</div>
           <div className="text-[11px] text-muted">{index.label}</div>
         </div>
         <StatePill state={index.state} label={index.state_label} />
       </div>
+
+      {index.domain && (
+        <div className="self-start rounded border border-border bg-surface-2 px-1.5 py-0.5 text-[10px] leading-snug text-faint">
+          Rules: {index.domain}
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
         <span
@@ -240,7 +246,16 @@ export default function DirectionPage() {
 
       {overview && benchmark && (
         <Panel
-          title={`Broad market - ${benchmark.label}`}
+          title={
+            <>
+              Broad market - {benchmark.label}
+              {benchmark.domain && (
+                <span className="ml-2 normal-case tracking-normal text-faint">
+                  · {benchmark.domain}
+                </span>
+              )}
+            </>
+          }
           right={
             <span className="text-[11px] text-muted">
               as of {overview.as_of ?? "n/a"}

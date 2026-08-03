@@ -727,6 +727,7 @@ export interface IndexDirection {
   symbol: string;
   label: string;
   group: string;
+  domain?: string | null;
   state: string;
   state_label: string;
   state_since?: string | null;

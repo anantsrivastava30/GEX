@@ -104,23 +104,24 @@ market_direction:
   correction_drawdown_pct: 8.0
   distribution_pressure_count: 4
   distribution_correction_count: 6
+  # domain = which part of the market the index rules, shown as a tag in the UI.
   indices:
-    - { symbol: SPY, label: "S&P 500", group: "Broad market" }
-    - { symbol: QQQ, label: "Nasdaq-100", group: "Broad market" }
-    - { symbol: DIA, label: "Dow Industrials", group: "Broad market" }
-    - { symbol: IWM, label: "Russell 2000", group: "Broad market" }
-    - { symbol: SMH, label: "Semiconductors", group: "Sector" }
-    - { symbol: XLK, label: "Technology", group: "Sector" }
-    - { symbol: XLF, label: "Financials", group: "Sector" }
-    - { symbol: XLE, label: "Energy", group: "Sector" }
-    - { symbol: XLV, label: "Health care", group: "Sector" }
-    - { symbol: XLI, label: "Industrials", group: "Sector" }
-    - { symbol: XLY, label: "Consumer discretionary", group: "Sector" }
-    - { symbol: XLP, label: "Consumer staples", group: "Sector" }
-    - { symbol: XLU, label: "Utilities", group: "Sector" }
-    - { symbol: XLB, label: "Materials", group: "Sector" }
-    - { symbol: XBI, label: "Biotech", group: "Sector" }
-    - { symbol: XLRE, label: "Real estate", group: "Sector" }
+    - { symbol: SPY, label: "S&P 500", group: "Broad market", domain: "The whole US large-cap market" }
+    - { symbol: QQQ, label: "Nasdaq-100", group: "Broad market", domain: "Mega-cap tech and growth" }
+    - { symbol: DIA, label: "Dow Industrials", group: "Broad market", domain: "30 blue-chip leaders" }
+    - { symbol: IWM, label: "Russell 2000", group: "Broad market", domain: "Small caps and risk appetite" }
+    - { symbol: SMH, label: "Semiconductors", group: "Sector", domain: "Chipmakers and semi equipment" }
+    - { symbol: XLK, label: "Technology", group: "Sector", domain: "Software, hardware, and IT" }
+    - { symbol: XLF, label: "Financials", group: "Sector", domain: "Banks, brokers, and insurers" }
+    - { symbol: XLE, label: "Energy", group: "Sector", domain: "Oil, gas, and energy majors" }
+    - { symbol: XLV, label: "Health care", group: "Sector", domain: "Pharma, insurers, and med-tech" }
+    - { symbol: XLI, label: "Industrials", group: "Sector", domain: "Defense, machinery, and transport" }
+    - { symbol: XLY, label: "Consumer discretionary", group: "Sector", domain: "Retail, autos, and travel" }
+    - { symbol: XLP, label: "Consumer staples", group: "Sector", domain: "Household staples and groceries" }
+    - { symbol: XLU, label: "Utilities", group: "Sector", domain: "Electric, gas, and water utilities" }
+    - { symbol: XLB, label: "Materials", group: "Sector", domain: "Chemicals, metals, and miners" }
+    - { symbol: XBI, label: "Biotech", group: "Sector", domain: "Clinical and commercial biotech" }
+    - { symbol: XLRE, label: "Real estate", group: "Sector", domain: "REITs and property" }
 
 # Daily own-data history collection (see docs/UW_PARITY_PLAN.md).
 # Keep the universe small enough that one run stays inside Tradier's

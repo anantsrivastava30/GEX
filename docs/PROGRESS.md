@@ -890,6 +890,9 @@ indices that govern stock groups. Delivered end to end:
   rule.
 - Docs: revision note in `docs/ONEIL_CANSLIM_PLAN.md` (per-stock fundamental
   letters remain future work).
+- Follow-up: each index carries a configurable `domain` tag naming the part
+  of the market it rules (e.g. SMH "Chipmakers and semi equipment"), rendered
+  full-width on the index cards and beside the benchmark hero title.
 
 **Verified:** synthetic-series unit smoke (correction -> rally day 1 -> FTD on
 day 5 -> confirmed uptrend, truncations land in each intermediate state; EMA

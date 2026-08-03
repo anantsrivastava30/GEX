@@ -65,6 +65,7 @@ def direction_config() -> Dict[str, Any]:
                 "symbol": symbol,
                 "label": str(item.get("label", symbol)),
                 "group": str(item.get("group", "Index")),
+                "domain": str(item["domain"]) if item.get("domain") else None,
             }
         )
     if not indices:
@@ -174,6 +175,7 @@ def _analyze(
         "symbol": entry["symbol"],
         "label": entry["label"],
         "group": entry["group"],
+        "domain": entry.get("domain"),
         "state": state["state"],
         "state_label": state["state_label"],
         "state_since": state.get("mode_since"),
