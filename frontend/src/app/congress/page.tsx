@@ -42,6 +42,7 @@ function tradeLabel(type: string): string {
 
 export default function CongressPage() {
   const controller = useRef<AbortController | null>(null);
+  const activeTicker = useRef("");
   const [ticker, setTicker] = useState("");
   const [chamber, setChamber] = useState<CongressChamber | "all">("all");
   const [days, setDays] = useState(90);
@@ -84,15 +85,15 @@ export default function CongressPage() {
   );
 
   useEffect(() => {
-    fetchTrades(ticker, chamber, days);
+    fetchTrades(activeTicker.current, chamber, days);
     // Ticker applies on submit; chamber/window apply immediately via handlers.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chamber, days, fetchTrades]);
 
   function changeChamber(next: CongressChamber | "all") {
     if (next === chamber) return;
     setLoading(true);
     setError(null);
+    setData(null);
     setChamber(next);
   }
 
@@ -100,6 +101,7 @@ export default function CongressPage() {
     if (next === days) return;
     setLoading(true);
     setError(null);
+    setData(null);
     setDays(next);
   }
 
@@ -143,12 +145,15 @@ export default function CongressPage() {
           </button>
         ))}
       </div>
+      <p className="text-xs text-muted">Chamber and date range load automatically. The ticker filter changes only after you choose Apply.</p>
 
       <form
         onSubmit={(event) => {
           event.preventDefault();
           setLoading(true);
           setError(null);
+          setData(null);
+          activeTicker.current = ticker.trim().toUpperCase();
           fetchTrades(ticker, chamber, days);
         }}
         className="flex flex-wrap items-center gap-2"
@@ -172,8 +177,10 @@ export default function CongressPage() {
             type="button"
             onClick={() => {
               setTicker("");
+              activeTicker.current = "";
               setLoading(true);
               setError(null);
+              setData(null);
               fetchTrades("", chamber, days);
             }}
             className="rounded-md border border-border px-3 py-1 text-sm text-muted hover:text-foreground"
@@ -215,7 +222,7 @@ export default function CongressPage() {
         title="Disclosures"
         right={
           <span className="font-mono text-xs text-muted">
-            {data?.count ?? 0} filings
+            {loading ? "..." : `${data?.count ?? 0} filings`}
           </span>
         }
         bodyClassName="p-0"
@@ -234,6 +241,13 @@ export default function CongressPage() {
               </tr>
             </thead>
             <tbody>
+              {loading && (
+                <tr>
+                  <td colSpan={7} className="px-4 py-10 text-center text-muted">
+                    Loading congressional disclosures...
+                  </td>
+                </tr>
+              )}
               {(data?.rows ?? []).map((row: CongressTrade, index) => (
                 <tr
                   key={`${row.member ?? ""}-${row.ticker ?? ""}-${row.transaction_date ?? ""}-${index}`}
@@ -277,7 +291,7 @@ export default function CongressPage() {
                   </td>
                 </tr>
               ))}
-              {!loading && (data?.rows.length ?? 0) === 0 && (
+              {!loading && !error && data && data.rows.length === 0 && (
                 <tr>
                   <td colSpan={7} className="px-4 py-8 text-center text-muted">
                     No disclosures match these filters in the selected window.

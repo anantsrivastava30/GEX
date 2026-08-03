@@ -98,7 +98,7 @@ def warm_congress_cache() -> None:
 
 
 def capture_universe() -> dict:
-    """Capture the configured snapshot universe once and persist results.
+    """Capture the configured and shared-watchlist universe once.
 
     Shared by the scheduler job and the admin capture endpoint. Off-session
     runs are skipped so a rolled provider expiration universe cannot overwrite
@@ -107,21 +107,22 @@ def capture_universe() -> dict:
 
     from quant_analysis.storage import snapshots as snapshot_store
     from quant_analysis.storage.db import save_gamma_gap_results
+    from backend.app.services_watchlists import snapshot_symbols
 
     settings = get_settings()
     base_dir = Path(settings.snapshot_dir)
+    tickers = snapshot_symbols()
     if snapshot_store.capture_session_date() is None:
         logger.info("Snapshot capture skipped: no active market session today")
         return {
             "captured": 0,
-            "requested": len(settings.snapshot_tickers),
-            "tickers": list(settings.snapshot_tickers),
+            "requested": len(tickers),
+            "tickers": list(tickers),
             "gamma_gap_rows": 0,
             "as_of": snapshot_store.last_trading_date(),
         }
     gap_rows = []
     captured = 0
-    tickers = settings.snapshot_tickers
     for index, ticker in enumerate(tickers):
         snap = None
         try:
@@ -154,7 +155,7 @@ def capture_universe() -> dict:
             except Exception:
                 logger.exception("Snapshot persistence failed for %s", ticker)
 
-        # Captures make several upstream calls. Pace the bounded configured
+        # Captures make several upstream calls. Pace the bounded scheduled
         # universe instead of allowing an intraday run to burst the free plan.
         if index < len(tickers) - 1 and settings.snapshot_refresh_pause_seconds:
             time_module.sleep(settings.snapshot_refresh_pause_seconds)

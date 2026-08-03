@@ -224,9 +224,11 @@ def get_unusual(symbol: str, expirations: List[str], top_n: int) -> Dict[str, An
 
 
 def _configured_snapshot_tickers() -> List[str]:
-    """The flow proxy is deliberately limited to the configured snapshot universe."""
+    """Symbols covered by configured and shared-watchlist snapshots."""
 
-    return list(dict.fromkeys(ticker.upper() for ticker in get_settings().snapshot_tickers))
+    from backend.app.services_watchlists import snapshot_symbols
+
+    return snapshot_symbols()
 
 
 def _cached_contract_proxy_data() -> tuple[pd.DataFrame, Dict[str, Any]]:
@@ -315,14 +317,23 @@ def _json_number(value: Any) -> Optional[float]:
     return None if pd.isna(value) else float(value)
 
 
-def get_cached_flow_feed(limit: int) -> Dict[str, Any]:
+def get_cached_flow_feed(
+    limit: int,
+    ticker: Optional[str] = None,
+    expiration_date: Optional[str] = None,
+) -> Dict[str, Any]:
     """Cached multi-ticker contract ranking for the proxy flow page."""
 
     contracts, status = _cached_contract_proxy_data()
     if contracts.empty:
         return {**status, "rows": []}
 
-    ranked = _rank_proxy_rows(contracts).head(limit)
+    ranked = _rank_proxy_rows(contracts)
+    if ticker:
+        ranked = ranked[ranked["ticker"] == ticker.upper()]
+    if expiration_date:
+        ranked = ranked[ranked["expiration_date"] == expiration_date]
+    ranked = ranked.head(limit)
     rows = []
     for _, row in ranked.iterrows():
         rows.append(
@@ -346,7 +357,7 @@ def get_cached_flow_feed(limit: int) -> Dict[str, Any]:
 
 
 def get_hottest_chains(limit: int) -> Dict[str, Any]:
-    """Cached chain-level ranking over the configured snapshot universe."""
+    """Cached chain-level ranking over the scheduled snapshot universe."""
 
     contracts, status = _cached_contract_proxy_data()
     if contracts.empty:

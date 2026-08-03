@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     # never fire Tradier calls; the self-host compose stack turns it on.
     scheduler_enabled: bool = False
     snapshot_tickers: List[str] = list(DEFAULT_TICKERS)
+    snapshot_max_symbols: int = Field(
+        default=int(CONFIG.get("snapshots", {}).get("max_symbols", 50)),
+        ge=1,
+        le=500,
+    )
     snapshot_refresh_pause_seconds: float = Field(
         default=float(CONFIG.get("snapshots", {}).get("refresh_pause_seconds", 1.0)),
         ge=0.0,

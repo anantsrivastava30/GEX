@@ -97,9 +97,11 @@ snapshots:
   dir: "data/snapshots"
   num_expirations: 4
   strike_offset: 35
+  # Configured tickers plus custom watchlist symbols share this capacity.
+  max_symbols: 50
   # One capture uses a quote, expirations, and the configured chain expirations.
   # Pace the bounded universe so scheduler runs stay below the free-data limit.
-  refresh_pause_seconds: 1.0
+  refresh_pause_seconds: 6.0
   tickers:
     - SPY
     - QQQ
@@ -114,3 +116,11 @@ snapshots:
     - META
     - AMD
     - NFLX
+    - INTC
+    - MU
+    - SNDK
+    - PENG
+    - SMH
+    - SOXL
+    - AVGO
+    - MRVLL

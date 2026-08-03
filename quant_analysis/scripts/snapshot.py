@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 # Pause between tickers to stay well inside Tradier's rate limit
 # (~120 requests/min; each ticker costs 2 + num_expirations requests).
-TICKER_PAUSE_SECONDS = 2.0
+TICKER_PAUSE_SECONDS = 4.0
 
 
 def resolve_token() -> Optional[str]:

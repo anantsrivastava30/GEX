@@ -10,7 +10,7 @@ session should pick up.
 1. Read `docs/UW_PARITY_PLAN.md` (architecture, phases, endpoint/function mappings).
 2. Read the Status board and the last Session log entry below.
 3. Work on the "Next up" items; keep `pytest` green; update this file before pushing.
-4. Active branch: `claude/streamlit-free-deployment-9r4x55`.
+4. Active branch: `feature/multi-expiration-gex`.
 
 ## Status board
 
@@ -646,3 +646,91 @@ test suites were not run.
 3. Correct ownership of `data/ai_analysis.db` or migrate the root database into
    the canonical Compose data path.
 4. Begin Phase 3 with Supabase Auth so watchlists and alerts gain user ownership.
+
+### Session 10 - 2026-08-02 (multi-expiration GEX comparison)
+
+- Added multi-expiration selection to the ticker GEX tab. A normal click keeps
+  the existing single-expiration behavior; Ctrl-click or Cmd-click toggles
+  comparison expirations. Touch devices get an explicit Compare mode.
+- Selected GEX profiles load concurrently through the existing per-expiration
+  endpoint. Partial failures leave successful profiles visible and report how
+  many expirations were unavailable.
+- Added a same-lane overlapping diverging chart with one color per expiration,
+  a shared magnitude scale, zero baseline, spot-strike highlight,
+  keyboard/touch labels, and a merged strike table. Expiration values are
+  independent and never summed.
+- Kept one highlighted primary expiration for max pain, vanna/charm, IV skew,
+  and intraday delta projection so those existing calculations remain
+  unambiguous.
+- Created `feature/multi-expiration-gex` from the committed Phase 2 tip after
+  preserving the `.env.example` workspace settings from the prior stash.
+- Fixed the native economic calendar timeout: FRED's bulk release-date endpoint
+  does not filter by calendar range and timed out while loading the full feed.
+  The backend now fetches only the 15 curated release calendars concurrently;
+  a live 14-day smoke returned six scheduled US macro releases.
+- Fixed empty earnings results by merging Yahoo's forward quote calendar when
+  its detailed earnings-history endpoint is stale. Date-only estimates are
+  labeled time TBD; a live 14-day smoke returned AMD on 2026-08-04.
+- Replaced the configured-ticker earnings limitation with Nasdaq's market-wide
+  daily calendar. The page now supports Past or Upcoming 7/14/30-day windows;
+  an empty ticker field means all companies and entered symbols are only a
+  filter. A live Past 14-day smoke returned 1,325 earnings rows with reported
+  EPS, forecast, surprise, session, company, and market-cap metadata.
+- Added a reusable accessible top-bar info control with route-specific usage,
+  methodology, freshness, and limitation guidance for Market, Flow, Screener,
+  Watchlists, Alerts, News, Track Record, AI, Calendar, Congress, Binomial, and
+  all ticker tabs.
+
+**Verified:** `npm run lint`, `npm run build`, and `git diff --check` pass. No
+test files changed.
+
+### Session 11 - 2026-08-02 (flow clarity + custom snapshot symbols)
+
+- Renamed Hottest Chains to Hottest Expiration Chains and documented that each
+  row aggregates every call/put strike for one symbol and expiration. Rows now
+  fetch and scroll to a symbol/expiration-filtered strike-level contract feed.
+- Added INTC, MU, SNDK, PENG, SMH, SOXL, AVGO, and the explicitly requested
+  MRVLL symbol to the configured snapshot baseline.
+- Replaced the fixed Watchlists symbol picker with comma/space ticker entry,
+  removable chips, scheduled-symbol suggestions, and a 50-unique-symbol server
+  capacity. Symbols receive strict path-safe syntax validation but are not
+  silently corrected or assumed to be provider-valid.
+- The backend snapshot universe is now the configured baseline plus unique
+  symbols from persisted shared watchlists. Snapshot capture, cached Flow,
+  screeners, and alerts use that same dynamic universe. Removing a custom
+  symbol from every watchlist stops future captures without deleting history.
+- Added Watchlists warnings for history accrual, alert skips caused by an
+  unavailable symbol, disabled scheduling, and missing Tradier credentials.
+  Increased backend capture pacing to six seconds between symbols so the
+  expanded universe leaves more provider headroom.
+- Documented that server-custom symbols require the backend scheduler; the
+  GitHub Actions snapshot job still sees only the static config baseline.
+
+**Verified:** frontend `npm run lint` and `npm run build`, scoped Python
+`py_compile`, `docker compose config --quiet`, and `git diff --check` pass. No
+test files changed or broad test suites run.
+
+### Session 12 - 2026-08-03 (loading and empty-state clarity)
+
+- Audited every frontend route for initial loading, successful emptiness,
+  request errors, and controls that require an explicit user action.
+- Calendar and Congress now explain which controls load immediately versus
+  which ticker fields require Apply. Requests show loading rows and ellipsis
+  counts instead of blank tables or false zero results, and stale rows are
+  cleared when filters change.
+- Screener tabs now clear prior-mode results, distinguish field loading from
+  field failure, explain preset/threshold/custom execution behavior, and show
+  separate pre-run, loading, and no-match result states.
+- Flow shows initial chain/feed loading rows, labels its reload as a cached-data
+  request, and gives selected-chain requests an isolated loading/error state.
+- Watchlists, Alerts, News, and Track Record now distinguish initial loading
+  from a valid empty workspace/feed. Alerts no longer report scheduler and
+  integration settings as disabled before status loading finishes.
+- Ticker pages now distinguish expiration loading, no expirations, and request
+  failure. Gamma Gap no longer remains on Loading when a valid profile has no
+  signal, and max-pain/history panels distinguish loading from unavailable.
+- Added request identity guards where Strict Mode or superseded requests could
+  otherwise clear loading early or overwrite newer data.
+
+**Verified:** frontend `npm run lint`, `npm run build`, and `git diff --check`
+pass. No test files changed.
