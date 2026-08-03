@@ -754,3 +754,54 @@ class DirectionSignal(BaseModel):
 class DirectionSignalsResponse(BaseModel):
     items: List[DirectionSignal]
     count: int
+
+
+class StockBreakout(BaseModel):
+    date: str
+    price: float
+    prior_high: float
+    volume_ratio: float
+    sessions_ago: int
+    stop_price: float
+
+
+class StockLeader(BaseModel):
+    """One stock's CAN SLIM evaluation and buy-readiness verdict."""
+
+    symbol: str
+    name: Optional[str] = None
+    readiness: Literal[
+        "buy_candidate", "near_pivot", "wait_market", "not_ready", "insufficient_data"
+    ]
+    readiness_label: str
+    score: ScorecardSummary
+    scorecard: List[ScorecardRow]
+    rs_percentile: Optional[float] = None
+    off_high_pct: Optional[float] = None
+    quarterly_eps_growth_pct: Optional[float] = None
+    quarterly_revenue_growth_pct: Optional[float] = None
+    annual_eps_growth_pct: Optional[float] = None
+    roe_pct: Optional[float] = None
+    institutional_pct: Optional[float] = None
+    breakout: Optional[StockBreakout] = None
+    last_close: Optional[float] = None
+    change_pct: Optional[float] = None
+    narrative: List[str] = []
+    missing: List[str] = []
+
+
+class LeadersResponse(BaseModel):
+    """CAN SLIM stock scan gated by the market-direction state."""
+
+    as_of: Optional[str] = None
+    provisional: bool = False
+    market_state: str
+    market_state_label: str
+    gate_open: bool
+    gate_message: str
+    items: List[StockLeader]
+    universe: List[str] = []
+    excluded: List[str] = []
+    unavailable: List[str] = []
+    stop_loss_pct: float
+    methodology: str

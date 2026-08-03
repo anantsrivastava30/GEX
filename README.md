@@ -10,6 +10,7 @@ An options analytics platform for dealer gamma exposure (GEX), delta exposure, o
 - **Binomial Tree** — CRR tree pricing calibrated with live rates (10Y yield) and market implied vol.
 - **Market Sentiment** — futures board (ES/NQ/YM/RTY/CL/GC), VIX, 10Y yield, and auction bid-to-cover.
 - **Market Direction** — O'Neil-style rally-attempt / follow-through-day state machine with distribution-day counts, 20/50/200-day EMA levels and touch signals, RSI timing zones, and an index-adapted CAN SLIM scorecard across market and sector index ETFs, plus a persisted signal log with optional Discord/email delivery.
+- **Stock Leaders** — per-stock CAN SLIM scan (quarterly/annual earnings growth, ROE, 52-week-high breakouts on volume, relative strength, institutional sponsorship) gated by the market-direction state; fresh breakout buy flags land in the signal feed with O'Neil's 7-8% stop discipline attached.
 - **Market News** — RSS headlines filtered to macro/options-relevant topics.
 - **AI Analysis** — builds a data packet (positioning, skew, ratios, spikes, snapshot, headlines), estimates token cost, and (after PIN confirmation) asks an OpenAI model for trade ideas across 1–2 week, 1–2 month, and 6–12 month horizons. Analyses are persisted to Supabase with a SQLite fallback.
 

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import {
   api,
@@ -7,36 +8,15 @@ import {
   DirectionOverview,
   DirectionSignal,
   IndexDirection,
-  ScorecardStatus,
 } from "@/lib/api";
 import Panel from "@/components/ui/Panel";
 import DirectionChart from "@/components/direction/DirectionChart";
 import StatePill from "@/components/direction/StatePill";
+import { SCORE_BADGE, SCORE_DOT, SCORE_LABEL } from "@/components/direction/scorecard";
 
 // O'Neil market direction: the follow-through-day state machine, EMA touch
 // levels, RSI timing, and the index-adapted CAN SLIM scorecard across the
 // tracked market and sector index universe.
-
-const SCORE_DOT: Record<ScorecardStatus, string> = {
-  met: "bg-positive",
-  borderline: "bg-warning",
-  not_met: "bg-negative",
-  unavailable: "bg-faint",
-};
-
-const SCORE_BADGE: Record<ScorecardStatus, string> = {
-  met: "border-positive/40 bg-positive/10 text-positive",
-  borderline: "border-warning/40 bg-warning/10 text-warning",
-  not_met: "border-negative/40 bg-negative/10 text-negative",
-  unavailable: "border-border bg-surface-2 text-muted",
-};
-
-const SCORE_LABEL: Record<ScorecardStatus, string> = {
-  met: "Met",
-  borderline: "Borderline",
-  not_met: "Not met",
-  unavailable: "No data",
-};
 
 const SIGNAL_BADGE: Record<string, string> = {
   follow_through_day: "border-accent/40 bg-accent/10 text-accent-strong",
@@ -332,6 +312,22 @@ export default function DirectionPage() {
             )}
           </div>
         </Panel>
+      )}
+
+      {overview && (
+        <Link
+          href="/leaders"
+          className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface px-4 py-3 transition-colors hover:bg-surface-hover"
+        >
+          <span>
+            <span className="block text-sm font-medium">Which stocks qualify?</span>
+            <span className="block text-xs text-muted">
+              The CAN SLIM stock scan - earnings growth, breakouts, and relative
+              strength, gated by this market state.
+            </span>
+          </span>
+          <span aria-hidden className="text-muted">→</span>
+        </Link>
       )}
 
       {overview && groups.length > 0 && (

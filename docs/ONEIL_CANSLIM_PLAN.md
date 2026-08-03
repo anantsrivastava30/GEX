@@ -23,9 +23,23 @@ sectors) rather than per-stock fundamentals. Delivered:
   checklist, index card grid, annotated candle/EMA/volume chart, scorecard
   table, signal feed), sidebar entry, page help, market-page link.
 
-The per-stock fundamental letters (C/A earnings, ROE, institutional 13F) from
-the original phasing below remain future work; the index adaptation maps every
-letter to a price/volume proxy and says so in the UI.
+Second pass in the same PR delivered the per-stock layer as well:
+
+- `quant_analysis/integrations/fundamentals.py`: best-effort yfinance
+  fundamentals (quarterly and annual EPS growth, quarterly revenue, ROE,
+  float, institutional percent) with per-field degradation.
+- `quant_analysis/analytics/canslim.py`: the seven letters at O'Neil's
+  published thresholds, weighted 12-month relative strength, 52-week-high
+  breakout detection on heavy volume, buy-readiness verdicts gated by the
+  market state, and the 7-8% stop discipline attached to every flag.
+- Backend `GET /api/canslim` (+ per-symbol detail), `stock_breakout` signals
+  persisted into the shared direction feed, wired into the 16:20 ET job.
+- Frontend `/leaders` page: market-gate banner, ranked stock table with
+  readiness badges and letter dots, full per-stock letter table.
+
+Remaining future work: outcome scoring of logged breakout and FTD signals on
+the track-record page, and a richer institutional-sponsorship trend once a
+better free 13F source is found.
 
 ## Verdict: feasible, in three tiers
 

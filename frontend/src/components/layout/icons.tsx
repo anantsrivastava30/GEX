@@ -95,6 +95,13 @@ export const IconAI = base(
   </>,
 );
 
+export const IconLeaders = base(
+  <>
+    <path d="M5 21V4" />
+    <path d="M5 4h13l-3 4 3 4H5" />
+  </>,
+);
+
 export const IconDirection = base(
   <>
     <circle cx="12" cy="12" r="9" />

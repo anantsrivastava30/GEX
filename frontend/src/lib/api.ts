@@ -820,6 +820,60 @@ export interface DirectionSignalsResponse {
   count: number;
 }
 
+// Per-stock CAN SLIM scan (buy flags gated by market direction).
+
+export interface StockBreakout {
+  date: string;
+  price: number;
+  prior_high: number;
+  volume_ratio: number;
+  sessions_ago: number;
+  stop_price: number;
+}
+
+export type StockReadiness =
+  | "buy_candidate"
+  | "near_pivot"
+  | "wait_market"
+  | "not_ready"
+  | "insufficient_data";
+
+export interface StockLeader {
+  symbol: string;
+  name?: string | null;
+  readiness: StockReadiness;
+  readiness_label: string;
+  score: ScorecardSummary;
+  scorecard: ScorecardRow[];
+  rs_percentile?: number | null;
+  off_high_pct?: number | null;
+  quarterly_eps_growth_pct?: number | null;
+  quarterly_revenue_growth_pct?: number | null;
+  annual_eps_growth_pct?: number | null;
+  roe_pct?: number | null;
+  institutional_pct?: number | null;
+  breakout?: StockBreakout | null;
+  last_close?: number | null;
+  change_pct?: number | null;
+  narrative: string[];
+  missing: string[];
+}
+
+export interface LeadersResponse {
+  as_of?: string | null;
+  provisional: boolean;
+  market_state: string;
+  market_state_label: string;
+  gate_open: boolean;
+  gate_message: string;
+  items: StockLeader[];
+  universe: string[];
+  excluded: string[];
+  unavailable: string[];
+  stop_loss_pct: number;
+  methodology: string;
+}
+
 export const api = {
   tickerSnapshot: (symbol: string, signal?: AbortSignal) =>
     getJSON<TickerSnapshot>(`/api/ticker/${symbol}/snapshot`, signal),
@@ -959,6 +1013,12 @@ export const api = {
 
   directionDetail: (symbol: string, signal?: AbortSignal) =>
     getJSON<DirectionDetail>(`/api/direction/${symbol}`, signal),
+
+  canslimLeaders: (signal?: AbortSignal) =>
+    getJSON<LeadersResponse>(`/api/canslim`, signal),
+
+  canslimDetail: (symbol: string, signal?: AbortSignal) =>
+    getJSON<StockLeader>(`/api/canslim/${symbol}`, signal),
 
   directionSignals: (limit = 50, symbol?: string, signal?: AbortSignal) => {
     const params: Record<string, string | number> = { limit };

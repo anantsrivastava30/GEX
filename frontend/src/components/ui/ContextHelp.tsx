@@ -34,6 +34,25 @@ const HELP: Record<string, HelpContent> = {
       ] },
     ],
   },
+  leaders: {
+    label: "Stock Leaders",
+    sections: [
+      { heading: "How stocks get flagged", bullets: [
+        "Buy candidate means a fresh 52-week-high breakout on heavy volume with enough CAN SLIM criteria met while the market gate is open. That is O'Neil's complete buy setup, and the flag also lands in the Direction signal feed.",
+        "Watch - near pivot means the stock sits within the pivot zone but has not broken out on volume yet; do not chase without the breakout.",
+        "Qualified - wait for the market means the stock scores well but the market is not in an uptrend; O'Neil made no new buys during corrections.",
+      ] },
+      { heading: "The letters", bullets: [
+        "C: latest quarterly EPS vs a year ago (25%+ target), with quarterly sales as context. A: annual EPS growth plus 17%+ ROE.",
+        "N: new 52-week highs on breakout volume; the qualitative 'new' (products, management) is not computable and belongs to the news feed. S: up-day vs down-day volume and float. L: weighted 12-month relative strength within the scanned universe. I: institutional ownership (13F, lagged). M: the follow-through-day market state.",
+        "Fundamentals come from Yahoo on a best-effort basis; a letter that cannot be fetched shows No data and is excluded from the score, never guessed.",
+      ] },
+      { heading: "Risk", bullets: [
+        "Every flag carries O'Neil's stop discipline: cut the loss 7-8% below the pivot, no exceptions.",
+        "Flags are rule-based screens over incomplete free data, not recommendations.",
+      ] },
+    ],
+  },
   flow: {
     label: "Flow",
     sections: [{ bullets: [

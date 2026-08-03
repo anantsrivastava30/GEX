@@ -123,6 +123,23 @@ market_direction:
     - { symbol: XBI, label: "Biotech", group: "Sector", domain: "Clinical and commercial biotech" }
     - { symbol: XLRE, label: "Real estate", group: "Sector", domain: "REITs and property" }
 
+# Per-stock CAN SLIM scan (see docs/ONEIL_CANSLIM_PLAN.md). Stocks come from
+# the snapshot universe plus shared-watchlist symbols; index and leveraged
+# ETFs are excluded because they have no earnings. Thresholds follow
+# O'Neil's published numbers and are shown in the UI.
+canslim:
+  exclude: [SPY, QQQ, IWM, DIA, SMH, SOXL]
+  max_symbols: 30
+  fundamentals_pause_seconds: 0.4
+  quarterly_growth_met_pct: 25.0
+  quarterly_growth_borderline_pct: 15.0
+  annual_growth_met_pct: 25.0
+  annual_growth_borderline_pct: 15.0
+  roe_met_pct: 17.0
+  breakout_volume_ratio: 1.4
+  rs_met_percentile: 67.0
+  stop_loss_pct: 8.0
+
 # Daily own-data history collection (see docs/UW_PARITY_PLAN.md).
 # Keep the universe small enough that one run stays inside Tradier's
 # rate limit: each ticker costs 2 + num_expirations requests.

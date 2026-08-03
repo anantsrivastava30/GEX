@@ -109,6 +109,18 @@ def run_direction_evaluation() -> None:
         )
     except Exception:
         logger.exception("Direction evaluation failed")
+    try:
+        from backend.app.services_canslim import evaluate_stock_signals
+
+        result = evaluate_stock_signals()
+        logger.info(
+            "CAN SLIM stock evaluation done: %d stocks, %d breakout signals (as of %s)",
+            result["evaluated"],
+            result["inserted"],
+            result["as_of"],
+        )
+    except Exception:
+        logger.exception("CAN SLIM stock evaluation failed")
 
 
 def warm_congress_cache() -> None:

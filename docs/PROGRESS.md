@@ -894,6 +894,49 @@ indices that govern stock groups. Delivered end to end:
   of the market it rules (e.g. SMH "Chipmakers and semi equipment"), rendered
   full-width on the index cards and beside the benchmark hero title.
 
+### Session 18 - 2026-08-03 (per-stock CAN SLIM layer: which stocks to buy)
+
+Answers "which stocks are flagged to buy": the full seven-letter stock scan
+at O'Neil's published thresholds, gated by the market-direction state.
+
+- `quant_analysis/integrations/fundamentals.py`: yfinance fundamentals with
+  per-field graceful degradation and a `missing` list (quarterly EPS growth
+  via reported-EPS history with income-statement fallback, quarterly revenue,
+  annual EPS growth averaged across fiscal years, ROE, float, institutional
+  percent). Loss-to-profit bases report None rather than fake percentages.
+- `quant_analysis/analytics/canslim.py`: C (quarterly EPS 25%+ YoY, sales as
+  context), A (annual EPS 25%+/yr and ROE 17%+), N (52-week-high breakout on
+  1.4x average volume; near-pivot is watch, and the qualitative "new" is
+  declared not computable), S (up/down volume plus float), L (weighted
+  12-month RS percentile, recent quarter double-weighted), I (13F ownership
+  with over-owned and undiscovered bands), M (the follow-through-day state).
+  Readiness ladder: buy_candidate (fresh breakout + gate open + score),
+  near_pivot, wait_market (qualified but the market gate is closed - the
+  O'Neil no-buys-in-a-correction rule made explicit), not_ready,
+  insufficient_data. Every flag carries the 7-8% stop discipline.
+- Backend `services_canslim.py`: scan universe = snapshot + watchlist symbols
+  minus configured ETFs (config `canslim.exclude`), fundamentals cached 24h
+  with pacing, scan cached 15 min; `GET /api/canslim` + `/api/canslim/{sym}`;
+  fresh completed-session breakouts persist as `stock_breakout` rows in the
+  shared direction signal feed (idempotent, delivered over the same
+  Discord/email channels), evaluated by the 16:20 ET job and lazily on
+  leaders-page reads.
+- Frontend `/leaders`: market-gate banner (green/amber/red by state), ranked
+  table (readiness badge, letter dots, met count, RS, qtr/annual EPS, ROE,
+  off-high, institutional, breakout chip), full letter table + narrative for
+  the selected stock, methodology and exclusions footer. Sidebar Leaders
+  entry, help section, cross-link from the Direction page.
+
+**Verified:** TestClient smoke with mocked bars and fundamentals: NVDA
+(strong growth + fresh 3x-volume breakout) flags buy_candidate 7/7 with a
+persisted signal carrying the stop price; TSLA (negative growth) rejected
+with C not_met; missing fundamentals score honestly (3/4 technicals only);
+ETF exclusion, 404s, and signal idempotency all pass. Backend pytest 20/21
+(known pre-existing sandbox failure only). Frontend tsc/lint/build clean (16
+routes); headless screenshots at 1280px/390px: zero overflow, no console
+errors. Live Yahoo fundamentals could not be exercised here (proxy blocks
+Yahoo); every field degrades to a labeled unavailable state by design.
+
 **Verified:** synthetic-series unit smoke (correction -> rally day 1 -> FTD on
 day 5 -> confirmed uptrend, truncations land in each intermediate state; EMA
 and RSI seed boundaries checked); FastAPI TestClient smoke over the real app

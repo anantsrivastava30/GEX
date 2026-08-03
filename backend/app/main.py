@@ -19,6 +19,7 @@ from backend.app.routers import (
     alerts,
     binomial,
     calendar,
+    canslim,
     congress,
     direction,
     exposure,
@@ -80,6 +81,7 @@ def create_app() -> FastAPI:
     app.include_router(exposure.router)
     app.include_router(market.router)
     app.include_router(direction.router)
+    app.include_router(canslim.router)
     app.include_router(news.router)
     app.include_router(flow.router)
     app.include_router(screener.router)
