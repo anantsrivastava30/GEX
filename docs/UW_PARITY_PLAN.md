@@ -136,7 +136,7 @@ DataFrames convert at the service boundary into typed pydantic models. Plotly/St
 - Delete `legacy/app.py`.
 
 ### Phase 4 — Paid data & scale
-- Real trade-tape Flow Feed via the provider interface (OPRA feed), sweep/block detection, Market Tide, 0DTE dashboards, SPX Periscope-style dealer exposure page.
+- Real trade-tape Flow Feed via the provider interface (OPRA feed), sweep/block detection, Market Tide, 0DTE dashboards, SPX Periscope-style dealer exposure page. Background on the current snapshot proxy vs the OPRA tape: `docs/FLOW_DATA.md`.
 - Public API product with keys + usage metering; responsive/mobile polish.
 
 ---

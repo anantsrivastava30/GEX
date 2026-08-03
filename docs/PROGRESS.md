@@ -780,3 +780,30 @@ bar hidden. No test files changed and no broad test suites run.
    the viewBox; needs a separate pass with live data to avoid label collisions.
 4. Begin Phase 3 with Supabase Auth so watchlists and alerts gain user
    ownership.
+
+### Session 14 - 2026-08-03 (per-ticker proxy flow tab + flow data doc)
+
+- Enabled the ticker page Flow tab (was a disabled "soon" placeholder). It
+  renders the existing cached proxy feed filtered to the viewed symbol via
+  `GET /api/flow/feed?ticker=X`, which the backend already supported. New
+  presentational `components/flow/ProxyFeedTable.tsx` mirrors the /flow
+  columns minus the redundant Symbol column; the tab hides the expiration
+  selector (the feed spans all expirations), refetches on each tab entry
+  (cache-only endpoint, no provider calls), and carries an explicit
+  disclaimer that this is a snapshot-derived proxy, not a live trade tape.
+  Loading, error, and empty states follow the Session 12 conventions; the
+  empty state explains the snapshot-universe coverage rule.
+- Added `docs/FLOW_DATA.md`: how the proxy feed is computed, what aggregates
+  can and cannot reveal (direction, sweeps, blocks, per-trade premium,
+  multi-leg, 0DTE), what paid OPRA data adds in Phase 4, and vendor/licensing
+  notes. Linked from the Phase 4 bullet in `UW_PARITY_PLAN.md`.
+
+**Verified:** `npx tsc --noEmit`, `npm run lint`, `npm run build` (14 routes)
+pass. Headless Chromium against the production build with mocked API, desktop
+and iPhone 13 widths: tab enabled without the soon badge, panel and
+disclaimer render, status chips show, call and put rows render with correct
+strikes, row count matches, expiration chips absent on the tab, no horizontal
+overflow. Per repository policy, no test files were changed.
+
+**Next up:** unchanged from Session 13, plus consider surfacing the hottest
+chains ranking on the ticker Flow tab once real data needs emerge.
