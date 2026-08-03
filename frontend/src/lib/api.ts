@@ -669,6 +669,156 @@ function qs(params: Record<string, string | number | string[]>): string {
   return s ? `?${s}` : "";
 }
 
+// O'Neil market direction (rally attempts, follow-through days, EMA touches).
+
+export interface EmaStatus {
+  period: number;
+  value?: number | null;
+  distance_pct?: number | null;
+  above?: boolean | null;
+  touched: boolean;
+  new_touch: boolean;
+  crossed_up: boolean;
+  crossed_down: boolean;
+}
+
+export type ScorecardStatus = "met" | "not_met" | "borderline" | "unavailable";
+
+export interface ScorecardRow {
+  letter: string;
+  name: string;
+  status: ScorecardStatus;
+  value: string;
+  detail: string;
+}
+
+export interface ScorecardSummary {
+  met: number;
+  scored: number;
+  total: number;
+}
+
+export interface FollowThroughDay {
+  date: string;
+  gain_pct: number;
+  volume_ratio?: number | null;
+  day_number: number;
+  quality: string;
+  anchor_low?: number | null;
+  close?: number | null;
+}
+
+export interface DurabilityCheck {
+  name: string;
+  passed: boolean;
+  detail: string;
+}
+
+export interface BottomDurability {
+  ftd_date: string;
+  sessions_since: number;
+  distribution_since: number;
+  gains_held: boolean;
+  checks: DurabilityCheck[];
+  assessment?: string | null;
+}
+
+export interface IndexDirection {
+  symbol: string;
+  label: string;
+  group: string;
+  state: string;
+  state_label: string;
+  state_since?: string | null;
+  as_of?: string | null;
+  last_close?: number | null;
+  change_pct?: number | null;
+  return_3m?: number | null;
+  drawdown_pct?: number | null;
+  rally_day?: number | null;
+  rally_day1_low?: number | null;
+  rally_day1_date?: string | null;
+  distribution_count?: number | null;
+  last_ftd?: FollowThroughDay | null;
+  durability?: BottomDurability | null;
+  rsi?: number | null;
+  rsi_zone: string;
+  timing_label: string;
+  emas: EmaStatus[];
+  scorecard: ScorecardRow[];
+  score?: ScorecardSummary | null;
+  narrative: string[];
+}
+
+export interface DirectionBreadth {
+  uptrend_count: number;
+  rally_count: number;
+  total: number;
+  above_ema50: number;
+  reading: string;
+}
+
+export interface DirectionThresholds {
+  ftd_gain_pct: number;
+  ftd_min_day: number;
+  ftd_ideal_max_day: number;
+  distribution_decline_pct: number;
+  distribution_lookback: number;
+  distribution_pressure_count: number;
+  correction_drawdown_pct: number;
+  ema_periods: number[];
+  ema_touch_band_pct: number;
+  rsi_period: number;
+}
+
+export interface DirectionOverview {
+  as_of?: string | null;
+  provisional: boolean;
+  benchmark: string;
+  breadth: DirectionBreadth;
+  durability?: BottomDurability | null;
+  indices: IndexDirection[];
+  unavailable: string[];
+  thresholds: DirectionThresholds;
+}
+
+export interface EmaSeries {
+  period: number;
+  values: (number | null)[];
+}
+
+export interface DirectionMarker {
+  date: string;
+  kind: string;
+  label: string;
+}
+
+export interface DirectionDetail {
+  index: IndexDirection;
+  candles: Candle[];
+  ema_series: EmaSeries[];
+  markers: DirectionMarker[];
+  provisional: boolean;
+}
+
+export interface DirectionSignal {
+  id: number;
+  symbol: string;
+  label: string;
+  signal_type: string;
+  signal_date: string;
+  state: string;
+  title: string;
+  message: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface DirectionSignalsResponse {
+  items: DirectionSignal[];
+  count: number;
+}
+
 export const api = {
   tickerSnapshot: (symbol: string, signal?: AbortSignal) =>
     getJSON<TickerSnapshot>(`/api/ticker/${symbol}/snapshot`, signal),
@@ -802,6 +952,21 @@ export const api = {
     ),
 
   marketOverview: () => getJSON<MarketOverview>(`/api/market/overview`),
+
+  directionOverview: (signal?: AbortSignal) =>
+    getJSON<DirectionOverview>(`/api/direction`, signal),
+
+  directionDetail: (symbol: string, signal?: AbortSignal) =>
+    getJSON<DirectionDetail>(`/api/direction/${symbol}`, signal),
+
+  directionSignals: (limit = 50, symbol?: string, signal?: AbortSignal) => {
+    const params: Record<string, string | number> = { limit };
+    if (symbol) params.symbol = symbol;
+    return getJSON<DirectionSignalsResponse>(
+      `/api/direction/signals${qs(params)}`,
+      signal,
+    );
+  },
 
   news: () => getJSON<NewsItem[]>(`/api/news`),
 

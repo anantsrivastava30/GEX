@@ -66,6 +66,12 @@ class Settings(BaseSettings):
         "api_url", "https://api.stlouisfed.org/fred"
     )
 
+    # O'Neil market-direction signals (follow-through days, rally attempts,
+    # EMA touches). The in-app signal feed is always on; these toggles opt in
+    # to outbound delivery through the same server-owned channels as alerts.
+    direction_alert_discord: bool = False
+    direction_alert_email: bool = False
+
     # Shared single-workspace state. Phase 3 auth will add ownership; until
     # then watchlists, rules, and events are intentionally server-global.
     app_db_path: str = "data/gex_app.db"

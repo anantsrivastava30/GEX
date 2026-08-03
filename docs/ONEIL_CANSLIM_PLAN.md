@@ -5,6 +5,28 @@ follow-through-day market timing, distribution-day counting) into the FastAPI +
 Next.js stack. Written from the uploaded framework summary; scoped to free data
 per the platform rules in `UW_PARITY_PLAN.md`.
 
+## Revision (2026-08-03): delivered as one PR at the index level
+
+The owner redirected the scope: one PR, algorithms first, applied to the
+indices that govern stock groups (SPY/QQQ/DIA/IWM plus SMH and the SPDR
+sectors) rather than per-stock fundamentals. Delivered:
+
+- `quant_analysis/analytics/market_direction.py`: the state machine
+  (correction, rally attempt, follow-through day, distribution days), EMA and
+  Wilder RSI math, EMA touch detection, the index-adapted CAN SLIM scorecard,
+  and narrative/signal text builders.
+- Backend: `GET /api/direction` (+ `/{symbol}`, `/signals`), the
+  `direction_signals` SQLite log, a 16:20 ET scheduler evaluation with an
+  idempotent lazy fallback, optional Discord/email delivery, config block in
+  `config.yaml`.
+- Frontend: `/direction` page (benchmark hero with the bottom-durability
+  checklist, index card grid, annotated candle/EMA/volume chart, scorecard
+  table, signal feed), sidebar entry, page help, market-page link.
+
+The per-stock fundamental letters (C/A earnings, ROE, institutional 13F) from
+the original phasing below remain future work; the index adaptation maps every
+letter to a price/volume proxy and says so in the UI.
+
 ## Verdict: feasible, in three tiers
 
 Not every letter of CAN SLIM is equally computable from our data budget

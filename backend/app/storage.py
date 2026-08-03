@@ -89,6 +89,23 @@ def init_app_storage() -> None:
             ON alert_events(read_at, created_at DESC);
             CREATE INDEX IF NOT EXISTS alert_events_rule_idx
             ON alert_events(alert_rule_id, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS direction_signals (
+                id INTEGER PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                label TEXT NOT NULL,
+                signal_type TEXT NOT NULL,
+                signal_date TEXT NOT NULL,
+                state TEXT NOT NULL,
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(symbol, signal_type, signal_date)
+            );
+
+            CREATE INDEX IF NOT EXISTS direction_signals_date_idx
+            ON direction_signals(signal_date DESC, created_at DESC);
             """
         )
         columns = {
@@ -373,3 +390,49 @@ def mark_all_alert_events_read() -> int:
             "UPDATE alert_events SET read_at = ? WHERE read_at IS NULL", (_now(),)
         )
     return int(cursor.rowcount)
+
+
+def insert_direction_signal(data: Dict[str, Any]) -> Optional[int]:
+    """Append one market-direction signal; None when it already exists."""
+
+    with connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT OR IGNORE INTO direction_signals(
+                symbol, label, signal_type, signal_date, state, title,
+                message, payload_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                data["symbol"],
+                data["label"],
+                data["signal_type"],
+                data["signal_date"],
+                data["state"],
+                data["title"],
+                data["message"],
+                json.dumps(data["payload"]),
+                _now(),
+            ),
+        )
+        return int(cursor.lastrowid) if cursor.rowcount else None
+
+
+def list_direction_signals(
+    limit: int, symbol: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    sql = "SELECT * FROM direction_signals"
+    params: List[Any] = []
+    if symbol:
+        sql += " WHERE symbol = ?"
+        params.append(symbol)
+    sql += " ORDER BY signal_date DESC, created_at DESC LIMIT ?"
+    params.append(limit)
+    with connection() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    out = []
+    for row in rows:
+        item = dict(row)
+        item["payload"] = json.loads(item.pop("payload_json"))
+        out.append(item)
+    return out

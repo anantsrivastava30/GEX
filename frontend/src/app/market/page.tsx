@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { api, MarketOverview } from "@/lib/api";
 import StatTile from "@/components/ui/StatTile";
@@ -27,6 +28,20 @@ export default function MarketPage() {
         <h1 className="text-lg font-semibold">Market Overview</h1>
         <p className="text-sm text-muted">Volatility, rates, and futures at a glance.</p>
       </div>
+
+      <Link
+        href="/direction"
+        className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface px-4 py-3 transition-colors hover:bg-surface-hover"
+      >
+        <span>
+          <span className="block text-sm font-medium">Market Direction</span>
+          <span className="block text-xs text-muted">
+            Follow-through days, distribution counts, EMA levels, and sector
+            breadth - the O&apos;Neil uptrend/bottom read.
+          </span>
+        </span>
+        <span aria-hidden className="text-muted">→</span>
+      </Link>
 
       {error && (
         <p className="rounded-md border border-border bg-surface px-4 py-3 text-sm text-muted">

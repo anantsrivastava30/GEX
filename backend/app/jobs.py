@@ -85,6 +85,32 @@ def run_alert_evaluation() -> None:
     )
 
 
+def run_direction_evaluation() -> None:
+    """Persist O'Neil direction signals shortly after the close.
+
+    Runs on completed daily bars only; the lazy GET-path evaluation shares
+    the same idempotent insert, so double-runs never double-alert.
+    """
+
+    now = datetime.now(tz=MARKET_TZ)
+    from quant_analysis.storage.snapshots import is_market_session
+
+    if not is_market_session(now.date()):
+        return
+    try:
+        from backend.app.services_direction import evaluate_direction_signals
+
+        result = evaluate_direction_signals()
+        logger.info(
+            "Direction evaluation done: %d indices, %d new signals (as of %s)",
+            result["evaluated"],
+            result["inserted"],
+            result["as_of"],
+        )
+    except Exception:
+        logger.exception("Direction evaluation failed")
+
+
 def warm_congress_cache() -> None:
     """Best-effort daily warm-up for the six-hour disclosure cache."""
 
@@ -289,6 +315,19 @@ def create_scheduler() -> BackgroundScheduler:
         coalesce=True,
         max_instances=1,
         misfire_grace_time=300,
+    )
+    scheduler.add_job(
+        run_direction_evaluation,
+        CronTrigger(
+            day_of_week="mon-fri",
+            hour=16,
+            minute=20,
+            timezone=str(MARKET_TZ),
+        ),
+        id="direction_evaluation",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=1800,
     )
     scheduler.add_job(
         warm_congress_cache,

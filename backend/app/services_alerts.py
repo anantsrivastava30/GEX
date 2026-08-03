@@ -138,24 +138,30 @@ def _insert_events(rule: Dict[str, Any], result: Dict[str, Any]) -> List[Dict[st
     return inserted
 
 
-def _discord_digest(rule: Dict[str, Any], events: List[Dict[str, Any]]) -> None:
+def post_discord_message(content: str) -> None:
+    """Send one message through the server-owned Discord webhook.
+
+    Shared transport for screener alert digests and market-direction
+    signals; callers own the message text.
+    """
+
     settings = get_settings()
     webhook = settings.alert_discord_webhook_url or ""
     parsed = urlparse(webhook)
     if parsed.scheme != "https" or parsed.hostname not in _DISCORD_HOSTS:
         raise ValueError("Invalid Discord webhook configuration")
-    lines = [f"**{rule['name']}** - {len(events)} snapshot match(es)"]
-    lines.extend(f"- {event['title']}: {event['message']}" for event in events[:10])
     response = requests.post(
         webhook,
-        json={"content": "\n".join(lines)[:1900], "allowed_mentions": {"parse": []}},
+        json={"content": content[:1900], "allowed_mentions": {"parse": []}},
         timeout=10,
         allow_redirects=False,
     )
     response.raise_for_status()
 
 
-def _email_digest(rule: Dict[str, Any], events: List[Dict[str, Any]]) -> None:
+def send_email_message(subject: str, body: str) -> None:
+    """Send one email through the server-owned SMTP settings."""
+
     settings = get_settings()
     sender = settings.smtp_from or ""
     recipient = settings.alert_email_to or ""
@@ -163,12 +169,10 @@ def _email_digest(rule: Dict[str, Any], events: List[Dict[str, Any]]) -> None:
         raise ValueError("Invalid email address configuration")
 
     message = EmailMessage()
-    message["Subject"] = f"GEX alert: {rule['name']}"
+    message["Subject"] = subject
     message["From"] = sender
     message["To"] = recipient
-    body = [f"{len(events)} persisted snapshot match(es) for {rule['name']}:\n"]
-    body.extend(f"- {event['title']}: {event['message']}" for event in events)
-    message.set_content("\n".join(body))
+    message.set_content(body)
 
     with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=15) as client:
         if settings.smtp_starttls:
@@ -176,6 +180,18 @@ def _email_digest(rule: Dict[str, Any], events: List[Dict[str, Any]]) -> None:
         if settings.smtp_username:
             client.login(settings.smtp_username, settings.smtp_password or "")
         client.send_message(message)
+
+
+def _discord_digest(rule: Dict[str, Any], events: List[Dict[str, Any]]) -> None:
+    lines = [f"**{rule['name']}** - {len(events)} snapshot match(es)"]
+    lines.extend(f"- {event['title']}: {event['message']}" for event in events[:10])
+    post_discord_message("\n".join(lines))
+
+
+def _email_digest(rule: Dict[str, Any], events: List[Dict[str, Any]]) -> None:
+    body = [f"{len(events)} persisted snapshot match(es) for {rule['name']}:\n"]
+    body.extend(f"- {event['title']}: {event['message']}" for event in events)
+    send_email_message(f"GEX alert: {rule['name']}", "\n".join(body))
 
 
 def _deliver_channel(
