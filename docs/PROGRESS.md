@@ -1096,6 +1096,35 @@ rather than blanks, and the fourth honestly reports 6 scored. Prior smokes
 re-run green; backend pytest 20/21 (known pre-existing failure); frontend
 tsc/lint/build clean.
 
+### Session 23 - 2026-08-03 (Leaders detail actually fetches; deploy self-heals)
+
+Second live-data report: the table read as sparse and opening a row did
+nothing. Two real defects behind it.
+
+- **Detail panel never called its endpoint.** `/leaders` rendered the
+  selected stock straight from the already-loaded list row, so the
+  "open one to pull its financials" promise in the table and help text was
+  false - a technical-only row stayed technical-only forever. Clicking now
+  calls `GET /api/canslim/{symbol}` with request-identity guarding, a
+  "Fetching financials…" state, and an error state; a row goes from four
+  scored letters to all seven.
+- **The fix exposed a latent regression, caught by the smoke:**
+  `get_stock_detail` passed `rs_percentile=None`, so serving the panel from
+  the endpoint would have blanked the L criterion that the table row had
+  just shown. Relative strength and group are properties of the scanned
+  universe, so both are now carried over from the cached scan, along with
+  the symbol's fundamentals-history observations for the I trend.
+- **Fresh deployments self-heal**: the lifespan now kicks off the
+  whole-universe fundamentals warm-up in a daemon thread when the scheduler
+  is enabled, invalidating the cached scan when it finishes, so a rebuilt
+  container fills the table within minutes instead of waiting for the 07:40
+  ET job. Coverage copy updated to describe that rather than a fixed top-25.
+
+**Verified:** dedicated smoke asserting a technical-only row scores 4 in the
+list and 7 after the detail fetch, with RS percentile and group unchanged;
+holistic, universe, and outcomes smokes re-run green; backend pytest 20/21
+(known pre-existing failure); frontend tsc/lint/build clean.
+
 **Verified (Session 20):** new universe smoke (125 candidates, 15 groups, fundamentals
 capped at 25 and always covering the breakout names, NVDA credited to
 Semiconductors rather than SPY/QQQ, ETFs never candidates, technical-only

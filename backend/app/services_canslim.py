@@ -569,19 +569,40 @@ def get_stock_detail(symbol: str) -> Optional[Dict[str, Any]]:
         return None
     market_state = _market_state()
     fundamentals = get_fundamentals(symbol)
-    item = _leader_item(symbol, bars, fundamentals, None, None, market_state, cfg)
-    item.pop("_result", None)
-    item["fundamentals_fetched"] = True
-    # Reuse the cached scan's attribution when the symbol was in it, so a
-    # detail view names the same leading group as the table row.
+
+    # Relative strength and group are properties of the scanned universe,
+    # not of one symbol, so carry them over from the cached scan. Without
+    # this a detail view would blank out L that the table row just showed.
+    rs_percentile: Optional[float] = None
+    universe_size: Optional[int] = None
+    attribution: Dict[str, Any] = {}
     try:
-        cached = cache.get_or_compute("canslim:leaders", TTL_LEADERS, lambda: _scan(cfg))
+        cached = _cached_scan(cfg)
         match = next((i for i in cached["items"] if i["symbol"] == symbol), None)
         if match:
-            for key in ("sector_symbol", "sector_label", "sector_rank"):
-                item[key] = match.get(key)
+            rs_percentile = match.get("rs_percentile")
+            universe_size = cached.get("scanned")
+            attribution = {
+                key: match.get(key)
+                for key in ("sector_symbol", "sector_label", "sector_rank")
+            }
     except Exception:
-        logger.info("Attribution lookup failed for %s", symbol)
+        logger.info("Scan lookup failed for %s", symbol)
+
+    observations = _trend_observations([symbol]).get(symbol, [])
+    item = _leader_item(
+        symbol,
+        bars,
+        fundamentals,
+        rs_percentile,
+        universe_size,
+        market_state,
+        cfg,
+        observations=observations,
+    )
+    item.pop("_result", None)
+    item["fundamentals_fetched"] = True
+    item.update(attribution)
     return item
 
 

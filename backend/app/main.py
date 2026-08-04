@@ -53,6 +53,28 @@ async def lifespan(app: FastAPI):
             "Scheduler started: intraday snapshots for %s",
             ", ".join(snapshot_symbols()),
         )
+        # A fresh container would otherwise show a technical-only Leaders
+        # table until the next morning's warm-up. Fill it in the background
+        # instead; the fetches are paced and cached for a day.
+        from threading import Thread
+
+        def _startup_warm() -> None:
+            try:
+                from backend.app.services_canslim import warm_fundamentals_universe
+
+                result = warm_fundamentals_universe()
+                from backend.app.cache import cache
+
+                cache.invalidate("canslim:leaders")
+                logger.info(
+                    "Startup fundamentals warm-up: %d/%d fetched",
+                    result["fetched"],
+                    result["universe"],
+                )
+            except Exception:
+                logger.exception("Startup fundamentals warm-up failed")
+
+        Thread(target=_startup_warm, name="canslim-warmup", daemon=True).start()
     try:
         yield
     finally:

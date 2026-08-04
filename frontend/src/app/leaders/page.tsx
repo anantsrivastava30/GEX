@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, LeadersResponse, StockLeader, StockReadiness } from "@/lib/api";
 import Panel from "@/components/ui/Panel";
 import StatePill from "@/components/direction/StatePill";
@@ -229,8 +229,18 @@ export default function LeadersPage() {
   const [data, setData] = useState<LeadersResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [detail, setDetail] = useState<StockLeader | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
   const [sector, setSector] = useState<string>("all");
   const [buyOnly, setBuyOnly] = useState(false);
+  const detailRequest = useRef(0);
+
+  const selectSymbol = (symbol: string) => {
+    if (symbol === selected) return;
+    setDetail(null);
+    setDetailError(null);
+    setSelected(symbol);
+  };
 
   useEffect(() => {
     const controller = new AbortController();
@@ -249,7 +259,33 @@ export default function LeadersPage() {
     return () => controller.abort();
   }, []);
 
-  const selectedItem = data?.items.find((i) => i.symbol === selected) ?? null;
+  // Rows outside the fundamentals shortlist arrive technical-only. Opening
+  // one fetches its financials on demand (and warms the shared 24h cache),
+  // which is what the table's "open one to pull its financials" promises.
+  const rowItem = data?.items.find((i) => i.symbol === selected) ?? null;
+  const selectedItem = detail?.symbol === selected ? detail : rowItem;
+  const detailPending = Boolean(
+    selected && rowItem && !rowItem.fundamentals_fetched && !detail && !detailError,
+  );
+
+  useEffect(() => {
+    if (!selected) return;
+    const row = data?.items.find((i) => i.symbol === selected);
+    if (!row || row.fundamentals_fetched) return;
+    const requestId = ++detailRequest.current;
+    const controller = new AbortController();
+    api
+      .canslimDetail(selected, controller.signal)
+      .then((response) => {
+        if (detailRequest.current !== requestId) return;
+        setDetail(response);
+      })
+      .catch((e) => {
+        if (controller.signal.aborted || detailRequest.current !== requestId) return;
+        setDetailError(String(e.message ?? e));
+      });
+    return () => controller.abort();
+  }, [selected, data]);
   const buyCount = data?.items.filter((i) => i.readiness === "buy_candidate").length ?? 0;
   const watchCount = data?.items.filter((i) => i.readiness === "near_pivot").length ?? 0;
   const extendedCount = data?.items.filter((i) => i.readiness === "extended").length ?? 0;
@@ -400,7 +436,7 @@ export default function LeadersPage() {
                         key={item.symbol}
                         item={item}
                         selected={selected === item.symbol}
-                        onSelect={setSelected}
+                        onSelect={selectSymbol}
                       />
                     ))}
                   </tbody>
@@ -414,10 +450,10 @@ export default function LeadersPage() {
                 " (holdings provider unreachable - using the configured constituent lists, which can drift)"}
               {data.holdings_source === "mixed" &&
                 " (some ETFs used configured constituent lists because live holdings were unreachable)"}
-              . Fundamentals were fetched for the top{" "}
-              {data.fundamentals_scanned}; rows marked{" "}
-              <span className="font-mono">·</span> are technical-only - open one
-              to pull its financials.
+              . Fundamentals are loaded for {data.fundamentals_scanned} of them;
+              rows marked <span className="font-mono">·</span> are
+              technical-only until the background warm-up finishes - opening one
+              fetches its financials immediately.
               {data.dropped_for_capacity > 0 &&
                 ` ${data.dropped_for_capacity} further candidate(s) exceeded the scan cap.`}
             </p>
@@ -431,7 +467,20 @@ export default function LeadersPage() {
           </Panel>
 
           {selectedItem && (
-            <Panel title={`${selectedItem.symbol} - full CAN SLIM read`}>
+            <Panel
+              title={`${selectedItem.symbol} - full CAN SLIM read`}
+              right={
+                detailPending ? (
+                  <span className="text-[11px] text-muted">
+                    Fetching financials…
+                  </span>
+                ) : detailError ? (
+                  <span className="text-[11px] text-warning">
+                    Financials unavailable: {detailError}
+                  </span>
+                ) : undefined
+              }
+            >
               <div className="space-y-4">
                 <div className="space-y-1 text-sm text-foreground/90">
                   {selectedItem.narrative.map((line, i) => (
