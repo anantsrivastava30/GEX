@@ -48,6 +48,12 @@ class TTLCache:
             hit = self._store.get(key)
             return hit[0] if hit is not None and hit[1] > now else None
 
+    def invalidate(self, key: str) -> None:
+        """Drop one entry so the next read recomputes it."""
+
+        with self._lock:
+            self._store.pop(key, None)
+
     def clear(self) -> None:
         with self._lock:
             self._store.clear()

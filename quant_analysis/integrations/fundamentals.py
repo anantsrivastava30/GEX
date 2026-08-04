@@ -78,14 +78,29 @@ def _quarterly_eps_growth(ticker: Any, out: Dict[str, Any]) -> None:
         except Exception:
             pass
 
+    if len(values) < 5:
+        # Last resort: quarterly net income still answers "is the company
+        # earning more than a year ago", which is what C asks.
+        try:
+            q = ticker.quarterly_income_stmt
+            net = _first_row(q, ("Net Income", "Net Income Common Stockholders"))
+            if net is not None:
+                values = [float(v) for v in net.dropna()]
+        except Exception:
+            pass
+
     if len(values) >= 5:
         series = _yoy_series(values)
         out["quarterly_eps"] = values[0]
         out["quarterly_eps_prior"] = values[4]
+        out["quarterly_eps_values"] = values[:8]
         out["quarterly_eps_growth_pct"] = series[0] if series else None
         out["quarterly_eps_growth_series"] = series
         if out["quarterly_eps_growth_pct"] is not None:
             return
+        # A non-positive base is not missing data - the company was (or is)
+        # losing money, which the evaluator reports as a failed criterion.
+        return
     out["missing"].append("quarterly_eps_growth")
 
 
@@ -119,6 +134,7 @@ def _annual_eps_growth(ticker: Any, out: Dict[str, Any]) -> None:
         if eps is not None:
             values = [float(v) for v in eps.dropna()]
             if len(values) >= 2:
+                out["annual_eps_values"] = values[:5]
                 growths = [
                     g
                     for g in (
@@ -130,7 +146,7 @@ def _annual_eps_growth(ticker: Any, out: Dict[str, Any]) -> None:
                 if growths:
                     out["annual_eps_growth_pct"] = sum(growths) / len(growths)
                     out["annual_growth_years"] = len(growths)
-                    return
+                return
     except Exception:
         pass
     out["missing"].append("annual_eps_growth")
@@ -226,6 +242,8 @@ def fetch_stock_fundamentals(symbol: str) -> Dict[str, Any]:
         "quote_type": None,
         "quarterly_eps": None,
         "quarterly_eps_prior": None,
+        "quarterly_eps_values": [],
+        "annual_eps_values": [],
         "quarterly_eps_growth_pct": None,
         "quarterly_eps_growth_series": [],
         "quarterly_revenue_growth_pct": None,

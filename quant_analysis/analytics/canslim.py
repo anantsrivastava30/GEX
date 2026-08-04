@@ -334,10 +334,29 @@ def evaluate_stock_canslim(
     sales_accel = growth_acceleration(
         fundamentals.get("quarterly_revenue_growth_series") or []
     )
-    if qtr is None:
+    qtr_values = fundamentals.get("quarterly_eps_values") or []
+    if qtr is None and len(qtr_values) >= 5:
+        # Earnings exist but the growth rate is undefined because the
+        # company lost money. That is a failed criterion, not missing data:
+        # O'Neil required real and rising profits.
+        latest, year_ago = qtr_values[0], qtr_values[4]
+        if latest <= 0:
+            detail = (
+                f"Latest quarter lost money ({latest:,.2f} per share); O'Neil bought profitable, "
+                "accelerating earnings, so this fails outright."
+            )
+            value = "loss"
+        else:
+            detail = (
+                f"Returned to profit ({latest:,.2f} per share) from a loss a year ago, so a growth rate "
+                "is undefined. Promising, but it does not satisfy the criterion as written."
+            )
+            value = "loss → profit"
+        rows.append(_row("C", "Current quarterly earnings", "not_met", value, detail))
+    elif qtr is None:
         rows.append(_row("C", "Current quarterly earnings", "unavailable", "n/a",
                          no_fetch if skipped else
-                         "Quarterly EPS growth could not be fetched (or the year-ago base was not positive)."))
+                         "Fewer than five quarters of comparable earnings are available for this company."))
     else:
         status = (
             "met" if qtr >= cfg["quarterly_growth_met_pct"]
@@ -369,10 +388,19 @@ def evaluate_stock_canslim(
     # A - annual earnings growth + ROE
     annual = fundamentals.get("annual_eps_growth_pct")
     roe = fundamentals.get("roe_pct")
-    if annual is None and roe is None:
+    annual_values = fundamentals.get("annual_eps_values") or []
+    annual_loss = bool(annual_values) and min(annual_values[:2] or [0]) <= 0
+    if annual is None and roe is None and not annual_values:
         rows.append(_row("A", "Annual earnings growth", "unavailable", "n/a",
                          no_fetch if skipped
                          else "Annual EPS growth and ROE could not be fetched."))
+    elif annual is None and annual_loss:
+        roe_part = f" ROE {roe:.0f}%." if roe is not None else ""
+        rows.append(_row(
+            "A", "Annual earnings growth", "not_met", "loss years",
+            f"Annual earnings were negative in the recent record, so a multi-year growth rate is "
+            f"undefined and the three-to-five-year track record O'Neil wanted does not exist.{roe_part}",
+        ))
     else:
         growth_ok = annual is not None and annual >= cfg["annual_growth_met_pct"]
         growth_near = annual is not None and annual >= cfg["annual_growth_borderline_pct"]
@@ -486,7 +514,16 @@ def evaluate_stock_canslim(
                          no_fetch if skipped else
                          "Institutional ownership could not be fetched (13F data is quarterly and lagged)."))
     else:
-        if cfg["inst_min_pct"] <= inst <= cfg["inst_max_pct"]:
+        if inst > 100.0:
+            # Yahoo reports holdings against float rather than shares
+            # outstanding, so heavily shorted or low-float names can print
+            # above 100%. Say so instead of implying impossible ownership.
+            status = "borderline"
+            detail = (
+                f"Reported ownership is {inst:.0f}% of float - above 100%, which happens with low-float "
+                "or heavily shorted names. Treat the level as unreliable and watch the direction instead."
+            )
+        elif cfg["inst_min_pct"] <= inst <= cfg["inst_max_pct"]:
             status = "met"
             detail = "Meaningful fund ownership with buying power left."
         elif inst > cfg["inst_max_pct"]:

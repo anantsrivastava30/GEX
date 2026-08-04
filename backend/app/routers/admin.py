@@ -1,4 +1,4 @@
-"""Admin endpoints: on-demand snapshot capture.
+"""Admin endpoints: on-demand snapshot capture and fundamentals warm-up.
 
 PIN-gated with the same AI_PIN used for paid AI calls, since both spend
 scarce resources (Tradier rate budget here, OpenAI dollars there).
@@ -10,7 +10,7 @@ from fastapi import APIRouter, Header, HTTPException
 
 from backend.app.config import get_settings
 from backend.app.services_ai import verify_ai_pin
-from backend.app.schemas import CaptureResponse
+from backend.app.schemas import CaptureResponse, FundamentalsWarmupResponse
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -48,3 +48,26 @@ def capture_snapshots(
         return capture_universe(producer="admin")
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/warm-fundamentals", response_model=FundamentalsWarmupResponse)
+def warm_fundamentals(
+    pin: Optional[str] = Header(None, alias="X-AI-PIN", max_length=128),
+):
+    """Fetch CAN SLIM fundamentals for the whole candidate universe now.
+
+    The scheduler does this each weekday morning; this endpoint exists so a
+    fresh deployment does not have to wait for the next run before the
+    Leaders table is fully populated. Synchronous and paced, so a cold
+    universe takes a few minutes.
+    """
+
+    verify_ai_pin(pin)
+    from backend.app.services_canslim import warm_fundamentals_universe
+
+    result = warm_fundamentals_universe()
+    from backend.app.cache import cache
+
+    # Drop the cached scan so the next read reflects the new fundamentals.
+    cache.invalidate("canslim:leaders")
+    return result

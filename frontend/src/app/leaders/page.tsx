@@ -24,6 +24,19 @@ function fmtPct(value: number | null | undefined, signed = true): string {
   return `${sign}${value.toFixed(0)}%`;
 }
 
+// When a growth rate is undefined because the company lost money, the
+// criterion still has a verdict - show that word rather than a blank dash.
+function letterValue(
+  item: StockLeader,
+  letter: string,
+  numeric: number | null | undefined,
+): string {
+  if (numeric != null) return fmtPct(numeric);
+  const row = item.scorecard.find((r) => r.letter === letter);
+  if (!row || row.status === "unavailable") return "–";
+  return row.value.replace(" · ROE", "").split(" · ")[0] || "–";
+}
+
 function GateBanner({ data }: { data: LeadersResponse }) {
   const tone = data.gate_open
     ? "border-positive/40 bg-positive/5"
@@ -119,7 +132,9 @@ function LeaderRow({
             : "Technical-only row"
         }
       >
-        {item.fundamentals_fetched ? fmtPct(item.quarterly_eps_growth_pct) : "·"}
+        {item.fundamentals_fetched
+          ? letterValue(item, "C", item.quarterly_eps_growth_pct)
+          : "·"}
         {item.fundamentals_fetched && item.eps_acceleration === "accelerating" && (
           <span className="ml-0.5 text-positive">▲</span>
         )}
@@ -127,8 +142,10 @@ function LeaderRow({
           <span className="ml-0.5 text-negative">▼</span>
         )}
       </td>
-      <td className="py-2 pr-2 font-mono">
-        {item.fundamentals_fetched ? fmtPct(item.annual_eps_growth_pct) : "·"}
+      <td className="whitespace-nowrap py-2 pr-2 font-mono">
+        {item.fundamentals_fetched
+          ? letterValue(item, "A", item.annual_eps_growth_pct)
+          : "·"}
       </td>
       <td className="py-2 pr-2 font-mono">
         {!item.fundamentals_fetched

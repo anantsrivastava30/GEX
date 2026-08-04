@@ -914,3 +914,12 @@ class DirectionOutcomesResponse(BaseModel):
     stop_pct: float
     summary: DirectionOutcomeSummary
     rows: List[DirectionOutcomeRow]
+
+
+class FundamentalsWarmupResponse(BaseModel):
+    """Result of an on-demand CAN SLIM fundamentals warm-up."""
+
+    universe: int
+    fetched: int
+    cached: int
+    failed: int

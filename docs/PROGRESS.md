@@ -1060,6 +1060,42 @@ base *geometry* (cup-with-handle vs flat base shape), EPS stability ratings,
 and the qualitative "new" in N - new products, management, or industry
 conditions - which remains a news-feed judgement.
 
+### Session 22 - 2026-08-03 (first live-data run: fixes from real output)
+
+The first real deployment surfaced issues that fakes could not. Live ETF
+holdings worked (real XBI/IWM constituents appeared), but earnings columns
+were largely blank.
+
+- **Correctness fix**: a company with negative earnings produced an
+  undefined growth rate, which the evaluator reported as *unavailable*. A
+  loss is a failed criterion, not missing data - O'Neil required real,
+  rising profits. C now returns `not_met` with "loss" (or "loss → profit"
+  for a turnaround, which still does not satisfy the criterion as written)
+  and A returns `not_met` with "loss years". This is why the biotech-heavy
+  rows looked empty: they were scoring 2/6 instead of an honest 2/7 with
+  two explicit failures.
+- **Coverage fix**: quarterly EPS extraction now falls back to quarterly
+  net income when per-share rows are absent or too short, and raw EPS
+  values are retained so the evaluator can distinguish a loss from genuinely
+  absent history ("fewer than five comparable quarters").
+- **Data-quirk fix**: Yahoo reports institutional ownership against float,
+  so low-float or heavily shorted names print above 100% (TWST showed
+  129%). Those now read borderline with an explanation instead of implying
+  impossible ownership.
+- **Operational fix**: `POST /api/admin/warm-fundamentals` (PIN-gated, like
+  the existing capture endpoint) runs the whole-universe warm-up on demand
+  and invalidates the cached scan, so a fresh deployment does not have to
+  wait for the 07:40 ET job. Added `cache.invalidate`.
+- The Leaders table now prints the criterion's verdict word ("loss", "loss
+  years") where a numeric growth rate does not exist, instead of a dash.
+
+**Verified:** case smoke over realistic live-shaped inputs (loss-making
+biotech, >100% institutional, loss-to-profit turnaround, too-few-quarters
+spin-off) - the first three now score 7 of 7 letters with explicit failures
+rather than blanks, and the fourth honestly reports 6 scored. Prior smokes
+re-run green; backend pytest 20/21 (known pre-existing failure); frontend
+tsc/lint/build clean.
+
 **Verified (Session 20):** new universe smoke (125 candidates, 15 groups, fundamentals
 capped at 25 and always covering the breakout names, NVDA credited to
 Semiconductors rather than SPY/QQQ, ETFs never candidates, technical-only
