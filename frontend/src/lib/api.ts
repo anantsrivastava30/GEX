@@ -912,6 +912,10 @@ export interface StockLeader {
   annual_eps_growth_pct?: number | null;
   roe_pct?: number | null;
   institutional_pct?: number | null;
+  sector_symbol?: string | null;
+  sector_label?: string | null;
+  sector_rank?: number | null;
+  fundamentals_fetched: boolean;
   breakout?: StockBreakout | null;
   entry?: StockEntry | null;
   last_close?: number | null;
@@ -929,6 +933,13 @@ export interface LeadersResponse {
   gate_message: string;
   items: StockLeader[];
   universe: string[];
+  universe_size: number;
+  scanned: number;
+  fundamentals_scanned: number;
+  holdings_source: "provider" | "configured" | "mixed" | "unavailable";
+  etfs_without_holdings: string[];
+  dropped_for_capacity: number;
+  sectors: { symbol?: string | null; label: string }[];
   excluded: string[];
   unavailable: string[];
   stop_loss_pct: number;

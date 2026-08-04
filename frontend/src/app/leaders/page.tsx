@@ -65,6 +65,21 @@ function LeaderRow({
       </td>
       <td className="py-2 pr-2">
         <span
+          className="text-[11px] text-muted"
+          title={
+            item.sector_rank
+              ? `${item.sector_label} ranks #${item.sector_rank} by relative strength`
+              : undefined
+          }
+        >
+          {item.sector_label ?? "—"}
+          {item.sector_rank ? (
+            <span className="ml-1 font-mono text-faint">#{item.sector_rank}</span>
+          ) : null}
+        </span>
+      </td>
+      <td className="py-2 pr-2">
+        <span
           className={`inline-flex items-center whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[10px] ${READINESS_BADGE[item.readiness]}`}
         >
           {item.readiness_label}
@@ -87,14 +102,26 @@ function LeaderRow({
       <td className="py-2 pr-2 font-mono">
         {item.rs_percentile != null ? item.rs_percentile.toFixed(0) : "–"}
       </td>
-      <td className="py-2 pr-2 font-mono">{fmtPct(item.quarterly_eps_growth_pct)}</td>
-      <td className="py-2 pr-2 font-mono">{fmtPct(item.annual_eps_growth_pct)}</td>
+      <td className="py-2 pr-2 font-mono" title={item.fundamentals_fetched ? undefined : "Technical-only row"}>
+        {item.fundamentals_fetched ? fmtPct(item.quarterly_eps_growth_pct) : "·"}
+      </td>
       <td className="py-2 pr-2 font-mono">
-        {item.roe_pct != null ? `${item.roe_pct.toFixed(0)}%` : "–"}
+        {item.fundamentals_fetched ? fmtPct(item.annual_eps_growth_pct) : "·"}
+      </td>
+      <td className="py-2 pr-2 font-mono">
+        {!item.fundamentals_fetched
+          ? "·"
+          : item.roe_pct != null
+            ? `${item.roe_pct.toFixed(0)}%`
+            : "–"}
       </td>
       <td className="py-2 pr-2 font-mono">{fmtPct(item.off_high_pct)}</td>
       <td className="py-2 pr-2 font-mono">
-        {item.institutional_pct != null ? `${item.institutional_pct.toFixed(0)}%` : "–"}
+        {!item.fundamentals_fetched
+          ? "·"
+          : item.institutional_pct != null
+            ? `${item.institutional_pct.toFixed(0)}%`
+            : "–"}
       </td>
       <td className="py-2 pr-2">
         {item.breakout ? (
@@ -129,6 +156,8 @@ export default function LeadersPage() {
   const [data, setData] = useState<LeadersResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [sector, setSector] = useState<string>("all");
+  const [buyOnly, setBuyOnly] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -152,15 +181,22 @@ export default function LeadersPage() {
   const watchCount = data?.items.filter((i) => i.readiness === "near_pivot").length ?? 0;
   const extendedCount = data?.items.filter((i) => i.readiness === "extended").length ?? 0;
 
+  const actionable = new Set(["buy_candidate", "extended", "near_pivot"]);
+  const visibleItems = (data?.items ?? []).filter((item) => {
+    if (sector !== "all" && (item.sector_symbol ?? "watchlist") !== sector) return false;
+    if (buyOnly && !actionable.has(item.readiness)) return false;
+    return true;
+  });
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h1 className="text-lg font-semibold">Stock Leaders</h1>
           <p className="text-sm text-muted">
-            CAN SLIM scan of the snapshot universe: earnings growth, breakouts,
-            relative strength, and sponsorship - buy flags only when the market
-            allows them.
+            CAN SLIM scan across the holdings of every tracked market and
+            sector ETF: earnings growth, breakouts, relative strength, and
+            sponsorship - buy flags only when the market allows them.
           </p>
         </div>
         {data?.provisional && (
@@ -187,6 +223,58 @@ export default function LeadersPage() {
         <>
           <GateBanner data={data} />
 
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="mr-1 text-[11px] uppercase tracking-wide text-muted">
+              Group
+            </span>
+            <button
+              type="button"
+              onClick={() => setSector("all")}
+              aria-pressed={sector === "all"}
+              className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
+                sector === "all"
+                  ? "border-accent bg-accent/10 text-accent-strong"
+                  : "border-border bg-surface text-muted hover:bg-surface-hover"
+              }`}
+            >
+              All ({data.items.length})
+            </button>
+            {data.sectors.map((s) => {
+              const key = s.symbol ?? "watchlist";
+              const count = data.items.filter(
+                (i) => (i.sector_symbol ?? "watchlist") === key,
+              ).length;
+              if (!count) return null;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setSector(key)}
+                  aria-pressed={sector === key}
+                  className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
+                    sector === key
+                      ? "border-accent bg-accent/10 text-accent-strong"
+                      : "border-border bg-surface text-muted hover:bg-surface-hover"
+                  }`}
+                >
+                  {s.label} ({count})
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              onClick={() => setBuyOnly((v) => !v)}
+              aria-pressed={buyOnly}
+              className={`ml-2 rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
+                buyOnly
+                  ? "border-positive/50 bg-positive/10 text-positive"
+                  : "border-border bg-surface text-muted hover:bg-surface-hover"
+              }`}
+            >
+              Actionable only
+            </button>
+          </div>
+
           <Panel
             title="Scan results"
             right={
@@ -198,11 +286,16 @@ export default function LeadersPage() {
           >
             {data.items.length === 0 ? (
               <p className="text-sm text-muted">
-                No stocks could be scanned. The universe comes from the snapshot
-                configuration and shared watchlists
+                No stocks could be scanned. The universe is built from the
+                holdings of the tracked market and sector ETFs
                 {data.unavailable.length > 0 &&
                   `; unavailable: ${data.unavailable.join(", ")}`}
                 .
+              </p>
+            ) : visibleItems.length === 0 ? (
+              <p className="text-sm text-muted">
+                No stocks match these filters. Clear the group or actionable
+                filter to see the full scan.
               </p>
             ) : (
               <div className="overflow-x-auto">
@@ -210,6 +303,9 @@ export default function LeadersPage() {
                   <thead>
                     <tr className="border-b border-border text-[11px] uppercase tracking-wide text-muted">
                       <th className="py-2 pr-2">Stock</th>
+                      <th className="py-2 pr-2" title="Strongest ETF holding this stock">
+                        Group
+                      </th>
                       <th className="py-2 pr-2">Readiness</th>
                       <th className="py-2 pr-2">Letters</th>
                       <th className="py-2 pr-2">Met</th>
@@ -226,7 +322,7 @@ export default function LeadersPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {data.items.map((item) => (
+                    {visibleItems.map((item) => (
                       <LeaderRow
                         key={item.symbol}
                         item={item}
@@ -238,9 +334,25 @@ export default function LeadersPage() {
                 </table>
               </div>
             )}
-            {data.unavailable.length > 0 && data.items.length > 0 && (
-              <p className="mt-2 text-[11px] text-warning">
-                No price history for: {data.unavailable.join(", ")}
+            <p className="mt-3 text-[11px] text-muted">
+              Scanned {data.scanned} of {data.universe_size} candidates drawn
+              from the tracked ETFs
+              {data.holdings_source === "configured" &&
+                " (holdings provider unreachable - using the configured constituent lists, which can drift)"}
+              {data.holdings_source === "mixed" &&
+                " (some ETFs used configured constituent lists because live holdings were unreachable)"}
+              . Fundamentals were fetched for the top{" "}
+              {data.fundamentals_scanned}; rows marked{" "}
+              <span className="font-mono">·</span> are technical-only - open one
+              to pull its financials.
+              {data.dropped_for_capacity > 0 &&
+                ` ${data.dropped_for_capacity} further candidate(s) exceeded the scan cap.`}
+            </p>
+            {data.unavailable.length > 0 && (
+              <p className="mt-1 text-[11px] text-warning">
+                No price history for: {data.unavailable.slice(0, 12).join(", ")}
+                {data.unavailable.length > 12 &&
+                  ` +${data.unavailable.length - 12} more`}
               </p>
             )}
           </Panel>

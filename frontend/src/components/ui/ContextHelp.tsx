@@ -42,6 +42,12 @@ const HELP: Record<string, HelpContent> = {
   leaders: {
     label: "Stock Leaders",
     sections: [
+      { heading: "Where candidates come from", bullets: [
+        "The universe is built from the holdings of every tracked market and sector ETF, so leaders are found across all market sections rather than only in your watchlists.",
+        "Each stock is credited to the strongest ETF holding it, with that group's relative-strength rank, because O'Neil bought leaders of leading groups. Use the group chips to focus on one section.",
+        "Price and volume are screened for the whole universe first; company fundamentals are fetched only for the strongest technical candidates. Rows showing a dot are technical-only - open one to pull its financials.",
+        "If the holdings provider is unreachable, the scan falls back to configured constituent lists and says so under the table; those lists drift over time and are editable in config.yaml.",
+      ] },
       { heading: "How stocks get flagged", bullets: [
         "Buy candidate means a fresh 52-week-high breakout on heavy volume with enough CAN SLIM criteria met while the market gate is open. That is O'Neil's complete buy setup, and the flag also lands in the Direction signal feed.",
         "Watch - near pivot means the stock sits within the pivot zone but has not broken out on volume yet; do not chase without the breakout.",

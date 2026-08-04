@@ -812,6 +812,10 @@ class StockLeader(BaseModel):
     annual_eps_growth_pct: Optional[float] = None
     roe_pct: Optional[float] = None
     institutional_pct: Optional[float] = None
+    sector_symbol: Optional[str] = None
+    sector_label: Optional[str] = None
+    sector_rank: Optional[int] = None
+    fundamentals_fetched: bool = False
     breakout: Optional[StockBreakout] = None
     entry: Optional[StockEntry] = None
     last_close: Optional[float] = None
@@ -820,8 +824,18 @@ class StockLeader(BaseModel):
     missing: List[str] = []
 
 
+class SectorOption(BaseModel):
+    symbol: Optional[str] = None
+    label: str
+
+
 class LeadersResponse(BaseModel):
-    """CAN SLIM stock scan gated by the market-direction state."""
+    """CAN SLIM scan over the holdings of every tracked market/sector ETF.
+
+    Price and volume are screened for the whole universe; company
+    fundamentals are fetched only for the strongest technical candidates,
+    and the rest are reported as technical-only rather than guessed.
+    """
 
     as_of: Optional[str] = None
     provisional: bool = False
@@ -831,6 +845,15 @@ class LeadersResponse(BaseModel):
     gate_message: str
     items: List[StockLeader]
     universe: List[str] = []
+    universe_size: int = 0
+    scanned: int = 0
+    fundamentals_scanned: int = 0
+    holdings_source: Literal["provider", "configured", "mixed", "unavailable"] = (
+        "unavailable"
+    )
+    etfs_without_holdings: List[str] = []
+    dropped_for_capacity: int = 0
+    sectors: List[SectorOption] = []
     excluded: List[str] = []
     unavailable: List[str] = []
     stop_loss_pct: float

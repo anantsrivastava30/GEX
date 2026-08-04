@@ -123,13 +123,23 @@ market_direction:
     - { symbol: XBI, label: "Biotech", group: "Sector", domain: "Clinical and commercial biotech" }
     - { symbol: XLRE, label: "Real estate", group: "Sector", domain: "REITs and property" }
 
-# Per-stock CAN SLIM scan (see docs/ONEIL_CANSLIM_PLAN.md). Stocks come from
-# the snapshot universe plus shared-watchlist symbols; index and leveraged
-# ETFs are excluded because they have no earnings. Thresholds follow
-# O'Neil's published numbers and are shown in the UI.
+# Per-stock CAN SLIM scan (see docs/ONEIL_CANSLIM_PLAN.md). Candidates come
+# from the holdings of every tracked market_direction ETF, so leaders are
+# found across all market sections rather than only in saved watchlists.
+# Index and leveraged ETFs are excluded as candidates (no earnings).
+# Thresholds follow O'Neil's published numbers and are shown in the UI.
 canslim:
-  exclude: [SPY, QQQ, IWM, DIA, SMH, SOXL]
-  max_symbols: 30
+  exclude: [SPY, QQQ, IWM, DIA, SMH, SOXL, XLK, XLF, XLE, XLV, XLI, XLY, XLP, XLU, XLB, XBI, XLRE]
+  # Universe construction. Holdings are read from the provider once a day;
+  # each ETF contributes at most max_constituents_per_etf names.
+  include_watchlist_symbols: true
+  max_constituents_per_etf: 12
+  max_symbols: 160
+  # Bars are fetched for the whole universe (cheap, cached), but company
+  # fundamentals are fetched only for the strongest technical candidates.
+  # The rest are reported as technical-only rather than guessed.
+  fundamentals_top_n: 25
+  fetch_workers: 6
   fundamentals_pause_seconds: 0.4
   quarterly_growth_met_pct: 25.0
   quarterly_growth_borderline_pct: 15.0
@@ -139,6 +149,26 @@ canslim:
   breakout_volume_ratio: 1.4
   rs_met_percentile: 67.0
   stop_loss_pct: 8.0
+  max_extension_pct: 5.0
+  # Used only when live ETF holdings are unreachable. A hand-maintained
+  # snapshot of large holdings per ETF - it drifts over time, so the UI
+  # labels the universe source when this fallback is in use. Edit freely.
+  fallback_constituents:
+    SPY: [AAPL, MSFT, NVDA, AMZN, META, GOOGL, TSLA, AVGO, JPM, LLY]
+    QQQ: [AAPL, MSFT, NVDA, AMZN, META, GOOGL, TSLA, AVGO, COST, NFLX]
+    DIA: [UNH, GS, MSFT, HD, CAT, CRM, V, AXP, MCD, AMGN]
+    SMH: [NVDA, TSM, AVGO, AMD, QCOM, TXN, AMAT, LRCX, KLAC, MU, ADI, INTC]
+    XLK: [AAPL, MSFT, NVDA, AVGO, CRM, AMD, ORCL, ACN, ADBE, CSCO]
+    XLF: [JPM, V, MA, BAC, WFC, GS, MS, SPGI, BLK, AXP]
+    XLE: [XOM, CVX, COP, EOG, SLB, MPC, PSX, VLO, OXY, WMB]
+    XLV: [LLY, UNH, JNJ, MRK, ABBV, TMO, ABT, DHR, PFE, AMGN]
+    XLI: [GE, CAT, RTX, UNP, HON, BA, DE, LMT, UPS, ETN]
+    XLY: [AMZN, TSLA, HD, MCD, BKNG, LOW, TJX, NKE, SBUX, CMG]
+    XLP: [PG, COST, WMT, KO, PEP, PM, MO, MDLZ, CL, TGT]
+    XLU: [NEE, SO, DUK, CEG, SRE, AEP, D, EXC, XEL, ED]
+    XLB: [LIN, SHW, APD, ECL, FCX, NEM, DOW, DD, PPG, NUE]
+    XBI: [VRTX, REGN, MRNA, ALNY, INCY, EXAS, NBIX, SRPT, IONS, UTHR]
+    XLRE: [PLD, AMT, EQIX, WELL, SPG, PSA, O, CCI, DLR, EXR]
 
 # Daily own-data history collection (see docs/UW_PARITY_PLAN.md).
 # Keep the universe small enough that one run stays inside Tradier's

@@ -983,6 +983,47 @@ pytest 20/21 (known pre-existing failure); frontend tsc/lint/build clean;
 screenshots of `/direction`, `/leaders`, `/track-record` at 1280px and
 `/leaders` at 390px with zero overflow and no console errors.
 
+### Session 20 - 2026-08-03 (market-wide candidate universe)
+
+The CAN SLIM scan only saw watchlist symbols, so leaders in sections the
+user did not already follow were invisible. Candidates now come from the
+whole tracked market.
+
+- **Universe from ETF holdings**: `fetch_etf_holdings` reads top holdings
+  per ETF (yfinance `funds_data`, cached 24h) for every `market_direction`
+  index; unreachable providers fall back to `canslim.fallback_constituents`
+  in `config.yaml` (a hand-maintained, editable snapshot) and the UI states
+  which source is in use. Watchlist symbols are unioned in. ETFs themselves
+  are excluded as candidates. 125 candidates across 15 groups in the smoke,
+  versus 15 before.
+- **Leading-group attribution**: ETFs are ranked by relative strength, and a
+  stock held by several is credited to its strongest sector group (a sector
+  always beats the broad market), carrying that group's rank - O'Neil bought
+  leaders of leading groups. Universe capping keeps leading-group names
+  first.
+- **Two-stage funnel**: bars for the whole universe are fetched concurrently
+  (`fetch_workers`, cached per symbol), ranked technically (RS + breakout +
+  pivot proximity), and company fundamentals are fetched only for the top
+  `fundamentals_top_n` (25). Remaining rows are labeled technical-only with
+  "Not fetched" reasons rather than implying data was missing. `_cached_scan`
+  now backs both the leaders endpoint and signal evaluation, removing a
+  duplicate full scan per request.
+- **UI**: group filter chips with counts, an Actionable-only filter, a Group
+  column with the group's RS rank, dot markers for technical-only columns,
+  and a coverage line reporting scanned/universe counts, fundamentals depth,
+  holdings source, and capacity drops.
+
+**Verified:** new universe smoke (125 candidates, 15 groups, fundamentals
+capped at 25 and always covering the breakout names, NVDA credited to
+Semiconductors rather than SPY/QQQ, ETFs never candidates, technical-only
+rows carrying the "Not fetched" reason, detail endpoint keeping attribution);
+prior entry/outcome smokes still green; backend pytest 20/21 (known
+pre-existing failure); frontend tsc/lint/build clean; `/leaders` screenshot
+at 1280px and 390px with zero overflow and no console errors. Live ETF
+holdings could not be exercised here (sandbox proxy blocks Yahoo), so the
+smoke ran through the configured-fallback path and the response correctly
+reported `holdings_source: configured`.
+
 **Verified:** synthetic-series unit smoke (correction -> rally day 1 -> FTD on
 day 5 -> confirmed uptrend, truncations land in each intermediate state; EMA
 and RSI seed boundaries checked); FastAPI TestClient smoke over the real app

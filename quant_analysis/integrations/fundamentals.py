@@ -151,6 +151,41 @@ def _info_fields(ticker: Any, out: Dict[str, Any]) -> None:
         out["shares_outstanding"] = float(shares)
 
 
+def fetch_etf_holdings(symbol: str, limit: int = 12) -> List[str]:
+    """Top holdings of an ETF, best-effort.
+
+    Yahoo exposes only the largest holdings, which is the right slice for
+    this use: O'Neil bought the leaders of a leading group, not its tail.
+    Returns an empty list when the provider is unreachable so the caller
+    can fall back to configured constituents.
+    """
+
+    import yfinance as yf
+
+    try:
+        funds = yf.Ticker(symbol).funds_data
+        holdings = getattr(funds, "top_holdings", None)
+        if holdings is None or getattr(holdings, "empty", True):
+            return []
+        symbols = [str(s).upper().strip() for s in holdings.index]
+    except Exception:
+        logger.info("ETF holdings unavailable for %s", symbol)
+        return []
+
+    out: List[str] = []
+    for candidate in symbols:
+        # Skip cash/derivative placeholder rows and non-equity tickers.
+        if not candidate or not candidate.replace(".", "").replace("-", "").isalnum():
+            continue
+        if len(candidate) > 6:
+            continue
+        if candidate not in out:
+            out.append(candidate)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def fetch_stock_fundamentals(symbol: str) -> Dict[str, Any]:
     """All CAN SLIM fundamental inputs for one symbol, best-effort."""
 

@@ -189,12 +189,20 @@ def evaluate_stock_canslim(
     cfg = merged_canslim_config(config)
     closes = [float(b["close"]) for b in bars]
     rows: List[Dict[str, str]] = []
+    # A large universe is screened technically first, so most names never
+    # get a fundamentals fetch. Say that plainly instead of implying the
+    # data was tried and missing.
+    skipped = bool(fundamentals.get("fetch_skipped"))
+    no_fetch = (
+        "Not fetched - this name is outside the fundamentals shortlist; open it to pull its financials."
+    )
 
     # C - current quarterly earnings
     qtr = fundamentals.get("quarterly_eps_growth_pct")
     sales = fundamentals.get("quarterly_revenue_growth_pct")
     if qtr is None:
         rows.append(_row("C", "Current quarterly earnings", "unavailable", "n/a",
+                         no_fetch if skipped else
                          "Quarterly EPS growth could not be fetched (or the year-ago base was not positive)."))
     else:
         status = (
@@ -213,7 +221,8 @@ def evaluate_stock_canslim(
     roe = fundamentals.get("roe_pct")
     if annual is None and roe is None:
         rows.append(_row("A", "Annual earnings growth", "unavailable", "n/a",
-                         "Annual EPS growth and ROE could not be fetched."))
+                         no_fetch if skipped
+                         else "Annual EPS growth and ROE could not be fetched."))
     else:
         growth_ok = annual is not None and annual >= cfg["annual_growth_met_pct"]
         growth_near = annual is not None and annual >= cfg["annual_growth_borderline_pct"]
@@ -307,6 +316,7 @@ def evaluate_stock_canslim(
     inst = fundamentals.get("institutional_pct")
     if inst is None:
         rows.append(_row("I", "Institutional sponsorship", "unavailable", "n/a",
+                         no_fetch if skipped else
                          "Institutional ownership could not be fetched (13F data is quarterly and lagged)."))
     else:
         if cfg["inst_min_pct"] <= inst <= cfg["inst_max_pct"]:
