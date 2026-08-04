@@ -1013,7 +1013,54 @@ whole tracked market.
   and a coverage line reporting scanned/universe counts, fundamentals depth,
   holdings source, and capacity drops.
 
-**Verified:** new universe smoke (125 candidates, 15 groups, fundamentals
+### Session 21 - 2026-08-03 (full-coverage fundamentals + the missing O'Neil criteria)
+
+The scan reached the whole market but only the top 25 candidates carried
+fundamental letters, and three real O'Neil criteria were approximated.
+Closed all of it.
+
+- **Full-universe coverage**: new `warm_canslim_fundamentals` scheduler job
+  (07:40 ET weekdays) walks every candidate, paced, populating the 24h
+  cache off the request path. The scan now uses whatever is already warm
+  (`cache.peek`, new method) and only fetches new names up to the shortlist
+  bound, so in steady state all candidates score all seven letters and a
+  cold cache degrades to technical-only rather than blocking a request.
+  Verified: 125/125 candidates fully scored after one warm-up.
+- **Sales and EPS acceleration (C)**: `fundamentals.py` now returns
+  multi-quarter YoY growth *series* (seasonally comparable, newest first)
+  for EPS and revenue; `growth_acceleration` classifies them as
+  accelerating / decelerating / mixed. Accelerating growth upgrades a
+  borderline quarter and deceleration downgrades a passing one - O'Neil
+  watched the rate of change, not just the level. Shown as ▲/▼ in the UI.
+- **Sponsorship trend (I)**: providers report only a current percentage, so
+  a new `fundamentals_history` table records a dated observation on every
+  fetch and `sponsorship_trend` derives the direction from our own accrued
+  data. Rising ownership upgrades a borderline I and falling downgrades a
+  passing one; new symbols honestly read "accruing" until enough
+  observations exist. Shown as ↑/↓.
+- **Base quality (N)**: `compute_base_quality` measures the consolidation a
+  breakout emerged from (length in weeks from the pre-base peak, depth from
+  that peak's high to the trough). Bases shorter than five weeks or deeper
+  than a third hold N at borderline, since O'Neil bought breakouts from
+  proper bases rather than any new high. Rendered under the breakout chip.
+
+**Verified:** dedicated smoke covering acceleration classification
+(accelerating/decelerating/mixed/unknown), base quality (proper 5.6w/-13.6%
+vs short 1.0w), sponsorship trend (rising/falling/accruing), the warm-up
+(125/125 fetched, zero technical-only rows afterward, every row scoring 7 of
+7 letters), persisted observations, and the trend flipping to rising with a
+second dated observation. Backend pytest 20/21 (known pre-existing failure);
+frontend tsc/lint/build clean; `/leaders` screenshots at 1280px and 390px
+with zero overflow and no console errors. Live Yahoo remains unreachable
+from this sandbox, so the provider paths ran against fakes and the
+configured-fallback path end to end.
+
+**Still not computed** (stated so the coverage claim stays honest): proper
+base *geometry* (cup-with-handle vs flat base shape), EPS stability ratings,
+and the qualitative "new" in N - new products, management, or industry
+conditions - which remains a news-feed judgement.
+
+**Verified (Session 20):** new universe smoke (125 candidates, 15 groups, fundamentals
 capped at 25 and always covering the breakout names, NVDA credited to
 Semiconductors rather than SPY/QQQ, ETFs never candidates, technical-only
 rows carrying the "Not fetched" reason, detail endpoint keeping attribution);

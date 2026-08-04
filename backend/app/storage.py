@@ -106,6 +106,23 @@ def init_app_storage() -> None:
 
             CREATE INDEX IF NOT EXISTS direction_signals_date_idx
             ON direction_signals(signal_date DESC, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS fundamentals_history (
+                id INTEGER PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                as_of TEXT NOT NULL,
+                institutional_pct REAL,
+                institutional_holder_count INTEGER,
+                quarterly_eps_growth_pct REAL,
+                quarterly_revenue_growth_pct REAL,
+                annual_eps_growth_pct REAL,
+                roe_pct REAL,
+                created_at TEXT NOT NULL,
+                UNIQUE(symbol, as_of)
+            );
+
+            CREATE INDEX IF NOT EXISTS fundamentals_history_symbol_idx
+            ON fundamentals_history(symbol, as_of DESC);
             """
         )
         columns = {
@@ -416,6 +433,78 @@ def insert_direction_signal(data: Dict[str, Any]) -> Optional[int]:
             ),
         )
         return int(cursor.lastrowid) if cursor.rowcount else None
+
+
+_FUNDAMENTAL_METRICS = (
+    "institutional_pct",
+    "institutional_holder_count",
+    "quarterly_eps_growth_pct",
+    "quarterly_revenue_growth_pct",
+    "annual_eps_growth_pct",
+    "roe_pct",
+)
+
+
+def record_fundamentals_observation(
+    symbol: str, as_of: str, metrics: Dict[str, Any]
+) -> None:
+    """Append one dated fundamentals observation (idempotent per day).
+
+    Yahoo reports only current values, so sponsorship and growth *trends*
+    have to come from our own accumulated observations.
+    """
+
+    values = [metrics.get(name) for name in _FUNDAMENTAL_METRICS]
+    if all(v is None for v in values):
+        return
+    columns = ", ".join(_FUNDAMENTAL_METRICS)
+    placeholders = ", ".join("?" for _ in _FUNDAMENTAL_METRICS)
+    updates = ", ".join(f"{name} = excluded.{name}" for name in _FUNDAMENTAL_METRICS)
+    with connection() as conn:
+        conn.execute(
+            f"""
+            INSERT INTO fundamentals_history(symbol, as_of, {columns}, created_at)
+            VALUES (?, ?, {placeholders}, ?)
+            ON CONFLICT(symbol, as_of) DO UPDATE SET {updates}
+            """,
+            (symbol.upper(), as_of, *values, _now()),
+        )
+
+
+def get_fundamentals_trend(symbol: str, limit: int = 12) -> List[Dict[str, Any]]:
+    """Recent dated observations for one symbol, newest first."""
+
+    with connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM fundamentals_history
+            WHERE symbol = ? ORDER BY as_of DESC LIMIT ?
+            """,
+            (symbol.upper(), limit),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_fundamentals_trends(symbols: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+    """Observations for many symbols in one pass, newest first per symbol."""
+
+    if not symbols:
+        return {}
+    placeholders = ",".join("?" for _ in symbols)
+    with connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT * FROM fundamentals_history
+            WHERE symbol IN ({placeholders})
+            ORDER BY symbol, as_of DESC
+            """,
+            tuple(s.upper() for s in symbols),
+        ).fetchall()
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows:
+        item = dict(row)
+        out.setdefault(item["symbol"], []).append(item)
+    return out
 
 
 def list_direction_signals(

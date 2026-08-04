@@ -58,6 +58,14 @@ DEFAULTS: Dict[str, Any] = {
     # O'Neil's never-chase rule: past this much above the pivot, a 7-8% stop
     # sits inside the range of a normal pullback.
     "max_extension_pct": 5.0,
+    # Base quality (the consolidation a breakout emerges from). O'Neil's
+    # proper bases run at least five to seven weeks and correct less than
+    # about a third; shallower, longer bases are the higher-quality ones.
+    "base_min_sessions": 25,
+    "base_max_depth_pct": 35.0,
+    "base_ideal_depth_pct": 25.0,
+    # Sponsorship trend from our own accrued observations.
+    "sponsorship_trend_min_points": 2,
 }
 
 READINESS_LABELS = {
@@ -158,6 +166,127 @@ def detect_breakout(
     return None
 
 
+def compute_base_quality(
+    bars: List[Dict[str, Any]], pivot_index: int, cfg: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """Length and depth of the consolidation a breakout emerged from.
+
+    The base runs from the peak that preceded it to the pivot session. A
+    proper base is long enough to have shaken out weak holders and shallow
+    enough that the advance is not a recovery from collapse - the reason
+    O'Neil bought breakouts from bases rather than any new high.
+    """
+
+    if pivot_index <= 0 or pivot_index >= len(bars):
+        return None
+    closes = [float(b["close"]) for b in bars]
+    lows = [float(b["low"]) for b in bars]
+    prior = closes[:pivot_index]
+    if len(prior) < 10:
+        return None
+
+    prior_high = max(prior)
+    peak_index = max(range(len(prior)), key=lambda i: prior[i])
+    sessions = pivot_index - peak_index
+    if sessions < 2:
+        return None
+    trough = min(lows[peak_index:pivot_index])
+    depth_pct = (trough / prior_high - 1.0) * 100.0
+
+    long_enough = sessions >= cfg["base_min_sessions"]
+    shallow_enough = depth_pct >= -cfg["base_max_depth_pct"]
+    if long_enough and depth_pct >= -cfg["base_ideal_depth_pct"]:
+        quality = "proper"
+    elif long_enough and shallow_enough:
+        quality = "acceptable"
+    elif not long_enough:
+        quality = "short"
+    else:
+        quality = "deep"
+    return {
+        "sessions": sessions,
+        "weeks": round(sessions / 5.0, 1),
+        "depth_pct": round(depth_pct, 1),
+        "quality": quality,
+    }
+
+
+def _trend_direction(values: List[Optional[float]], tolerance: float = 0.0) -> str:
+    """Classify an ordered series (oldest first) as rising/falling/flat."""
+
+    clean = [v for v in values if v is not None]
+    if len(clean) < 2:
+        return "unknown"
+    delta = clean[-1] - clean[0]
+    if delta > tolerance:
+        return "rising"
+    if delta < -tolerance:
+        return "falling"
+    return "flat"
+
+
+def growth_acceleration(series: List[Optional[float]]) -> Dict[str, Any]:
+    """Is quarterly growth accelerating? ``series`` is newest first.
+
+    O'Neil wanted the growth rate itself improving, not merely positive;
+    two comparable quarters are the minimum to say anything at all.
+    """
+
+    clean = [v for v in series if v is not None][:3]
+    if len(clean) < 2:
+        return {"direction": "unknown", "points": len(clean), "detail": None}
+    ordered = list(reversed(clean))  # oldest first
+    direction = "accelerating"
+    for a, b in zip(ordered, ordered[1:]):
+        if b < a:
+            direction = None
+            break
+    if direction is None:
+        direction = "decelerating"
+        for a, b in zip(ordered, ordered[1:]):
+            if b > a:
+                direction = "mixed"
+                break
+    return {
+        "direction": direction,
+        "points": len(clean),
+        "detail": " → ".join(f"{v:+.0f}%" for v in ordered),
+    }
+
+
+def sponsorship_trend(
+    observations: List[Dict[str, Any]], cfg: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Direction of institutional ownership from our own dated history.
+
+    Providers report only a current percentage, so the trend O'Neil cared
+    about - funds accumulating rather than merely present - only exists
+    once this project has watched the number over time.
+    """
+
+    points = [o for o in observations if o.get("institutional_pct") is not None]
+    if len(points) < cfg["sponsorship_trend_min_points"]:
+        return {"direction": "accruing", "points": len(points), "change_pct": None}
+    ordered = sorted(points, key=lambda o: str(o.get("as_of", "")))
+    first = float(ordered[0]["institutional_pct"])
+    last = float(ordered[-1]["institutional_pct"])
+    change = last - first
+    counts = [
+        o.get("institutional_holder_count")
+        for o in ordered
+        if o.get("institutional_holder_count") is not None
+    ]
+    return {
+        "direction": _trend_direction([first, last], tolerance=0.25),
+        "points": len(ordered),
+        "change_pct": round(change, 2),
+        "from_date": str(ordered[0].get("as_of")),
+        "holder_count_direction": _trend_direction([float(c) for c in counts])
+        if len(counts) >= 2
+        else "unknown",
+    }
+
+
 def _row(letter: str, name: str, status: str, value: str, detail: str) -> Dict[str, str]:
     return {"letter": letter, "name": name, "status": status, "value": value, "detail": detail}
 
@@ -183,6 +312,7 @@ def evaluate_stock_canslim(
     universe_size: Optional[int],
     market_state: str,
     config: Optional[Dict[str, Any]] = None,
+    observations: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Full seven-letter evaluation plus a buy-readiness verdict."""
 
@@ -200,6 +330,10 @@ def evaluate_stock_canslim(
     # C - current quarterly earnings
     qtr = fundamentals.get("quarterly_eps_growth_pct")
     sales = fundamentals.get("quarterly_revenue_growth_pct")
+    eps_accel = growth_acceleration(fundamentals.get("quarterly_eps_growth_series") or [])
+    sales_accel = growth_acceleration(
+        fundamentals.get("quarterly_revenue_growth_series") or []
+    )
     if qtr is None:
         rows.append(_row("C", "Current quarterly earnings", "unavailable", "n/a",
                          no_fetch if skipped else
@@ -210,10 +344,26 @@ def evaluate_stock_canslim(
             else "borderline" if qtr >= cfg["quarterly_growth_borderline_pct"]
             else "not_met"
         )
+        # Accelerating growth upgrades a borderline quarter; decelerating
+        # growth downgrades an otherwise-passing one. O'Neil watched the
+        # rate of change, not just the level.
+        if status == "borderline" and eps_accel["direction"] == "accelerating":
+            status = "met"
+        elif status == "met" and eps_accel["direction"] == "decelerating":
+            status = "borderline"
+
         sales_part = f"; quarterly sales {sales:+.0f}%" if sales is not None else ""
+        accel_bits = []
+        if eps_accel["direction"] not in ("unknown", "mixed"):
+            accel_bits.append(f"EPS growth {eps_accel['direction']} ({eps_accel['detail']})")
+        if sales_accel["direction"] not in ("unknown", "mixed"):
+            accel_bits.append(
+                f"sales growth {sales_accel['direction']} ({sales_accel['detail']})"
+            )
+        accel_part = f" Trend: {'; '.join(accel_bits)}." if accel_bits else ""
         rows.append(_row(
             "C", "Current quarterly earnings", status, f"EPS {qtr:+.0f}% YoY",
-            f"Latest quarterly EPS {qtr:+.0f}% vs a year ago (O'Neil wanted {cfg['quarterly_growth_met_pct']:.0f}%+){sales_part}.",
+            f"Latest quarterly EPS {qtr:+.0f}% vs a year ago (O'Neil wanted {cfg['quarterly_growth_met_pct']:.0f}%+){sales_part}.{accel_part}",
         ))
 
     # A - annual earnings growth + ROE
@@ -252,12 +402,28 @@ def evaluate_stock_canslim(
     else:
         off_high = (closes[-1] / high_52w - 1.0) * 100.0
         if breakout:
+            pivot_index = len(bars) - 1 - int(breakout.get("sessions_ago") or 0)
+            base = compute_base_quality(bars, pivot_index, cfg)
             status = "met"
             value = f"breakout {breakout['date']} on {breakout['volume_ratio']}x vol"
             detail = (
                 f"Cleared the prior 52-week high ({breakout['prior_high']}) on {breakout['volume_ratio']}x "
-                "its 50-day average volume - the classic pivot O'Neil bought. The qualitative 'new' "
-                "(product, management) is not computable; check the news feed."
+                "its 50-day average volume - the classic pivot O'Neil bought."
+            )
+            if base:
+                detail += (
+                    f" Base: {base['weeks']} weeks, {base['depth_pct']:.0f}% deep ({base['quality']})."
+                )
+                # A breakout from a too-short or too-deep base is a weaker
+                # setup than the letter alone suggests.
+                if base["quality"] in ("short", "deep"):
+                    status = "borderline"
+                    detail += (
+                        " O'Neil wanted at least five to seven weeks of consolidation correcting less "
+                        "than about a third; this base does not meet that."
+                    )
+            detail += (
+                " The qualitative 'new' (product, management) is not computable; check the news feed."
             )
         elif off_high >= -cfg["new_high_near_pct"]:
             status = "borderline"
@@ -314,6 +480,7 @@ def evaluate_stock_canslim(
 
     # I - institutional sponsorship
     inst = fundamentals.get("institutional_pct")
+    trend = sponsorship_trend(observations or [], cfg)
     if inst is None:
         rows.append(_row("I", "Institutional sponsorship", "unavailable", "n/a",
                          no_fetch if skipped else
@@ -331,9 +498,38 @@ def evaluate_stock_canslim(
         else:
             status = "not_met"
             detail = "Almost no institutional ownership - quality funds have not validated the name."
+
+        # Direction matters more than level: O'Neil wanted funds
+        # accumulating, not merely present.
+        if trend["direction"] == "rising":
+            trend_part = (
+                f" Ownership is rising ({trend['change_pct']:+.1f} pts since {trend['from_date']}) - "
+                "accumulation, which is the half that matters."
+            )
+            if status == "borderline" and inst < cfg["inst_max_pct"]:
+                status = "met"
+        elif trend["direction"] == "falling":
+            trend_part = (
+                f" Ownership is falling ({trend['change_pct']:+.1f} pts since {trend['from_date']}) - "
+                "funds are distributing."
+            )
+            if status == "met":
+                status = "borderline"
+        elif trend["direction"] == "flat":
+            trend_part = f" Ownership is flat since {trend['from_date']}."
+        else:
+            trend_part = (
+                " Ownership trend is still accruing - this project records the figure daily, so the"
+                " accumulation direction becomes available once a few observations exist."
+            )
+        value = f"{inst:.0f}% held"
+        if trend["direction"] == "rising":
+            value += " ↑"
+        elif trend["direction"] == "falling":
+            value += " ↓"
         rows.append(_row(
-            "I", "Institutional sponsorship", status, f"{inst:.0f}% held",
-            f"{detail} (13F-derived, lags by up to a quarter.)",
+            "I", "Institutional sponsorship", status, value,
+            f"{detail}{trend_part} (13F-derived, lags by up to a quarter.)",
         ))
 
     # M - market direction
@@ -408,12 +604,23 @@ def evaluate_stock_canslim(
     else:
         readiness = "not_ready"
 
+    base = (
+        compute_base_quality(
+            bars, len(bars) - 1 - int(breakout.get("sessions_ago") or 0), cfg
+        )
+        if breakout
+        else None
+    )
     return {
         "rows": rows,
         "score": {"met": met, "scored": scored, "total": len(rows)},
         "readiness": readiness,
         "readiness_label": READINESS_LABELS[readiness],
         "breakout": breakout,
+        "base": base,
+        "eps_acceleration": eps_accel["direction"],
+        "sales_acceleration": sales_accel["direction"],
+        "sponsorship_trend": trend["direction"],
         "entry": entry,
         "off_high_pct": round(off_high, 1) if off_high is not None else None,
         "rs_percentile": round(rs_percentile, 0) if rs_percentile is not None else None,

@@ -43,47 +43,66 @@ def _first_row(frame: Any, names: tuple) -> Optional[Any]:
     return None
 
 
-def _quarterly_eps_growth(ticker: Any, out: Dict[str, Any]) -> None:
-    """Latest reported quarterly EPS vs four quarters earlier."""
+def _yoy_series(values: List[float], max_points: int = 4) -> List[Optional[float]]:
+    """Year-over-year growth for each recent quarter, newest first.
 
+    ``values`` are quarterly figures newest first; element i is compared
+    with element i+4 (the same quarter a year earlier), which is what makes
+    the series seasonally comparable and therefore usable for acceleration.
+    """
+
+    out: List[Optional[float]] = []
+    for i in range(min(max_points, max(0, len(values) - 4))):
+        out.append(_growth_pct(values[i], values[i + 4]))
+    return out
+
+
+def _quarterly_eps_growth(ticker: Any, out: Dict[str, Any]) -> None:
+    """Reported quarterly EPS growth, newest first, up to four quarters."""
+
+    values: List[float] = []
     try:
-        dates = ticker.get_earnings_dates(limit=12)
+        dates = ticker.get_earnings_dates(limit=16)
         reported = dates["Reported EPS"].dropna() if dates is not None else None
         if reported is not None and len(reported) >= 5:
-            values = list(reported)
-            out["quarterly_eps"] = float(values[0])
-            out["quarterly_eps_prior"] = float(values[4])
-            out["quarterly_eps_growth_pct"] = _growth_pct(
-                float(values[0]), float(values[4])
-            )
-            return
+            values = [float(v) for v in reported]
     except Exception:
         pass
 
-    try:
-        q = ticker.quarterly_income_stmt
-        eps = _first_row(q, _EPS_ROWS)
-        if eps is not None:
-            values = [float(v) for v in eps.dropna()]
-            if len(values) >= 5:
-                out["quarterly_eps"] = values[0]
-                out["quarterly_eps_prior"] = values[4]
-                out["quarterly_eps_growth_pct"] = _growth_pct(values[0], values[4])
-                return
-    except Exception:
-        pass
+    if len(values) < 5:
+        try:
+            q = ticker.quarterly_income_stmt
+            eps = _first_row(q, _EPS_ROWS)
+            if eps is not None:
+                values = [float(v) for v in eps.dropna()]
+        except Exception:
+            pass
+
+    if len(values) >= 5:
+        series = _yoy_series(values)
+        out["quarterly_eps"] = values[0]
+        out["quarterly_eps_prior"] = values[4]
+        out["quarterly_eps_growth_pct"] = series[0] if series else None
+        out["quarterly_eps_growth_series"] = series
+        if out["quarterly_eps_growth_pct"] is not None:
+            return
     out["missing"].append("quarterly_eps_growth")
 
 
 def _quarterly_revenue_growth(ticker: Any, out: Dict[str, Any]) -> None:
+    """Quarterly revenue growth series - O'Neil's 'accelerating sales'."""
+
     try:
         q = ticker.quarterly_income_stmt
-        rev = _first_row(q, ("Total Revenue",))
+        rev = _first_row(q, ("Total Revenue", "Operating Revenue"))
         if rev is not None:
             values = [float(v) for v in rev.dropna()]
-            if len(values) >= 5:
-                out["quarterly_revenue_growth_pct"] = _growth_pct(values[0], values[4])
-                return
+            series = _yoy_series(values)
+            if series:
+                out["quarterly_revenue_growth_pct"] = series[0]
+                out["quarterly_revenue_growth_series"] = series
+                if series[0] is not None:
+                    return
     except Exception:
         pass
     out["missing"].append("quarterly_revenue_growth")
@@ -140,6 +159,16 @@ def _info_fields(ticker: Any, out: Dict[str, Any]) -> None:
         out["institutional_pct"] = float(inst) * 100.0
     else:
         out["missing"].append("institutional_pct")
+
+    # Number of reporting institutional holders. Yahoo exposes only the
+    # largest holders, so this is a floor, not a census; it is tracked over
+    # time so the direction of sponsorship is what actually gets used.
+    try:
+        holders = ticker.institutional_holders
+        if holders is not None and not getattr(holders, "empty", True):
+            out["institutional_holder_count"] = int(len(holders))
+    except Exception:
+        pass
 
     float_shares = info.get("floatShares")
     shares = info.get("sharesOutstanding")
@@ -198,11 +227,14 @@ def fetch_stock_fundamentals(symbol: str) -> Dict[str, Any]:
         "quarterly_eps": None,
         "quarterly_eps_prior": None,
         "quarterly_eps_growth_pct": None,
+        "quarterly_eps_growth_series": [],
         "quarterly_revenue_growth_pct": None,
+        "quarterly_revenue_growth_series": [],
         "annual_eps_growth_pct": None,
         "annual_growth_years": None,
         "roe_pct": None,
         "institutional_pct": None,
+        "institutional_holder_count": None,
         "float_shares": None,
         "shares_outstanding": None,
         "missing": [],

@@ -123,6 +123,33 @@ def run_direction_evaluation() -> None:
         logger.exception("CAN SLIM stock evaluation failed")
 
 
+def warm_canslim_fundamentals() -> None:
+    """Fetch fundamentals for the whole candidate universe, off-request.
+
+    Paced and cached for a day, so the Leaders scan can show full CAN SLIM
+    letters for every candidate rather than only the technical shortlist.
+    """
+
+    now = datetime.now(tz=MARKET_TZ)
+    from quant_analysis.storage.snapshots import is_market_session
+
+    if not is_market_session(now.date()):
+        return
+    try:
+        from backend.app.services_canslim import warm_fundamentals_universe
+
+        result = warm_fundamentals_universe()
+        logger.info(
+            "CAN SLIM fundamentals warm-up: %d/%d fetched, %d cached, %d failed",
+            result["fetched"],
+            result["universe"],
+            result["cached"],
+            result["failed"],
+        )
+    except Exception:
+        logger.exception("CAN SLIM fundamentals warm-up failed")
+
+
 def warm_congress_cache() -> None:
     """Best-effort daily warm-up for the six-hour disclosure cache."""
 
@@ -340,6 +367,21 @@ def create_scheduler() -> BackgroundScheduler:
         coalesce=True,
         max_instances=1,
         misfire_grace_time=1800,
+    )
+    # Runs before the open so the day's first Leaders scan is fully warmed;
+    # the 24h cache and paced fetches keep it off the request path.
+    scheduler.add_job(
+        warm_canslim_fundamentals,
+        CronTrigger(
+            day_of_week="mon-fri",
+            hour=7,
+            minute=40,
+            timezone=str(MARKET_TZ),
+        ),
+        id="canslim_fundamentals_warmup",
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,
     )
     scheduler.add_job(
         warm_congress_cache,

@@ -51,9 +51,22 @@ the "bought the uptrend at a top and got stopped out" gap:
   logged follow-throughs and breakouts against their own invalidation
   levels and report hold rate, average drawdown, and stop-fire rate.
 
-Remaining future work: a richer institutional-sponsorship trend once a
-better free 13F source is found, and threshold tuning driven by the accrued
-outcome history (the FTD gain threshold in particular).
+Fourth pass took the stock layer market-wide and completed the criteria:
+
+- Candidate universe built from the holdings of every tracked ETF (live
+  holdings with a configured fallback), each stock credited to its
+  strongest group by relative strength.
+- A weekday background job warms fundamentals for the whole universe, so
+  every candidate scores all seven letters in steady state rather than only
+  a technical shortlist.
+- Sales and EPS acceleration across recent quarters feed C; base length and
+  depth feed N; institutional-ownership direction, derived from this
+  project's own dated observations, feeds I.
+
+Remaining future work: proper base *geometry* (cup-with-handle vs flat base
+shape), EPS stability ratings, the qualitative "new" in N (a news-feed
+judgement), and threshold tuning driven by accrued outcome history - the
+follow-through gain threshold in particular.
 
 ## Verdict: feasible, in three tiers
 

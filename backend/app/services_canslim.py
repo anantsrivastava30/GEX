@@ -204,15 +204,94 @@ def _build_universe(cfg: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _fundamentals_key(symbol: str) -> str:
+    return f"canslim:fundamentals:{symbol}"
+
+
+def _cached_fundamentals(symbol: str) -> Optional[Dict[str, Any]]:
+    """Warmed fundamentals for a symbol, or None when not yet fetched.
+
+    Reads the cache without triggering a fetch so the scan can use whatever
+    the background warm-up already collected.
+    """
+
+    return cache.peek(_fundamentals_key(symbol)) or None
+
+
 def get_fundamentals(symbol: str) -> Dict[str, Any]:
     def compute() -> Dict[str, Any]:
         from quant_analysis.integrations.fundamentals import fetch_stock_fundamentals
 
-        return fetch_stock_fundamentals(symbol)
+        data = fetch_stock_fundamentals(symbol)
+        _record_observation(symbol, data)
+        return data
 
     return cache.get_or_compute(
-        f"canslim:fundamentals:{symbol}", TTL_FUNDAMENTALS, compute
+        _fundamentals_key(symbol), TTL_FUNDAMENTALS, compute
     )
+
+
+def _record_observation(symbol: str, data: Dict[str, Any]) -> None:
+    """Persist a dated fundamentals row so trends accrue from our own data."""
+
+    from backend.app import storage
+    from quant_analysis.storage.snapshots import last_trading_date
+
+    try:
+        storage.record_fundamentals_observation(symbol, last_trading_date(), data)
+    except Exception:
+        logger.info("Fundamentals history write failed for %s", symbol)
+
+
+def _trend_observations(symbols: List[str]) -> Dict[str, List[Dict[str, Any]]]:
+    from backend.app import storage
+
+    try:
+        return storage.get_fundamentals_trends(symbols)
+    except Exception:
+        logger.info("Fundamentals trend lookup failed")
+        return {}
+
+
+def warm_fundamentals_universe() -> Dict[str, Any]:
+    """Fetch fundamentals for every candidate, paced, in the background.
+
+    Run off the scheduler rather than a web request: once warmed, the
+    24-hour cache means every scanned candidate carries full CAN SLIM
+    letters instead of only the technical shortlist. Each fetch also
+    appends a dated observation, which is what makes sponsorship and
+    growth trends possible at all.
+    """
+
+    cfg = canslim_config()
+    universe = _build_universe(cfg)
+    fetched = 0
+    failed = 0
+    skipped = 0
+    for i, symbol in enumerate(universe["symbols"]):
+        if _cached_fundamentals(symbol) is not None:
+            skipped += 1
+            continue
+        try:
+            get_fundamentals(symbol)
+            fetched += 1
+        except Exception:
+            failed += 1
+            logger.info("Fundamentals warm-up failed for %s", symbol)
+        if i < len(universe["symbols"]) - 1 and cfg["fundamentals_pause_seconds"]:
+            time.sleep(cfg["fundamentals_pause_seconds"])
+    logger.info(
+        "Fundamentals warm-up: %d fetched, %d already cached, %d failed",
+        fetched,
+        skipped,
+        failed,
+    )
+    return {
+        "universe": len(universe["symbols"]),
+        "fetched": fetched,
+        "cached": skipped,
+        "failed": failed,
+    }
 
 
 def _market_state() -> str:
@@ -228,12 +307,19 @@ def _leader_item(
     bars: List[Dict[str, Any]],
     fundamentals: Dict[str, Any],
     rs_percentile: Optional[float],
-    universe_size: int,
+    universe_size: Optional[int],
     market_state: str,
     cfg: Dict[str, Any],
+    observations: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     result = evaluate_stock_canslim(
-        bars, fundamentals, rs_percentile, universe_size, market_state, cfg
+        bars,
+        fundamentals,
+        rs_percentile,
+        universe_size,
+        market_state,
+        cfg,
+        observations=observations,
     )
     closes = [float(b["close"]) for b in bars]
     change_pct = (
@@ -259,6 +345,10 @@ def _leader_item(
         "roe_pct": _round(fundamentals.get("roe_pct")),
         "institutional_pct": _round(fundamentals.get("institutional_pct")),
         "breakout": result["breakout"],
+        "base": result.get("base"),
+        "eps_acceleration": result.get("eps_acceleration"),
+        "sales_acceleration": result.get("sales_acceleration"),
+        "sponsorship_trend": result.get("sponsorship_trend"),
         "entry": result.get("entry"),
         "last_close": round(closes[-1], 2) if closes else None,
         "change_pct": round(change_pct, 2) if change_pct is not None else None,
@@ -354,18 +444,26 @@ def _scan(cfg: Dict[str, Any]) -> Dict[str, Any]:
         reverse=True,
     )[: cfg["fundamentals_top_n"]]
 
+    # Anything already warmed by the background job is free, so the
+    # shortlist only bounds *new* network fetches: in steady state every
+    # candidate carries full fundamentals.
     fundamentals_by_symbol: Dict[str, Dict[str, Any]] = {}
-    for i, symbol in enumerate(shortlist):
-        started = time.monotonic()
+    for symbol in bars_by_symbol:
+        cached = _cached_fundamentals(symbol)
+        if cached is not None:
+            fundamentals_by_symbol[symbol] = cached
+
+    to_fetch = [s for s in shortlist if s not in fundamentals_by_symbol]
+    for i, symbol in enumerate(to_fetch):
         try:
             fundamentals_by_symbol[symbol] = get_fundamentals(symbol)
         except Exception:
             logger.info("Fundamentals fetch failed for %s", symbol)
-            fundamentals_by_symbol[symbol] = {**_SKIPPED_FUNDAMENTALS, "symbol": symbol}
             continue
-        fetched_live = time.monotonic() - started > 0.05
-        if fetched_live and i < len(shortlist) - 1 and cfg["fundamentals_pause_seconds"]:
+        if i < len(to_fetch) - 1 and cfg["fundamentals_pause_seconds"]:
             time.sleep(cfg["fundamentals_pause_seconds"])
+
+    observations = _trend_observations(list(bars_by_symbol))
 
     items = []
     for symbol, bars in bars_by_symbol.items():
@@ -380,6 +478,7 @@ def _scan(cfg: Dict[str, Any]) -> Dict[str, Any]:
             n_ranked,
             market_state,
             cfg,
+            observations=observations.get(symbol, []),
         )
         item["fundamentals_fetched"] = symbol in fundamentals_by_symbol
         item.update(universe["attribution"].get(symbol, {}))

@@ -778,6 +778,15 @@ class StockBreakout(BaseModel):
     stop_price: float
 
 
+class BaseQuality(BaseModel):
+    """The consolidation a breakout emerged from."""
+
+    sessions: int
+    weeks: float
+    depth_pct: float
+    quality: Literal["proper", "acceptable", "short", "deep"]
+
+
 class StockEntry(BaseModel):
     """Pivot-relative entry discipline for a breakout candidate."""
 
@@ -817,6 +826,10 @@ class StockLeader(BaseModel):
     sector_rank: Optional[int] = None
     fundamentals_fetched: bool = False
     breakout: Optional[StockBreakout] = None
+    base: Optional[BaseQuality] = None
+    eps_acceleration: Optional[str] = None
+    sales_acceleration: Optional[str] = None
+    sponsorship_trend: Optional[str] = None
     entry: Optional[StockEntry] = None
     last_close: Optional[float] = None
     change_pct: Optional[float] = None

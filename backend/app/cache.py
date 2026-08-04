@@ -36,6 +36,18 @@ class TTLCache:
             self._store[key] = (value, now + ttl)
         return value
 
+    def peek(self, key: str) -> Any:
+        """Return a live cached value, or None, without computing one.
+
+        Lets a request use whatever a background job already warmed instead
+        of triggering the expensive fetch itself.
+        """
+
+        now = time.monotonic()
+        with self._lock:
+            hit = self._store.get(key)
+            return hit[0] if hit is not None and hit[1] > now else None
+
     def clear(self) -> None:
         with self._lock:
             self._store.clear()

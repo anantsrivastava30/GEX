@@ -889,6 +889,13 @@ export type StockReadiness =
   | "not_ready"
   | "insufficient_data";
 
+export interface BaseQuality {
+  sessions: number;
+  weeks: number;
+  depth_pct: number;
+  quality: "proper" | "acceptable" | "short" | "deep";
+}
+
 export interface StockEntry {
   status: "buyable" | "extended";
   pivot: number;
@@ -917,6 +924,10 @@ export interface StockLeader {
   sector_rank?: number | null;
   fundamentals_fetched: boolean;
   breakout?: StockBreakout | null;
+  base?: BaseQuality | null;
+  eps_acceleration?: string | null;
+  sales_acceleration?: string | null;
+  sponsorship_trend?: string | null;
   entry?: StockEntry | null;
   last_close?: number | null;
   change_pct?: number | null;

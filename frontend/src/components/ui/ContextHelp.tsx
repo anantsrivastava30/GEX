@@ -45,7 +45,7 @@ const HELP: Record<string, HelpContent> = {
       { heading: "Where candidates come from", bullets: [
         "The universe is built from the holdings of every tracked market and sector ETF, so leaders are found across all market sections rather than only in your watchlists.",
         "Each stock is credited to the strongest ETF holding it, with that group's relative-strength rank, because O'Neil bought leaders of leading groups. Use the group chips to focus on one section.",
-        "Price and volume are screened for the whole universe first; company fundamentals are fetched only for the strongest technical candidates. Rows showing a dot are technical-only - open one to pull its financials.",
+        "A background job warms fundamentals for the whole universe each weekday morning, so in steady state every candidate carries all seven letters. On a cold cache the scan falls back to fetching only the strongest technical candidates; rows showing a dot are technical-only until the warm-up runs, and opening one pulls its financials immediately.",
         "If the holdings provider is unreachable, the scan falls back to configured constituent lists and says so under the table; those lists drift over time and are editable in config.yaml.",
       ] },
       { heading: "How stocks get flagged", bullets: [
@@ -54,8 +54,11 @@ const HELP: Record<string, HelpContent> = {
         "Qualified - wait for the market means the stock scores well but the market is not in an uptrend; O'Neil made no new buys during corrections.",
       ] },
       { heading: "The letters", bullets: [
-        "C: latest quarterly EPS vs a year ago (25%+ target), with quarterly sales as context. A: annual EPS growth plus 17%+ ROE.",
-        "N: new 52-week highs on breakout volume; the qualitative 'new' (products, management) is not computable and belongs to the news feed. S: up-day vs down-day volume and float. L: weighted 12-month relative strength within the scanned universe. I: institutional ownership (13F, lagged). M: the follow-through-day market state.",
+        "C: latest quarterly EPS vs a year ago (25%+ target) plus quarterly sales, and whether both are accelerating across recent quarters - a ▲ marks accelerating growth, which upgrades a borderline quarter, and ▼ marks deceleration, which downgrades a passing one. A: annual EPS growth plus 17%+ ROE.",
+        "N: new 52-week highs on breakout volume, plus the quality of the base the breakout came from (length in weeks and depth). A base shorter than about five weeks or deeper than a third is flagged and holds the letter to borderline.",
+        "S: up-day vs down-day volume and float. L: weighted 12-month relative strength within the scanned universe. M: the follow-through-day market state.",
+        "I: institutional ownership level and its direction. Providers report only a current percentage, so this project records it daily and derives the trend from its own history - ↑ means funds are accumulating, which is the half O'Neil cared about. New symbols show as accruing until enough observations exist.",
+        "The qualitative 'new' in N (products, management, industry conditions) is not computable and belongs to the news feed.",
         "Fundamentals come from Yahoo on a best-effort basis; a letter that cannot be fetched shows No data and is excluded from the score, never guessed.",
       ] },
       { heading: "Risk and entry discipline", bullets: [

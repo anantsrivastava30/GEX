@@ -102,8 +102,30 @@ function LeaderRow({
       <td className="py-2 pr-2 font-mono">
         {item.rs_percentile != null ? item.rs_percentile.toFixed(0) : "–"}
       </td>
-      <td className="py-2 pr-2 font-mono" title={item.fundamentals_fetched ? undefined : "Technical-only row"}>
+      <td
+        className="whitespace-nowrap py-2 pr-2 font-mono"
+        title={
+          item.fundamentals_fetched
+            ? [
+                item.eps_acceleration && item.eps_acceleration !== "unknown"
+                  ? `EPS growth ${item.eps_acceleration}`
+                  : null,
+                item.sales_acceleration && item.sales_acceleration !== "unknown"
+                  ? `sales growth ${item.sales_acceleration}`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(" · ") || undefined
+            : "Technical-only row"
+        }
+      >
         {item.fundamentals_fetched ? fmtPct(item.quarterly_eps_growth_pct) : "·"}
+        {item.fundamentals_fetched && item.eps_acceleration === "accelerating" && (
+          <span className="ml-0.5 text-positive">▲</span>
+        )}
+        {item.fundamentals_fetched && item.eps_acceleration === "decelerating" && (
+          <span className="ml-0.5 text-negative">▼</span>
+        )}
       </td>
       <td className="py-2 pr-2 font-mono">
         {item.fundamentals_fetched ? fmtPct(item.annual_eps_growth_pct) : "·"}
@@ -116,17 +138,51 @@ function LeaderRow({
             : "–"}
       </td>
       <td className="py-2 pr-2 font-mono">{fmtPct(item.off_high_pct)}</td>
-      <td className="py-2 pr-2 font-mono">
+      <td
+        className="whitespace-nowrap py-2 pr-2 font-mono"
+        title={
+          item.sponsorship_trend === "accruing"
+            ? "Ownership trend still accruing from our own daily observations"
+            : item.sponsorship_trend
+              ? `Ownership ${item.sponsorship_trend}`
+              : undefined
+        }
+      >
         {!item.fundamentals_fetched
           ? "·"
           : item.institutional_pct != null
             ? `${item.institutional_pct.toFixed(0)}%`
             : "–"}
+        {item.sponsorship_trend === "rising" && (
+          <span className="ml-0.5 text-positive">↑</span>
+        )}
+        {item.sponsorship_trend === "falling" && (
+          <span className="ml-0.5 text-negative">↓</span>
+        )}
       </td>
       <td className="py-2 pr-2">
         {item.breakout ? (
-          <span className="inline-flex items-center whitespace-nowrap rounded-full border border-positive/40 bg-positive/10 px-1.5 py-0.5 text-[10px] text-positive">
-            {item.breakout.volume_ratio}x vol · {item.breakout.date}
+          <span className="flex flex-col gap-0.5">
+            <span className="inline-flex w-fit items-center whitespace-nowrap rounded-full border border-positive/40 bg-positive/10 px-1.5 py-0.5 text-[10px] text-positive">
+              {item.breakout.volume_ratio}x vol · {item.breakout.date}
+            </span>
+            {item.base && (
+              <span
+                className={`text-[10px] ${
+                  item.base.quality === "proper"
+                    ? "text-muted"
+                    : item.base.quality === "acceptable"
+                      ? "text-muted"
+                      : "text-warning"
+                }`}
+                title={`Base: ${item.base.sessions} sessions, ${item.base.depth_pct}% deep (${item.base.quality})`}
+              >
+                base {item.base.weeks}w / {item.base.depth_pct}%
+                {item.base.quality === "short" || item.base.quality === "deep"
+                  ? ` (${item.base.quality})`
+                  : ""}
+              </span>
+            )}
           </span>
         ) : (
           <span className="text-[11px] text-faint">–</span>
