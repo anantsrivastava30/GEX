@@ -1,9 +1,10 @@
-// Colored status pill for the four O'Neil market states. Status colors are
-// used for status here (their reserved job); text stays on ink tokens where
-// the tint alone would be ambiguous.
+// Colored status pill for the O'Neil market states and explicit data states.
+// Status colors are used for status here (their reserved job); text stays on
+// ink tokens where the tint alone would be ambiguous.
 
 const STYLES: Record<string, string> = {
   confirmed_uptrend: "border-positive/40 bg-positive/10 text-positive",
+  uptrend_unconfirmed: "border-border-strong bg-surface-2 text-muted",
   uptrend_under_pressure: "border-warning/40 bg-warning/10 text-warning",
   rally_attempt: "border-accent/40 bg-accent/10 text-accent-strong",
   correction: "border-negative/40 bg-negative/10 text-negative",

@@ -13,6 +13,7 @@ fallback so the feature degrades to free data instead of an empty page.
 from __future__ import annotations
 
 import logging
+import math
 from threading import Lock
 from typing import Any, Dict, List, Optional
 
@@ -84,7 +85,7 @@ def _yf_bars(symbol: str, days: int) -> List[Dict[str, Any]]:
     import yfinance as yf
 
     period = "2y" if days > 365 else "1y"
-    hist = yf.Ticker(symbol).history(period=period, interval="1d", auto_adjust=False)
+    hist = yf.Ticker(symbol).history(period=period, interval="1d", auto_adjust=True)
     out: List[Dict[str, Any]] = []
     for ts, row in hist.iterrows():
         try:
@@ -98,9 +99,31 @@ def _yf_bars(symbol: str, days: int) -> List[Dict[str, Any]]:
                     "volume": int(row.get("Volume") or 0),
                 }
             )
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, OverflowError):
             continue
     return out
+
+
+def _sanitize_bars(bars: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Drop incomplete provider rows before analytics or JSON serialization."""
+
+    clean: List[Dict[str, Any]] = []
+    for bar in bars:
+        try:
+            prices = {
+                key: float(bar[key]) for key in ("open", "high", "low", "close")
+            }
+            volume = float(bar.get("volume") or 0)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+        if (
+            not all(math.isfinite(value) and value > 0 for value in prices.values())
+            or not math.isfinite(volume)
+            or volume < 0
+        ):
+            continue
+        clean.append({**bar, **prices, "volume": int(volume)})
+    return clean
 
 
 def _fetch_bars(symbol: str, days: int) -> List[Dict[str, Any]]:
@@ -115,16 +138,22 @@ def _fetch_bars(symbol: str, days: int) -> List[Dict[str, Any]]:
                 bars = get_candles(symbol, days)
                 if len(bars) >= 250:
                     return bars
-            except Exception:
-                logger.warning("Tradier history failed for %s; trying yfinance", symbol)
+            except Exception as exc:
+                logger.info(
+                    "Tradier history unavailable for %s (%s); trying yfinance",
+                    symbol,
+                    exc,
+                )
         try:
             return _yf_bars(symbol, days)
         except Exception:
             logger.warning("yfinance history failed for %s", symbol)
             return []
 
-    return cache.get_or_compute(
-        f"direction:bars:{symbol}:{days}", TTL_DIRECTION_BARS, compute
+    return _sanitize_bars(
+        cache.get_or_compute(
+            f"direction:bars:{symbol}:{days}", TTL_DIRECTION_BARS, compute
+        )
     )
 
 
@@ -306,9 +335,9 @@ def _overview_payload(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 "detail": f"{d.get('distribution_since')} distribution day(s) since the follow-through.",
             },
             {
-                "name": "Breadth improves",
+                "name": "Breadth participation",
                 "passed": bool(total) and (uptrend + rallying) / total >= 0.5,
-                "detail": f"{uptrend} of {total} tracked indices are in uptrends, {rallying} attempting rallies.",
+                "detail": f"{uptrend} of {total} tracked ETFs are in uptrends, {rallying} attempting rallies. This is a current participation reading, not a change-over-time breadth measure.",
             },
         ]
         passed = sum(1 for c in checks if c["passed"])

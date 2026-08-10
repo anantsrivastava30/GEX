@@ -31,6 +31,7 @@ from typing import Any, Dict, List, Optional
 
 STATE_CONFIRMED = "confirmed_uptrend"
 STATE_PRESSURE = "uptrend_under_pressure"
+STATE_UNCONFIRMED = "uptrend_unconfirmed"
 STATE_RALLY = "rally_attempt"
 STATE_CORRECTION = "correction"
 STATE_UNAVAILABLE = "unavailable"
@@ -38,6 +39,7 @@ STATE_UNAVAILABLE = "unavailable"
 STATE_LABELS = {
     STATE_CONFIRMED: "Confirmed uptrend",
     STATE_PRESSURE: "Uptrend under pressure",
+    STATE_UNCONFIRMED: "Uptrend predates history window",
     STATE_RALLY: "Rally attempt",
     STATE_CORRECTION: "Correction",
     STATE_UNAVAILABLE: "Insufficient history",
@@ -108,6 +110,8 @@ def compute_rsi(closes: List[float], period: int = 14) -> List[Optional[float]]:
     avg_loss = sum(losses) / period
 
     def rsi_value(g: float, l: float) -> float:
+        if g == 0 and l == 0:
+            return 50.0
         if l == 0:
             return 100.0
         rs = g / l
@@ -308,11 +312,14 @@ def classify_market_state(
                     rally_day1_date = None
 
     if mode == "uptrend":
-        state = (
-            STATE_PRESSURE
-            if len(dist_days) >= cfg["distribution_pressure_count"]
-            else STATE_CONFIRMED
-        )
+        if last_ftd is None:
+            state = STATE_UNCONFIRMED
+        else:
+            state = (
+                STATE_PRESSURE
+                if len(dist_days) >= cfg["distribution_pressure_count"]
+                else STATE_CONFIRMED
+            )
         drawdown_pct = (closes[-1] / trailing_high - 1.0) * 100.0
     elif mode == "rally":
         state = STATE_RALLY
@@ -323,15 +330,10 @@ def classify_market_state(
 
     durability = None
     if mode == "uptrend" and last_ftd:
-        dist_since = sum(
-            1
-            for e in events
-            if e["type"] == "distribution_day" and e["date"] > last_ftd["date"]
-        )
         durability = {
             "ftd_date": last_ftd["date"],
             "sessions_since": (n - 1) - int(last_ftd["i"]),
-            "distribution_since": dist_since,
+            "distribution_since": len(dist_days),
             "gains_held": closes[-1] >= float(last_ftd["close"]),
         }
 
@@ -459,11 +461,11 @@ def timing_assessment(
     if value is None:
         return {"rsi": None, "zone": "unavailable", "label": "RSI unavailable"}
     if value <= cfg["rsi_oversold"]:
-        zone, label = "oversold", "Buy zone - oversold"
+        zone, label = "oversold", "Oversold"
     elif value >= cfg["rsi_overbought"]:
-        zone, label = "overbought", "Overbought - caution"
+        zone, label = "overbought", "Overbought"
     else:
-        zone, label = "neutral", "Neutral - wait"
+        zone, label = "neutral", "Neutral"
     return {"rsi": round(value, 1), "zone": zone, "label": label}
 
 
@@ -502,6 +504,12 @@ def entry_assessment(
             "detail": "O'Neil made no new buys while the market was in a correction.",
         }
     if s not in (STATE_CONFIRMED, STATE_PRESSURE):
+        if s == STATE_UNCONFIRMED:
+            return {
+                "status": "wait",
+                "label": "Wait for an observed follow-through day",
+                "detail": "Price was already trending when the available history window began, so this run cannot verify the confirming follow-through day.",
+            }
         return None
 
     pullback = next(
@@ -518,10 +526,10 @@ def entry_assessment(
     if pullback:
         return {
             "status": "pullback_entry",
-            "label": f"Pullback entry - testing the {pullback['period']}-day EMA",
+            "label": f"Near the {pullback['period']}-day EMA",
             "detail": (
-                f"The first orderly test of the {pullback['period']}-day EMA in an uptrend is the classic "
-                "second-chance entry for those who missed the follow-through day."
+                f"Price is testing the {pullback['period']}-day EMA while still above it. "
+                "Confirm that the average is rising and the pullback is orderly before treating it as an O'Neil-style entry."
             ),
         }
 
@@ -691,9 +699,10 @@ def evaluate_index_scorecard(
     net = acc - dist
     status = "met" if net > 0 else ("borderline" if net == 0 else "not_met")
     rows.append(_row(
-        "I", "Institutional accumulation", status,
+        "I", "Rising-volume demand proxy", status,
         f"{acc} acc / {dist} dist days",
-        f"Net {net:+d} accumulation-minus-distribution days over 25 sessions. Rising-volume up days are the fingerprint of institutional buying.",
+        f"Net {net:+d} rising-volume up days minus rising-volume down days over 25 sessions. "
+        "O'Neil treated this pattern as a proxy for institutional demand; aggregate ETF bars do not identify the buyers.",
     ))
 
     if market_state == STATE_CONFIRMED:
@@ -705,6 +714,8 @@ def evaluate_index_scorecard(
         )
     elif market_state == STATE_CORRECTION:
         status, detail = "not_met", "The broad market is in a correction."
+    elif market_state == STATE_UNCONFIRMED:
+        status, detail = "borderline", "The available history began in an uptrend, but no confirming follow-through day was observed in-window."
     else:
         status, detail = "unavailable", "Broad market state unavailable."
     rows.append(_row(
@@ -775,8 +786,13 @@ def build_state_narrative(
             f"{label} is in an uptrend under pressure: {state.get('distribution_count')} distribution days in the last {cfg['distribution_lookback']} sessions."
         )
         lines.append(
-            "Clusters of high-volume down days are the fingerprint of institutional selling; the uptrend degrades to a correction if the cluster keeps building."
+            "O'Neil treated clusters of rising-volume down days as a proxy for institutional selling; the uptrend degrades to a correction if the cluster keeps building."
         )
+    elif s == STATE_UNCONFIRMED:
+        lines.append(
+            f"{label} was already trending when the available history window began, so this run did not observe the follow-through day required to call it confirmed."
+        )
+        lines.append("Treat the trend as context and wait for a newly observed correction, rally attempt, and follow-through sequence before using the market gate.")
     elif s == STATE_CONFIRMED:
         ftd = state.get("last_ftd")
         if ftd:
@@ -854,7 +870,7 @@ def describe_signal(
         title = f"{label}: distribution cluster"
         message = (
             f"{label} has logged {detail.get('count')} distribution days in the last "
-            f"{cfg['distribution_lookback']} sessions - institutional selling pressure. The uptrend is under pressure."
+            f"{cfg['distribution_lookback']} sessions - O'Neil's price/volume proxy for selling pressure. The uptrend is under pressure."
         )
     elif etype == "distribution_day":
         title = f"{label}: distribution day ({detail.get('count')})"

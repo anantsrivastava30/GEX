@@ -16,11 +16,19 @@ Fields map to O'Neil's letters:
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 _EPS_ROWS = ("Diluted EPS", "Basic EPS")
+
+
+def _finite_number(value: Any) -> Optional[float]:
+    if not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
 
 
 def _growth_pct(current: Optional[float], prior: Optional[float]) -> Optional[float]:
@@ -30,6 +38,8 @@ def _growth_pct(current: Optional[float], prior: Optional[float]) -> Optional[fl
     reported as None rather than a misleading percentage.
     """
 
+    current = _finite_number(current)
+    prior = _finite_number(prior)
     if current is None or prior is None or prior <= 0:
         return None
     return (current / prior - 1.0) * 100.0
@@ -78,17 +88,6 @@ def _quarterly_eps_growth(ticker: Any, out: Dict[str, Any]) -> None:
         except Exception:
             pass
 
-    if len(values) < 5:
-        # Last resort: quarterly net income still answers "is the company
-        # earning more than a year ago", which is what C asks.
-        try:
-            q = ticker.quarterly_income_stmt
-            net = _first_row(q, ("Net Income", "Net Income Common Stockholders"))
-            if net is not None:
-                values = [float(v) for v in net.dropna()]
-        except Exception:
-            pass
-
     if len(values) >= 5:
         series = _yoy_series(values)
         out["quarterly_eps"] = values[0]
@@ -124,22 +123,21 @@ def _quarterly_revenue_growth(ticker: Any, out: Dict[str, Any]) -> None:
 
 
 def _annual_eps_growth(ticker: Any, out: Dict[str, Any]) -> None:
-    """Average YoY EPS growth across the available fiscal years (up to 4)."""
+    """Average YoY EPS growth across at least three reported fiscal years."""
 
     try:
         a = ticker.income_stmt
         eps = _first_row(a, _EPS_ROWS)
-        if eps is None:
-            eps = _first_row(a, ("Net Income",))
         if eps is not None:
             values = [float(v) for v in eps.dropna()]
-            if len(values) >= 2:
-                out["annual_eps_values"] = values[:5]
+            out["annual_eps_values"] = values[:5]
+            recent = values[:5]
+            if len(recent) >= 3 and all(value > 0 for value in recent):
                 growths = [
                     g
                     for g in (
-                        _growth_pct(values[i], values[i + 1])
-                        for i in range(len(values) - 1)
+                        _growth_pct(recent[i], recent[i + 1])
+                        for i in range(len(recent) - 1)
                     )
                     if g is not None
                 ]
@@ -164,15 +162,15 @@ def _info_fields(ticker: Any, out: Dict[str, Any]) -> None:
     out["name"] = info.get("shortName") or info.get("longName")
     out["quote_type"] = info.get("quoteType")
 
-    roe = info.get("returnOnEquity")
-    if isinstance(roe, (int, float)):
-        out["roe_pct"] = float(roe) * 100.0
+    roe = _finite_number(info.get("returnOnEquity"))
+    if roe is not None:
+        out["roe_pct"] = roe * 100.0
     else:
         out["missing"].append("roe")
 
-    inst = info.get("heldPercentInstitutions")
-    if isinstance(inst, (int, float)):
-        out["institutional_pct"] = float(inst) * 100.0
+    inst = _finite_number(info.get("heldPercentInstitutions"))
+    if inst is not None:
+        out["institutional_pct"] = inst * 100.0
     else:
         out["missing"].append("institutional_pct")
 
@@ -186,14 +184,14 @@ def _info_fields(ticker: Any, out: Dict[str, Any]) -> None:
     except Exception:
         pass
 
-    float_shares = info.get("floatShares")
-    shares = info.get("sharesOutstanding")
-    if isinstance(float_shares, (int, float)):
-        out["float_shares"] = float(float_shares)
+    float_shares = _finite_number(info.get("floatShares"))
+    shares = _finite_number(info.get("sharesOutstanding"))
+    if float_shares is not None:
+        out["float_shares"] = float_shares
     else:
         out["missing"].append("float_shares")
-    if isinstance(shares, (int, float)):
-        out["shares_outstanding"] = float(shares)
+    if shares is not None:
+        out["shares_outstanding"] = shares
 
 
 def fetch_etf_holdings(symbol: str, limit: int = 12) -> List[str]:

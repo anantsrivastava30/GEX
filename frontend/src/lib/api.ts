@@ -870,7 +870,7 @@ export interface DirectionOutcomesResponse {
   rows: DirectionOutcomeRow[];
 }
 
-// Per-stock CAN SLIM scan (buy flags gated by market direction).
+// Per-stock CAN SLIM scan (qualified setup labels gated by market direction).
 
 export interface StockBreakout {
   date: string;
@@ -897,7 +897,7 @@ export interface BaseQuality {
 }
 
 export interface StockEntry {
-  status: "buyable" | "extended";
+  status: "buyable" | "extended" | "below_pivot";
   pivot: number;
   buy_limit: number;
   stop_price: number;
@@ -907,6 +907,7 @@ export interface StockEntry {
 
 export interface StockLeader {
   symbol: string;
+  leader_rank?: number | null;
   name?: string | null;
   readiness: StockReadiness;
   readiness_label: string;

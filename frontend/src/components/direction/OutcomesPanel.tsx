@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, DirectionOutcomesResponse } from "@/lib/api";
+import { api, DirectionOutcomeRow, DirectionOutcomesResponse } from "@/lib/api";
 import Panel from "@/components/ui/Panel";
 
 // Realized outcomes for O'Neil signals. The honest answer to "how often
@@ -17,9 +17,88 @@ function signed(value: number | null | undefined): string {
   return `${value > 0 ? "+" : ""}${value.toFixed(1)}%`;
 }
 
+type OutcomeSortKey =
+  | "signal"
+  | "date"
+  | "entry"
+  | "invalidation"
+  | "outcome"
+  | "gain"
+  | "drawdown"
+  | "stop";
+
+const OUTCOME_ORDER: Record<DirectionOutcomeRow["outcome"], number> = {
+  held: 0,
+  failed: 1,
+  pending: 2,
+};
+
+function outcomeSortValue(
+  row: DirectionOutcomeRow,
+  key: OutcomeSortKey,
+): string | number | null {
+  if (key === "signal") return `${row.symbol} ${row.signal_type}`;
+  if (key === "date") return row.signal_date;
+  if (key === "entry") return row.entry_price;
+  if (key === "invalidation") return row.invalidation_level;
+  if (key === "outcome") return OUTCOME_ORDER[row.outcome];
+  if (key === "gain") return row.max_gain_pct ?? null;
+  if (key === "drawdown") return row.max_drawdown_pct ?? null;
+  return row.stop_hit == null ? null : Number(row.stop_hit);
+}
+
+function compareValues(
+  left: string | number | null,
+  right: string | number | null,
+  ascending: boolean,
+) {
+  if (left == null) return right == null ? 0 : 1;
+  if (right == null) return -1;
+  const compared =
+    typeof left === "number" && typeof right === "number"
+      ? left - right
+      : String(left).localeCompare(String(right), undefined, {
+          numeric: true,
+          sensitivity: "base",
+        });
+  return compared * (ascending ? 1 : -1);
+}
+
+function SortHeader({
+  sortKey,
+  active,
+  ascending,
+  label,
+  onSort,
+}: {
+  sortKey: OutcomeSortKey;
+  active: OutcomeSortKey;
+  ascending: boolean;
+  label: string;
+  onSort: (key: OutcomeSortKey) => void;
+}) {
+  const selected = sortKey === active;
+  return (
+    <th
+      className="py-1 pr-2"
+      aria-sort={selected ? (ascending ? "ascending" : "descending") : "none"}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className="min-h-8 whitespace-nowrap text-left font-medium hover:text-foreground"
+      >
+        {label} {selected ? (ascending ? "▲" : "▼") : ""}
+      </button>
+    </th>
+  );
+}
+
 export default function OutcomesPanel() {
   const [data, setData] = useState<DirectionOutcomesResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [sortKey, setSortKey] = useState<OutcomeSortKey>("date");
+  const [sortAscending, setSortAscending] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -34,6 +113,29 @@ export default function OutcomesPanel() {
   }, []);
 
   const summary = data?.summary;
+  const sortedRows = (data?.rows ?? [])
+    .map((row, originalIndex) => ({ row, originalIndex }))
+    .sort((left, right) => {
+      const compared = compareValues(
+        outcomeSortValue(left.row, sortKey),
+        outcomeSortValue(right.row, sortKey),
+        sortAscending,
+      );
+      return (
+        compared ||
+        left.row.symbol.localeCompare(right.row.symbol) ||
+        left.originalIndex - right.originalIndex
+      );
+    })
+    .map(({ row }) => row);
+
+  function toggleSort(key: OutcomeSortKey) {
+    if (key === sortKey) setSortAscending((value) => !value);
+    else {
+      setSortKey(key);
+      setSortAscending(true);
+    }
+  }
 
   return (
     <Panel
@@ -96,18 +198,66 @@ export default function OutcomesPanel() {
             <table className="w-full min-w-[720px] text-left text-xs">
               <thead>
                 <tr className="border-b border-border text-[11px] uppercase tracking-wide text-muted">
-                  <th className="py-2 pr-2">Signal</th>
-                  <th className="py-2 pr-2">Date</th>
-                  <th className="py-2 pr-2">Entry</th>
-                  <th className="py-2 pr-2">Invalidation</th>
-                  <th className="py-2 pr-2">Outcome</th>
-                  <th className="py-2 pr-2">Max gain</th>
-                  <th className="py-2 pr-2">Max drawdown</th>
-                  <th className="py-2">Stop</th>
+                  <SortHeader
+                    sortKey="signal"
+                    active={sortKey}
+                    ascending={sortAscending}
+                    label="Signal"
+                    onSort={toggleSort}
+                  />
+                  <SortHeader
+                    sortKey="date"
+                    active={sortKey}
+                    ascending={sortAscending}
+                    label="Date"
+                    onSort={toggleSort}
+                  />
+                  <SortHeader
+                    sortKey="entry"
+                    active={sortKey}
+                    ascending={sortAscending}
+                    label="Entry"
+                    onSort={toggleSort}
+                  />
+                  <SortHeader
+                    sortKey="invalidation"
+                    active={sortKey}
+                    ascending={sortAscending}
+                    label="Invalidation"
+                    onSort={toggleSort}
+                  />
+                  <SortHeader
+                    sortKey="outcome"
+                    active={sortKey}
+                    ascending={sortAscending}
+                    label="Outcome"
+                    onSort={toggleSort}
+                  />
+                  <SortHeader
+                    sortKey="gain"
+                    active={sortKey}
+                    ascending={sortAscending}
+                    label="Max gain"
+                    onSort={toggleSort}
+                  />
+                  <SortHeader
+                    sortKey="drawdown"
+                    active={sortKey}
+                    ascending={sortAscending}
+                    label="Max drawdown"
+                    onSort={toggleSort}
+                  />
+                  <SortHeader
+                    sortKey="stop"
+                    active={sortKey}
+                    ascending={sortAscending}
+                    label="Stop"
+                    onSort={toggleSort}
+                  />
                 </tr>
               </thead>
               <tbody>
-                {data.rows.map((row) => (
+                {sortedRows.map((row) => (
                   <tr key={row.id} className="border-b border-border/60">
                     <td className="py-2 pr-2">
                       <span className="font-mono font-semibold">{row.symbol}</span>{" "}

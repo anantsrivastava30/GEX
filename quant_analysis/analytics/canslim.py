@@ -23,6 +23,7 @@ The letters:
 
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List, Optional
 
 from quant_analysis.analytics.market_direction import (
@@ -31,6 +32,7 @@ from quant_analysis.analytics.market_direction import (
     STATE_LABELS,
     STATE_PRESSURE,
     STATE_RALLY,
+    STATE_UNCONFIRMED,
     compute_ema,
     pct_return,
 )
@@ -47,7 +49,7 @@ DEFAULTS: Dict[str, Any] = {
     "breakout_recent_sessions": 5,
     "updown_volume_met": 1.0,
     "updown_volume_borderline": 0.85,
-    "rs_met_percentile": 67.0,
+    "rs_met_percentile": 80.0,
     "rs_borderline_percentile": 50.0,
     "inst_min_pct": 20.0,
     "inst_low_pct": 5.0,
@@ -69,13 +71,20 @@ DEFAULTS: Dict[str, Any] = {
 }
 
 READINESS_LABELS = {
-    "buy_candidate": "Buy candidate - breakout",
+    "buy_candidate": "Qualified breakout setup",
     "extended": "Extended - do not chase",
-    "near_pivot": "Watch - near pivot",
+    "near_pivot": "Watch - near 52-week high",
     "wait_market": "Qualified - wait for the market",
     "not_ready": "Not ready",
     "insufficient_data": "Insufficient data",
 }
+
+
+def _finite_number(value: Any) -> Optional[float]:
+    if not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
 
 
 def merged_canslim_config(config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -91,19 +100,19 @@ def weighted_rs_score(closes: List[float]) -> Optional[float]:
 
     2x the 3-month return plus the 6-, 9-, and 12-month returns; recent
     action is double-weighted the way O'Neil's RS rating emphasizes it.
-    Falls back to shorter horizons scaled up when a year is not available.
+    Requires a full 252-session comparison so recent listings are not given a
+    synthetic 12-month rating from repeated short-horizon returns.
     """
 
-    r63 = pct_return(closes, 63)
-    if r63 is None:
+    if len(closes) <= 252:
         return None
+    r63 = pct_return(closes, 63)
     r126 = pct_return(closes, 126)
     r189 = pct_return(closes, 189)
     r252 = pct_return(closes, 252)
-    score = 2.0 * r63
-    for r in (r126, r189, r252):
-        score += r if r is not None else r63
-    return score
+    if any(value is None for value in (r63, r126, r189, r252)):
+        return None
+    return 2.0 * r63 + r126 + r189 + r252
 
 
 def detect_breakout(
@@ -116,16 +125,13 @@ def detect_breakout(
     50-day average. Only the last ``within`` sessions are scanned (default
     from config) so stale breakouts do not read as fresh flags.
 
-    The reported pivot is the ORIGIN of the advance, not the latest new
-    high: during a run-up every session prints a new high, and anchoring on
-    the newest one would report a stock 12% extended as sitting at its
-    pivot. Walking back to where the advance began keeps the extension and
-    stop measured from the price O'Neil would have bought.
+    The reported date, price, and volume ratio all belong to the same heavy-
+    volume trigger session. This keeps the entry and risk math auditable.
     """
 
     within = within or int(cfg["breakout_recent_sessions"])
     n = len(bars)
-    if n < 120:
+    if n < 253:
         return None
     closes = [float(b["close"]) for b in bars]
     volumes = [float(b.get("volume") or 0) for b in bars]
@@ -146,21 +152,14 @@ def detect_breakout(
             and volumes[i] >= cfg["breakout_volume_ratio"] * avg_vol
         ):
             continue
-        # Walk back to the first session of this uninterrupted advance.
-        pivot_i = i
-        while pivot_i - 1 > 60 and closes[pivot_i - 1] > prior_high_at(pivot_i - 1):
-            pivot_i -= 1
-        pivot_avg_vol = avg_vol_at(pivot_i)
         return {
-            "date": bars[pivot_i]["date"],
-            "price": round(closes[pivot_i], 2),
-            "prior_high": round(prior_high_at(pivot_i), 2),
-            "volume_ratio": round(volumes[pivot_i] / pivot_avg_vol, 2)
-            if pivot_avg_vol
-            else None,
-            "sessions_ago": n - 1 - pivot_i,
+            "date": bars[i]["date"],
+            "price": round(closes[i], 2),
+            "prior_high": round(prior_high_at(i), 2),
+            "volume_ratio": round(volumes[i] / avg_vol, 2),
+            "sessions_ago": n - 1 - i,
             "stop_price": round(
-                closes[pivot_i] * (1.0 - cfg["stop_loss_pct"] / 100.0), 2
+                closes[i] * (1.0 - cfg["stop_loss_pct"] / 100.0), 2
             ),
         }
     return None
@@ -214,7 +213,11 @@ def compute_base_quality(
 def _trend_direction(values: List[Optional[float]], tolerance: float = 0.0) -> str:
     """Classify an ordered series (oldest first) as rising/falling/flat."""
 
-    clean = [v for v in values if v is not None]
+    clean = [
+        number
+        for value in values
+        if (number := _finite_number(value)) is not None
+    ]
     if len(clean) < 2:
         return "unknown"
     delta = clean[-1] - clean[0]
@@ -232,7 +235,11 @@ def growth_acceleration(series: List[Optional[float]]) -> Dict[str, Any]:
     two comparable quarters are the minimum to say anything at all.
     """
 
-    clean = [v for v in series if v is not None][:3]
+    clean = [
+        number
+        for value in series
+        if (number := _finite_number(value)) is not None
+    ][:3]
     if len(clean) < 2:
         return {"direction": "unknown", "points": len(clean), "detail": None}
     ordered = list(reversed(clean))  # oldest first
@@ -259,12 +266,16 @@ def sponsorship_trend(
 ) -> Dict[str, Any]:
     """Direction of institutional ownership from our own dated history.
 
-    Providers report only a current percentage, so the trend O'Neil cared
-    about - funds accumulating rather than merely present - only exists
-    once this project has watched the number over time.
+    Providers report only a lagged current percentage, so an observed trend
+    only exists once this project has watched the number over time.
     """
 
-    points = [o for o in observations if o.get("institutional_pct") is not None]
+    points = [
+        {**observation, "institutional_pct": number}
+        for observation in observations
+        if (number := _finite_number(observation.get("institutional_pct")))
+        is not None
+    ]
     if len(points) < cfg["sponsorship_trend_min_points"]:
         return {"direction": "accruing", "points": len(points), "change_pct": None}
     ordered = sorted(points, key=lambda o: str(o.get("as_of", "")))
@@ -328,8 +339,8 @@ def evaluate_stock_canslim(
     )
 
     # C - current quarterly earnings
-    qtr = fundamentals.get("quarterly_eps_growth_pct")
-    sales = fundamentals.get("quarterly_revenue_growth_pct")
+    qtr = _finite_number(fundamentals.get("quarterly_eps_growth_pct"))
+    sales = _finite_number(fundamentals.get("quarterly_revenue_growth_pct"))
     eps_accel = growth_acceleration(fundamentals.get("quarterly_eps_growth_series") or [])
     sales_accel = growth_acceleration(
         fundamentals.get("quarterly_revenue_growth_series") or []
@@ -386,21 +397,22 @@ def evaluate_stock_canslim(
         ))
 
     # A - annual earnings growth + ROE
-    annual = fundamentals.get("annual_eps_growth_pct")
-    roe = fundamentals.get("roe_pct")
+    annual = _finite_number(fundamentals.get("annual_eps_growth_pct"))
+    roe = _finite_number(fundamentals.get("roe_pct"))
     annual_values = fundamentals.get("annual_eps_values") or []
-    annual_loss = bool(annual_values) and min(annual_values[:2] or [0]) <= 0
-    if annual is None and roe is None and not annual_values:
-        rows.append(_row("A", "Annual earnings growth", "unavailable", "n/a",
-                         no_fetch if skipped
-                         else "Annual EPS growth and ROE could not be fetched."))
-    elif annual is None and annual_loss:
+    annual_loss = bool(annual_values) and any(value <= 0 for value in annual_values[:5])
+    if annual is None and annual_loss:
         roe_part = f" ROE {roe:.0f}%." if roe is not None else ""
         rows.append(_row(
             "A", "Annual earnings growth", "not_met", "loss years",
             f"Annual earnings were negative in the recent record, so a multi-year growth rate is "
             f"undefined and the three-to-five-year track record O'Neil wanted does not exist.{roe_part}",
         ))
+    elif annual is None:
+        roe_part = f" ROE is {roe:.0f}%." if roe is not None else ""
+        rows.append(_row("A", "Annual earnings growth", "unavailable", "n/a",
+                         no_fetch if skipped
+                         else f"At least three comparable years of positive annual EPS are required.{roe_part}"))
     else:
         growth_ok = annual is not None and annual >= cfg["annual_growth_met_pct"]
         growth_near = annual is not None and annual >= cfg["annual_growth_borderline_pct"]
@@ -422,7 +434,7 @@ def evaluate_stock_canslim(
 
     # N - new highs / breakout
     breakout = detect_breakout(bars, cfg)
-    window = closes[-252:] if closes else []
+    window = closes[-252:] if len(closes) >= 252 else []
     high_52w = max(window) if window else None
     if not high_52w:
         rows.append(_row("N", "New highs (breakout)", "unavailable", "n/a", "No price history."))
@@ -435,8 +447,8 @@ def evaluate_stock_canslim(
             status = "met"
             value = f"breakout {breakout['date']} on {breakout['volume_ratio']}x vol"
             detail = (
-                f"Cleared the prior 52-week high ({breakout['prior_high']}) on {breakout['volume_ratio']}x "
-                "its 50-day average volume - the classic pivot O'Neil bought."
+                f"Cleared the prior 52-week high ({breakout['prior_high']}) at {breakout['price']} on "
+                f"{breakout['volume_ratio']}x its 50-day average volume - the heavy-volume trigger O'Neil required."
             )
             if base:
                 detail += (
@@ -450,6 +462,11 @@ def evaluate_stock_canslim(
                         " O'Neil wanted at least five to seven weeks of consolidation correcting less "
                         "than about a third; this base does not meet that."
                     )
+            else:
+                status = "borderline"
+                detail += (
+                    " No measurable consolidation preceded the new high, so this is not a proper-base breakout."
+                )
             detail += (
                 " The qualitative 'new' (product, management) is not computable; check the news feed."
             )
@@ -469,7 +486,7 @@ def evaluate_stock_canslim(
 
     # S - supply and demand
     ratio = _updown_volume(bars)
-    float_shares = fundamentals.get("float_shares")
+    float_shares = _finite_number(fundamentals.get("float_shares"))
     if ratio is None:
         rows.append(_row("S", "Supply and demand (volume)", "unavailable", "n/a",
                          "Volume data unavailable."))
@@ -507,7 +524,7 @@ def evaluate_stock_canslim(
         ))
 
     # I - institutional sponsorship
-    inst = fundamentals.get("institutional_pct")
+    inst = _finite_number(fundamentals.get("institutional_pct"))
     trend = sponsorship_trend(observations or [], cfg)
     if inst is None:
         rows.append(_row("I", "Institutional sponsorship", "unavailable", "n/a",
@@ -524,8 +541,8 @@ def evaluate_stock_canslim(
                 "or heavily shorted names. Treat the level as unreliable and watch the direction instead."
             )
         elif cfg["inst_min_pct"] <= inst <= cfg["inst_max_pct"]:
-            status = "met"
-            detail = "Meaningful fund ownership with buying power left."
+            status = "borderline"
+            detail = "The reported ownership level shows sponsorship, but level alone does not prove that sponsorship is increasing."
         elif inst > cfg["inst_max_pct"]:
             status = "borderline"
             detail = "Heavily owned - O'Neil warned that over-owned names have little buying power left."
@@ -540,18 +557,18 @@ def evaluate_stock_canslim(
         # accumulating, not merely present.
         if trend["direction"] == "rising":
             trend_part = (
-                f" Ownership is rising ({trend['change_pct']:+.1f} pts since {trend['from_date']}) - "
-                "accumulation, which is the half that matters."
+                f" Reported ownership is rising ({trend['change_pct']:+.1f} pts since {trend['from_date']}). "
+                "This lagged provider series is consistent with increasing sponsorship but does not identify current-session buying."
             )
             if status == "borderline" and inst < cfg["inst_max_pct"]:
                 status = "met"
         elif trend["direction"] == "falling":
             trend_part = (
-                f" Ownership is falling ({trend['change_pct']:+.1f} pts since {trend['from_date']}) - "
-                "funds are distributing."
+                f" Reported ownership is falling ({trend['change_pct']:+.1f} pts since {trend['from_date']}). "
+                "This lagged series is consistent with declining sponsorship, not live fund selling."
             )
-            if status == "met":
-                status = "borderline"
+            if status != "not_met":
+                status = "not_met"
         elif trend["direction"] == "flat":
             trend_part = f" Ownership is flat since {trend['from_date']}."
         else:
@@ -578,6 +595,8 @@ def evaluate_stock_canslim(
         status, detail = "borderline", "Rally attempt in progress - wait for a follow-through day before full positions."
     elif market_state == STATE_CORRECTION:
         status, detail = "not_met", "Market in correction - O'Neil's rule: three of four stocks follow the market, so no new buys."
+    elif market_state == STATE_UNCONFIRMED:
+        status, detail = "borderline", "The available history began in an uptrend, but no confirming follow-through day was observed in-window."
     else:
         status, detail = "unavailable", "Broad market state unavailable."
     rows.append(_row(
@@ -607,36 +626,82 @@ def evaluate_stock_canslim(
     if breakout and closes:
         extension_pct = (closes[-1] / float(breakout["price"]) - 1.0) * 100.0
         buy_limit = float(breakout["price"]) * (1.0 + cfg["max_extension_pct"] / 100.0)
-        within = extension_pct <= cfg["max_extension_pct"]
+        within = 0.0 <= extension_pct <= cfg["max_extension_pct"]
+        entry_status = (
+            "buyable" if within else "below_pivot" if extension_pct < 0 else "extended"
+        )
+        purchase_stop = closes[-1] * (1.0 - cfg["stop_loss_pct"] / 100.0)
         entry = {
-            "status": "buyable" if within else "extended",
+            "status": entry_status,
             "pivot": breakout["price"],
             "buy_limit": round(buy_limit, 2),
-            "stop_price": breakout["stop_price"],
+            "stop_price": round(purchase_stop, 2),
             "extension_pct": round(extension_pct, 1),
             "detail": (
-                f"{extension_pct:+.1f}% from the {breakout['price']} pivot; the buy range runs to "
-                f"{buy_limit:.2f} with a stop at {breakout['stop_price']}."
+                f"{extension_pct:+.1f}% from the {breakout['price']} trigger; the buy range runs to "
+                f"{buy_limit:.2f}. An {cfg['stop_loss_pct']:.0f}% stop from a purchase here is {purchase_stop:.2f}."
                 if within
                 else (
+                    f"Price is {abs(extension_pct):.1f}% below the {breakout['price']} breakout trigger, so the breakout has not held. "
+                    "It is not a current buy setup."
+                    if extension_pct < 0
+                else (
                     f"Already {extension_pct:+.1f}% past the {breakout['price']} pivot - beyond O'Neil's "
-                    f"{cfg['max_extension_pct']:.0f}% chase limit. A {cfg['stop_loss_pct']:.0f}% stop from "
-                    "here sits inside a normal pullback; wait for a base or a pullback to the 20/50-day EMA."
+                    f"{cfg['max_extension_pct']:.0f}% chase limit. Wait for a new base or a constructive pullback."
+                )
                 )
             ),
         }
 
-    if scored < 4:
+    c_row = next((row for row in rows if row["letter"] == "C"), None)
+    a_row = next((row for row in rows if row["letter"] == "A"), None)
+    n_row = next((row for row in rows if row["letter"] == "N"), None)
+    l_row = next((row for row in rows if row["letter"] == "L"), None)
+    fundamentals_ready = bool(
+        not skipped
+        and c_row
+        and a_row
+        and c_row["status"] != "unavailable"
+        and a_row["status"] != "unavailable"
+    )
+    fundamentals_qualified = bool(
+        fundamentals_ready
+        and c_row["status"] in {"met", "borderline"}
+        and a_row["status"] in {"met", "borderline"}
+    )
+    leader_qualified = bool(l_row and l_row["status"] == "met")
+    breakout_qualified = bool(breakout and n_row and n_row["status"] == "met")
+
+    if scored < 4 or not fundamentals_ready:
         readiness = "insufficient_data"
-    elif breakout and gate_open and met >= cfg["min_score_buy"]:
-        readiness = (
-            "buy_candidate"
-            if (entry is None or entry["status"] == "buyable")
-            else "extended"
-        )
-    elif gate_open and near_pivot and met >= cfg["min_score_watch"]:
+    elif (
+        breakout_qualified
+        and gate_open
+        and fundamentals_qualified
+        and leader_qualified
+        and met >= cfg["min_score_buy"]
+    ):
+        if entry and entry["status"] == "buyable":
+            readiness = "buy_candidate"
+        elif entry and entry["status"] == "extended":
+            readiness = "extended"
+        else:
+            readiness = "not_ready"
+    elif (
+        gate_open
+        and near_pivot
+        and fundamentals_qualified
+        and leader_qualified
+        and met >= cfg["min_score_watch"]
+    ):
         readiness = "near_pivot"
-    elif met >= cfg["min_score_watch"] and not gate_open:
+    elif (
+        fundamentals_qualified
+        and leader_qualified
+        and (breakout_qualified or near_pivot)
+        and met >= cfg["min_score_watch"]
+        and not gate_open
+    ):
         readiness = "wait_market"
     else:
         readiness = "not_ready"
@@ -678,21 +743,20 @@ def build_stock_narrative(
     entry = result.get("entry")
     if readiness == "buy_candidate" and breakout:
         lines.append(
-            f"{label} is a CAN SLIM buy candidate: it broke out to a new 52-week high on "
+            f"{label} is a qualified CAN SLIM breakout setup: it broke out to a new 52-week high on "
             f"{breakout['date']} at {breakout['price']} on {breakout['volume_ratio']}x average volume, "
             f"with {score['met']} of {score['scored']} scored criteria met and the market gate open."
         )
         if entry:
             lines.append(
-                f"Entry discipline: buy within {cfg['max_extension_pct']:.0f}% of the pivot (up to "
+                f"Entry discipline: buy within {cfg['max_extension_pct']:.0f}% of the trigger (up to "
                 f"{entry['buy_limit']}), currently {entry['extension_pct']:+.1f}% from it. The stop belongs "
-                f"{cfg['stop_loss_pct']:.0f}% below the pivot at {breakout['stop_price']} - measured from the "
-                "pivot, not from wherever you buy, which is why chasing breaks the math."
+                f"{cfg['stop_loss_pct']:.0f}% below the actual purchase price; at the current snapshot that is "
+                f"{entry['stop_price']}."
             )
         else:
             lines.append(
-                f"O'Neil's risk rule: cut the loss at {cfg['stop_loss_pct']:.0f}% below the pivot "
-                f"({breakout['stop_price']}), no exceptions."
+                f"O'Neil's risk rule: cut the loss at {cfg['stop_loss_pct']:.0f}% below the actual fill, no exceptions."
             )
     elif readiness == "extended" and breakout and entry:
         lines.append(
@@ -701,8 +765,8 @@ def build_stock_narrative(
             f"pivot - beyond the {cfg['max_extension_pct']:.0f}% chase limit."
         )
         lines.append(
-            f"Buying here would put the {cfg['stop_loss_pct']:.0f}% stop ({breakout['stop_price']}) inside "
-            "the range of an ordinary pullback. Wait for a new base or a test of the 20/50-day EMA."
+            f"Buying here would require a {cfg['stop_loss_pct']:.0f}% stop near {entry['stop_price']}, inside "
+            "the range of an ordinary pullback toward the trigger. Wait for a new base or constructive pullback."
         )
     elif readiness == "near_pivot":
         lines.append(
@@ -747,8 +811,9 @@ def describe_breakout_signal(
         "message": (
             f"{label} cleared its prior 52-week high ({breakout['prior_high']}) at {breakout['price']} on "
             f"{breakout['volume_ratio']}x its 50-day average volume, with {score['met']} of {score['scored']} CAN SLIM "
-            f"criteria met{extra}. O'Neil's discipline: cut the loss at {result['stop_loss_pct']:.0f}% below the "
-            f"pivot ({breakout['stop_price']}) with no exceptions, and leading-stock breakouts after a follow-through "
+            f"criteria met{extra}. If bought at the {breakout['price']} trigger, O'Neil's discipline puts the "
+            f"{result['stop_loss_pct']:.0f}% stop at {breakout['stop_price']}; use the actual fill for any later purchase. "
+            "Leading-stock breakouts after a follow-through "
             "day are the strongest confirmation that the market bottom is real."
         ),
     }

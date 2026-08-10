@@ -718,8 +718,9 @@ class DirectionOverview(BaseModel):
     """O'Neil market-direction read for the tracked index universe.
 
     States follow the published vocabulary: confirmed uptrend, uptrend under
-    pressure, rally attempt, correction. Signals persist per completed
-    session; intraday reads are flagged provisional.
+    pressure, rally attempt, correction. A separate unconfirmed state prevents
+    truncated history from implying an observed follow-through day. Signals
+    persist per completed session; intraday reads are flagged provisional.
     """
 
     as_of: Optional[str] = None
@@ -788,9 +789,9 @@ class BaseQuality(BaseModel):
 
 
 class StockEntry(BaseModel):
-    """Pivot-relative entry discipline for a breakout candidate."""
+    """Trigger-relative entry discipline for a breakout setup."""
 
-    status: Literal["buyable", "extended"]
+    status: Literal["buyable", "extended", "below_pivot"]
     pivot: float
     buy_limit: float
     stop_price: float
@@ -799,9 +800,10 @@ class StockEntry(BaseModel):
 
 
 class StockLeader(BaseModel):
-    """One stock's CAN SLIM evaluation and buy-readiness verdict."""
+    """One stock's CAN SLIM evaluation and setup-readiness verdict."""
 
     symbol: str
+    leader_rank: Optional[int] = None
     name: Optional[str] = None
     readiness: Literal[
         "buy_candidate",
@@ -843,7 +845,7 @@ class SectorOption(BaseModel):
 
 
 class LeadersResponse(BaseModel):
-    """CAN SLIM scan over the holdings of every tracked market/sector ETF.
+    """CAN SLIM scan over configured top holdings of tracked market/sector ETFs.
 
     Price and volume are screened for the whole universe; company
     fundamentals are fetched only for the strongest technical candidates,

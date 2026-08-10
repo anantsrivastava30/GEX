@@ -147,7 +147,7 @@ canslim:
   annual_growth_borderline_pct: 15.0
   roe_met_pct: 17.0
   breakout_volume_ratio: 1.4
-  rs_met_percentile: 67.0
+  rs_met_percentile: 80.0
   stop_loss_pct: 8.0
   max_extension_pct: 5.0
   # Used only when live ETF holdings are unreachable. A hand-maintained

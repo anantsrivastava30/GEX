@@ -131,7 +131,10 @@ class TradierAPI:
         if end:
             params["end"] = end
         data = self.get("markets/history", params)
-        return data.get("history", {}).get("day", [])
+        history = data.get("history")
+        if not isinstance(history, dict):
+            return []
+        return self._coerce_list(history.get("day"))
 
     def orderbook(self, symbol: str) -> Dict[str, Any]:
         """Return the current order book for a symbol if available."""

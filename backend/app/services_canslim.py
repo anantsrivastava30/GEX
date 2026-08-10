@@ -1,7 +1,7 @@
-"""Per-stock CAN SLIM scan: which stocks are flagged to buy, and why.
+"""Per-stock CAN SLIM scan: which stocks match the configured setup rules.
 
 Scans the snapshot/watchlist stock universe (index ETFs excluded), scores
-each name on the seven letters, gates buys on the market-direction state,
+each name on the seven letters, applies the market-direction gate,
 and persists fresh heavy-volume breakouts as ``stock_breakout`` signals in
 the shared direction signal feed.
 """
@@ -9,6 +9,7 @@ the shared direction signal feed.
 from __future__ import annotations
 
 import logging
+import math
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
@@ -39,8 +40,9 @@ TTL_HOLDINGS = 24 * 3600
 TTL_LEADERS = 900
 
 _GATE_MESSAGES = {
-    "confirmed_uptrend": "Confirmed uptrend - breakout buys are allowed under O'Neil's rules.",
-    "uptrend_under_pressure": "Uptrend under pressure - distribution is building; size new buys with caution.",
+    "confirmed_uptrend": "Confirmed uptrend - the market gate is open for qualified breakout setups.",
+    "uptrend_under_pressure": "Uptrend under pressure - the market gate is open, but distribution is building.",
+    "uptrend_unconfirmed": "Trend predates the available history window - wait for an observed follow-through day before opening the market gate.",
     "rally_attempt": "Rally attempt in progress - wait for a follow-through day before new buys.",
     "correction": "Market in correction - O'Neil's rule is no new buys; build the watchlist instead.",
     "unavailable": "Broad market state unavailable.",
@@ -54,6 +56,22 @@ _READINESS_ORDER = {
     "not_ready": 4,
     "insufficient_data": 5,
 }
+
+
+def _descending_tie_ranks(scores: Dict[str, Optional[float]]) -> Dict[str, int]:
+    ordered = sorted(
+        ((symbol, value) for symbol, value in scores.items() if value is not None),
+        key=lambda item: (-float(item[1]), item[0]),
+    )
+    ranks: Dict[str, int] = {}
+    previous: Optional[float] = None
+    current_rank = 0
+    for index, (symbol, value) in enumerate(ordered, start=1):
+        if previous is None or value != previous:
+            current_rank = index
+            previous = value
+        ranks[symbol] = current_rank
+    return ranks
 
 
 def canslim_config() -> Dict[str, Any]:
@@ -110,12 +128,7 @@ def _build_universe(cfg: Dict[str, Any]) -> Dict[str, Any]:
         etf_rs[entry["symbol"]] = (
             weighted_rs_score([float(b["close"]) for b in bars]) if bars else None
         )
-    ranked_etfs = sorted(
-        (s for s, v in etf_rs.items() if v is not None),
-        key=lambda s: etf_rs[s],
-        reverse=True,
-    )
-    etf_rank = {symbol: i + 1 for i, symbol in enumerate(ranked_etfs)}
+    etf_rank = _descending_tie_ranks(etf_rs)
 
     holdings_by_etf: Dict[str, Dict[str, Any]] = {}
     owners: Dict[str, List[Dict[str, Any]]] = {}
@@ -286,6 +299,7 @@ def warm_fundamentals_universe() -> Dict[str, Any]:
         skipped,
         failed,
     )
+    cache.invalidate("canslim:leaders")
     return {
         "universe": len(universe["symbols"]),
         "fetched": fetched,
@@ -359,7 +373,10 @@ def _leader_item(
 
 
 def _round(value: Any) -> Optional[float]:
-    return round(float(value), 1) if isinstance(value, (int, float)) else None
+    if not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return round(number, 1) if math.isfinite(number) else None
 
 
 def _prescreen_score(
@@ -378,7 +395,7 @@ def _prescreen_score(
     if breakout:
         score += 40.0
     closes = [float(b["close"]) for b in bars]
-    window = closes[-252:]
+    window = closes[-252:] if len(closes) >= 252 else []
     if window:
         off_high = (closes[-1] / max(window) - 1.0) * 100.0
         if off_high >= -cfg["new_high_near_pct"]:
@@ -395,6 +412,39 @@ _SKIPPED_FUNDAMENTALS = {
     "fetch_skipped": True,
     "missing": [],
 }
+
+
+def _tie_aware_percentiles(scores: Dict[str, Optional[float]]) -> Dict[str, float]:
+    ordered = sorted(
+        ((symbol, value) for symbol, value in scores.items() if value is not None),
+        key=lambda item: (float(item[1]), item[0]),
+    )
+    if len(ordered) == 1:
+        return {ordered[0][0]: 50.0}
+    percentiles: Dict[str, float] = {}
+    index = 0
+    while index < len(ordered):
+        end = index + 1
+        while end < len(ordered) and ordered[end][1] == ordered[index][1]:
+            end += 1
+        average_rank = (index + end - 1) / 2.0
+        percentile = average_rank / (len(ordered) - 1) * 100.0
+        for position in range(index, end):
+            percentiles[ordered[position][0]] = percentile
+        index = end
+    return percentiles
+
+
+def _rank_items(items: List[Dict[str, Any]]) -> None:
+    items.sort(
+        key=lambda item: (
+            _READINESS_ORDER.get(item["readiness"], 9),
+            -(item["rs_percentile"] or 0),
+            item["symbol"],
+        )
+    )
+    for rank, item in enumerate(items, start=1):
+        item["leader_rank"] = rank
 
 
 def _scan(cfg: Dict[str, Any]) -> Dict[str, Any]:
@@ -428,14 +478,8 @@ def _scan(cfg: Dict[str, Any]) -> Dict[str, Any]:
         symbol: weighted_rs_score([float(b["close"]) for b in bars])
         for symbol, bars in bars_by_symbol.items()
     }
-    ranked = sorted(
-        (s for s, v in rs_raw.items() if v is not None), key=lambda s: rs_raw[s]
-    )
-    n_ranked = len(ranked)
-    percentiles = {
-        symbol: (idx / (n_ranked - 1) * 100.0 if n_ranked > 1 else 50.0)
-        for idx, symbol in enumerate(ranked)
-    }
+    percentiles = _tie_aware_percentiles(rs_raw)
+    n_ranked = len(percentiles)
 
     # Stage 2: fundamentals only for the strongest technical candidates.
     shortlist = sorted(
@@ -484,12 +528,7 @@ def _scan(cfg: Dict[str, Any]) -> Dict[str, Any]:
         item.update(universe["attribution"].get(symbol, {}))
         items.append(item)
 
-    items.sort(
-        key=lambda i: (
-            _READINESS_ORDER.get(i["readiness"], 9),
-            -(i["rs_percentile"] or 0),
-        )
-    )
+    _rank_items(items)
 
     as_of = None
     if bars_by_symbol:
@@ -525,7 +564,7 @@ def _scan(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "unavailable": unavailable,
         "stop_loss_pct": cfg["stop_loss_pct"],
         "methodology": (
-            "Seven-letter CAN SLIM scan across the holdings of every tracked market and sector ETF, "
+            "Seven-letter CAN SLIM scan across the configured top holdings of every tracked market and sector ETF, "
             "so candidates come from all market sections rather than one watchlist. Price and volume are "
             f"screened first for the whole universe; company fundamentals are then fetched for the top "
             f"{cfg['fundamentals_top_n']} technical candidates and the rest are marked technical-only. "
@@ -533,8 +572,9 @@ def _scan(cfg: Dict[str, Any]) -> Dict[str, Any]:
             f"{cfg['annual_growth_met_pct']:.0f}%+/yr and ROE {cfg['roe_met_pct']:.0f}%+. N: 52-week-high "
             f"breakout on {cfg['breakout_volume_ratio']}x average volume. S: up/down volume above 1.00. "
             f"L: relative strength {cfg['rs_met_percentile']:.0f}th percentile+ (12-month, recent quarter "
-            "double-weighted) within the scanned universe. I: institutional ownership with buying power left. "
-            "M: the follow-through-day market state; no buy flags while the market is in a correction. "
+            "double-weighted) within the scanned universe. I: lagged provider-reported institutional ownership "
+            "and its observed direction. "
+            "M: the follow-through-day market state; setup labels stay closed until an uptrend is confirmed. "
             "Each stock is credited to its strongest holding group, since O'Neil bought leaders of leading "
             "groups. Fundamentals are best-effort Yahoo data - unavailable letters are labeled, never guessed."
         ),
@@ -576,6 +616,8 @@ def get_stock_detail(symbol: str) -> Optional[Dict[str, Any]]:
     rs_percentile: Optional[float] = None
     universe_size: Optional[int] = None
     attribution: Dict[str, Any] = {}
+    cached: Optional[Dict[str, Any]] = None
+    match: Optional[Dict[str, Any]] = None
     try:
         cached = _cached_scan(cfg)
         match = next((i for i in cached["items"] if i["symbol"] == symbol), None)
@@ -600,10 +642,19 @@ def get_stock_detail(symbol: str) -> Optional[Dict[str, Any]]:
         cfg,
         observations=observations,
     )
-    item.pop("_result", None)
     item["fundamentals_fetched"] = True
     item.update(attribution)
-    return item
+    if match and cached:
+        was_fetched = bool(match.get("fundamentals_fetched"))
+        item["leader_rank"] = match.get("leader_rank")
+        match.update(item)
+        _rank_items(cached["items"])
+        item["leader_rank"] = match["leader_rank"]
+        if not was_fetched:
+            cached["fundamentals_scanned"] = min(
+                cached["scanned"], cached["fundamentals_scanned"] + 1
+            )
+    return {key: value for key, value in item.items() if key != "_result"}
 
 
 _STOCK_EVAL_LOCK = None
@@ -631,7 +682,7 @@ def _maybe_evaluate_stock_signals() -> None:
 
 
 def evaluate_stock_signals() -> Dict[str, Any]:
-    """Persist fresh buy-candidate breakouts for the last completed session.
+    """Persist qualified breakouts from the last completed session.
 
     Idempotent via the direction_signals unique constraint; delivery reuses
     the direction channels and only fires for newly inserted rows.
@@ -652,8 +703,7 @@ def evaluate_stock_signals() -> Dict[str, Any]:
             _fetch_bars(item["symbol"], direction_config()["history_days"])
         )
         breakout = detect_breakout(bars, result["config"], within=1)
-        # Only the session that started the advance is signal-worthy; a
-        # stock mid-run resolves to an older pivot and must not re-alert.
+        # Only a trigger on the latest completed session is signal-worthy.
         if not breakout or breakout.get("sessions_ago", 0) != 0:
             continue
         label = item.get("name") or item["symbol"]
