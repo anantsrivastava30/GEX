@@ -60,9 +60,14 @@ congress:
       chamber: "house"
       url: "https://house-stock-watcher-data.s3-us-west-2.amazonaws.com/data/all_transactions.json"
 
-# Native calendar. Earnings are queried from yfinance for this bounded
-# universe. FRED IDs are a curated US macro list, not provider impact scores.
+# Native calendar. Earnings come from Nasdaq's market-wide feed; the page
+# defaults to the "focus" scope, which keeps the tracked sector-ETF holdings
+# plus the snapshot, watchlist, and earnings_tickers names below. These tickers
+# are also the yfinance fallback universe when Nasdaq is unreachable.
+# FRED IDs are a curated US macro list, not provider impact scores.
 calendar:
+  # Floor for the calendar's "large cap" scope, in USD.
+  large_cap_floor_usd: 10000000000
   earnings_tickers:
     - AAPL
     - MSFT

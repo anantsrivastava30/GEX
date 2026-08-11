@@ -1364,3 +1364,61 @@ No tests were added or modified.
 **Next up:** a paid consensus feed is the only way to add true beat/miss; until
 then consider mapping the remaining releases (existing home sales has no ALFRED
 vintages) and surfacing FOMC dates from a non-FRED source.
+
+## Calendar earnings scope (2026-08-10)
+
+Nasdaq's market-wide feed returns ~2,800 rows per fortnight, nearly all of them
+names nobody here trades. Added an `earnings scope` so the calendar shows the
+companies this app actually tracks.
+
+- `GET /api/calendar?scope=focus|large|all`, default `all` so the existing API
+  contract is unchanged; the page requests `focus`.
+- `focus` = `_focus_universe()`: holdings of every tracked `market_direction`
+  ETF (reusing the CAN SLIM `get_etf_constituents` cache, so no bars or
+  fundamentals are fetched) union the snapshot, watchlist, and
+  `calendar.earnings_tickers` names. 132 symbols today. Each row is tagged with
+  the sector it was found in, preferring a sector ETF over a broad-market one,
+  so semis land under Semiconductors rather than Nasdaq-100.
+- `large` = market cap over `calendar.large_cap_floor_usd` (default $10B) from
+  the Nasdaq row.
+- Response gained `earnings_scope` and `earnings_total` (pre-filter count);
+  `EarningsEvent` gained `group`.
+- Frontend: Focus / Large cap / All chips, sector chips built from what actually
+  reports in the window (busiest first, click to filter), a Sector column in the
+  table, and an "N of M reporting companies" badge. A failed universe build
+  falls back to `all` rather than emptying the page.
+
+**Verified:** live TestClient over a +/-7d window - all 2,779 rows, large 335,
+focus 42, all tagged (AMD/AMAT Semiconductors, CSCO Technology, CAT Industrials,
+LLY Health care). Every focus row was above $5.9B market cap, so no extra cap
+floor was needed there. Frontend `tsc --noEmit`, `eslint`, `next build` clean.
+No tests were added or modified.
+
+## Calendar 500 + fail-soft hardening (2026-08-10)
+
+**Reported:** "Unable to load calendar: Backend returned 500" after the scope
+change.
+
+**Cause:** a backend process running a partially-updated module set - the new
+`routers/calendar.py` calling `get_calendar(start, end, symbols, scope)` against
+the old three-argument `services_calendar.get_calendar`, which raises TypeError
+on every request. Restarting the backend picked up both files and the endpoint
+recovered. Verified against the running container: every window and scope
+returns 200 (`focus` 40 of 2,701 rows, releases carrying readings), and an
+invalid scope correctly 422s.
+
+**Hardening (the real gap):** `get_calendar` previously let any upstream
+exception escape as a 500 even though the response already carries per-source
+status the UI renders. The earnings half, the FRED release half, and the reading
+enrichment now each fail independently into `sources[...]` with a message
+instead of taking the page down.
+
+**Verified:** monkeypatched each upstream to raise and re-ran the endpoint with
+a cleared cache. Earnings down -> 200, 0 earnings, 4 releases, `nasdaq:
+unavailable`. FRED down -> 200, 8 earnings, 0 releases, `fred: unavailable`.
+Readings down -> 200 with release dates intact. Focus universe down -> 200
+falling back to the unfiltered feed. Baseline and recovery both 200.
+
+**Note for deploys:** backend and frontend are separate containers; restart the
+backend whenever `routers/` and `services_*` change together, or requests can
+land on a half-updated import graph.

@@ -296,8 +296,12 @@ export interface EarningsEvent {
   market_cap?: number | null;
   fiscal_quarter?: string | null;
   estimate_count?: number | null;
+  /** Sector this name is tracked under, when it is in the focus universe. */
+  group?: string | null;
   url: string;
 }
+
+export type EarningsScope = "focus" | "large" | "all";
 
 export interface EconomicReleaseSeries {
   series_id: string;
@@ -328,6 +332,9 @@ export interface CalendarResponse {
   end_date: string;
   generated_at: string;
   earnings: EarningsEvent[];
+  earnings_scope: EarningsScope;
+  /** Rows the market-wide feed returned before the scope filter. */
+  earnings_total: number;
   economic_releases: EconomicRelease[];
   sources: Record<string, CalendarSourceStatus>;
 }
@@ -1078,13 +1085,19 @@ export const api = {
     postJSON<CustomScreenerResponse>("/api/screener/query", request, signal),
 
   calendar: (
-    filters: { start?: string; end?: string; symbols?: string[] } = {},
+    filters: {
+      start?: string;
+      end?: string;
+      symbols?: string[];
+      scope?: EarningsScope;
+    } = {},
     signal?: AbortSignal,
   ) => {
     const params: Record<string, string | string[]> = {};
     if (filters.start) params.start = filters.start;
     if (filters.end) params.end = filters.end;
     if (filters.symbols?.length) params.symbols = filters.symbols;
+    if (filters.scope) params.scope = filters.scope;
     return getJSON<CalendarResponse>(`/api/calendar${qs(params)}`, signal);
   },
 

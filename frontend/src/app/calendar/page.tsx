@@ -4,12 +4,27 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import EarningsTable from "@/components/calendar/EarningsTable";
 import EconomicReleaseList from "@/components/calendar/EconomicReleaseList";
 import Panel from "@/components/ui/Panel";
-import { api, CalendarResponse, EarningsEvent, EconomicRelease } from "@/lib/api";
+import {
+  api,
+  CalendarResponse,
+  EarningsEvent,
+  EarningsScope,
+  EconomicRelease,
+} from "@/lib/api";
 
 // Forward-looking by default: the next 7 days sit on top, the last 7 days sit
 // under them. One request covers both halves and the page splits it on today.
 
 const WINDOWS = [7, 14, 30];
+
+// Nasdaq's market-wide feed is thousands of names per fortnight. Focus is the
+// default: the companies this app already tracks, which is the sector-ETF
+// holdings (semis, tech, and the rest) plus the snapshot and watchlist tickers.
+const SCOPES: { id: EarningsScope; label: string; hint: string }[] = [
+  { id: "focus", label: "Focus", hint: "Tracked sector leaders" },
+  { id: "large", label: "Large cap", hint: "Market cap over $10B" },
+  { id: "all", label: "All", hint: "Every Nasdaq filer" },
+];
 
 function isoDate(date: Date): string {
   const year = date.getFullYear();
@@ -36,6 +51,8 @@ function relativeDay(isoValue: string, todayIso: string): string {
 export default function CalendarPage() {
   const controller = useRef<AbortController | null>(null);
   const [days, setDays] = useState(7);
+  const [scope, setScope] = useState<EarningsScope>("focus");
+  const [group, setGroup] = useState<string | null>(null);
   const [symbolInput, setSymbolInput] = useState("");
   const [symbols, setSymbols] = useState<string[]>([]);
   const [data, setData] = useState<CalendarResponse | null>(null);
@@ -44,7 +61,12 @@ export default function CalendarPage() {
   // Pinned once per load so the upcoming/past split cannot drift mid-render.
   const [todayIso, setTodayIso] = useState(() => isoDate(new Date()));
 
-  const load = useCallback((windowDays: number, selectedSymbols: string[]) => {
+  const load = useCallback(
+    (
+      windowDays: number,
+      selectedSymbols: string[],
+      selectedScope: EarningsScope,
+    ) => {
     controller.current?.abort();
     const nextController = new AbortController();
     controller.current = nextController;
@@ -60,6 +82,7 @@ export default function CalendarPage() {
           start: isoDate(start),
           end: isoDate(end),
           symbols: selectedSymbols.length ? selectedSymbols : undefined,
+          scope: selectedScope,
         },
         nextController.signal,
       )
@@ -77,12 +100,14 @@ export default function CalendarPage() {
           setLoading(false);
         }
       });
-  }, []);
+    },
+    [],
+  );
 
   useEffect(() => {
-    load(days, symbols);
+    load(days, symbols, scope);
     return () => controller.current?.abort();
-  }, [days, symbols, load]);
+  }, [days, symbols, scope, load]);
 
   function applySymbols() {
     const next = [
@@ -96,13 +121,35 @@ export default function CalendarPage() {
     setLoading(true);
     setError(null);
     setData(null);
-    if (next.join(",") === symbols.join(",")) load(days, next);
+    if (next.join(",") === symbols.join(",")) load(days, next, scope);
     else setSymbols(next);
   }
 
+  function reload(apply: () => void) {
+    setLoading(true);
+    setError(null);
+    setData(null);
+    apply();
+  }
+
+  // Sector chips come from what actually reported in the window, busiest first,
+  // so "who in semis reports this week" is one click.
+  const groupCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const event of data?.earnings ?? []) {
+      if (!event.group) continue;
+      counts.set(event.group, (counts.get(event.group) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort(
+      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
+    );
+  }, [data]);
+
   const split = useMemo(() => {
     const releases = data?.economic_releases ?? [];
-    const earnings = data?.earnings ?? [];
+    const earnings = (data?.earnings ?? []).filter(
+      (event) => !group || event.group === group,
+    );
     const isUpcoming = (value: string) => value.slice(0, 10) >= todayIso;
     return {
       upcomingReleases: releases
@@ -118,7 +165,7 @@ export default function CalendarPage() {
         .filter((item: EarningsEvent) => !isUpcoming(item.earnings_at))
         .sort((a, b) => b.earnings_at.localeCompare(a.earnings_at)),
     };
-  }, [data, todayIso]);
+  }, [data, todayIso, group]);
 
   const label = useCallback(
     (isoValue: string) => relativeDay(isoValue, todayIso),
@@ -185,8 +232,12 @@ export default function CalendarPage() {
       <div>
         <h1 className="text-lg font-semibold">Market Calendar</h1>
         <p className="mt-1 max-w-3xl text-sm text-muted">
-          Market-wide company earnings from Nasdaq and a curated US macro release
-          schedule from FRED. Each macro row carries its headline reading:
+          Company earnings from Nasdaq and a curated US macro release schedule
+          from FRED. Earnings default to the companies this app tracks - the
+          holdings of every tracked sector ETF, semis and tech included, plus
+          the snapshot and watchlist tickers - so the list stays readable;
+          switch to Large cap or All to widen it. Each macro row carries its
+          headline reading:
           what printed, the prior period, and the move. FRED publishes no
           consensus, so these are moves against the prior period, not beats
           or misses against expectations.
@@ -194,6 +245,30 @@ export default function CalendarPage() {
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs text-muted">Companies</span>
+        {SCOPES.map((option) => (
+          <button
+            key={option.id}
+            disabled={loading}
+            title={option.hint}
+            aria-pressed={scope === option.id}
+            onClick={() => {
+              if (option.id === scope) return;
+              reload(() => {
+                setGroup(null);
+                setScope(option.id);
+              });
+            }}
+            className={`rounded-full border px-3 py-1 text-xs disabled:opacity-50 ${
+              scope === option.id
+                ? "border-accent bg-accent/15 text-foreground"
+                : "border-border bg-surface text-muted hover:text-foreground"
+            }`}
+          >
+            {option.label}
+          </button>
+        ))}
+        <span className="mx-1 h-4 w-px bg-border" />
         <span className="text-xs text-muted">Window</span>
         {WINDOWS.map((windowDays) => (
           <button
@@ -202,10 +277,7 @@ export default function CalendarPage() {
             aria-pressed={days === windowDays}
             onClick={() => {
               if (windowDays === days) return;
-              setLoading(true);
-              setError(null);
-              setData(null);
-              setDays(windowDays);
+              reload(() => setDays(windowDays));
             }}
             className={`rounded-full border px-3 py-1 text-xs disabled:opacity-50 ${
               days === windowDays
@@ -240,9 +312,52 @@ export default function CalendarPage() {
         </form>
       </div>
 
+      {groupCounts.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-muted">Sector</span>
+          <button
+            type="button"
+            aria-pressed={group === null}
+            onClick={() => setGroup(null)}
+            className={`rounded-full border px-2.5 py-1 text-xs ${
+              group === null
+                ? "border-accent bg-accent/15 text-foreground"
+                : "border-border bg-surface text-muted hover:text-foreground"
+            }`}
+          >
+            All
+          </button>
+          {groupCounts.map(([name, count]) => (
+            <button
+              key={name}
+              type="button"
+              aria-pressed={group === name}
+              onClick={() => setGroup(group === name ? null : name)}
+              className={`rounded-full border px-2.5 py-1 text-xs ${
+                group === name
+                  ? "border-accent bg-accent/15 text-foreground"
+                  : "border-border bg-surface text-muted hover:text-foreground"
+              }`}
+            >
+              {name}
+              <span className="ml-1 text-faint">{count}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
       {data && (
         <div className="space-y-2 text-xs">
           <div className="flex flex-wrap gap-2">
+            <span className="rounded border border-border px-2 py-1 text-muted">
+              {data.earnings.length.toLocaleString()} of{" "}
+              {data.earnings_total.toLocaleString()} reporting companies
+              {data.earnings_scope === "focus"
+                ? " · tracked sector leaders"
+                : data.earnings_scope === "large"
+                  ? " · market cap over $10B"
+                  : ""}
+            </span>
             {Object.entries(data.sources).map(([name, source]) => (
               <span
                 key={name}
@@ -291,7 +406,9 @@ export default function CalendarPage() {
         split.upcomingReleases,
         split.upcomingEarnings,
         "No curated macro releases scheduled in this window.",
-        "No market-wide earnings scheduled in this window.",
+        group
+          ? `No ${group} names report in this window.`
+          : "No tracked companies report in this window. Widen the window or switch to All.",
       )}
 
       {section(
@@ -300,12 +417,18 @@ export default function CalendarPage() {
         split.pastReleases,
         split.pastEarnings,
         "No curated macro releases printed in this window.",
-        "No market-wide earnings reported in this window.",
+        group
+          ? `No ${group} names reported in this window.`
+          : "No tracked companies reported in this window. Widen the window or switch to All.",
       )}
 
       <p className="max-w-4xl text-xs text-muted">
         Earnings use Nasdaq&apos;s market-wide daily calendar; the ticker input is
-        an optional filter. Macro readings come from FRED vintages: a past release
+        an optional filter. The Focus scope keeps names held by the tracked
+        sector ETFs (read from the provider daily, with a configured fallback)
+        plus the snapshot and watchlist tickers, and tags each with the sector
+        it was found in; holdings drift, so a name can enter or leave this list
+        over time. Macro readings come from FRED vintages: a past release
         shows the value that release first published against the previous period,
         and an upcoming release shows the last published reading for context.
         FRED exposes no consensus, actual-vs-estimate, or impact rating, and the

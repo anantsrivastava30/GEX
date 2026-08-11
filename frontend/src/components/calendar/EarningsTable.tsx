@@ -49,6 +49,7 @@ export default function EarningsTable({
           <tr>
             <th className="px-3 py-2">Date</th>
             <th className="px-3 py-2">Symbol</th>
+            <th className="px-3 py-2">Sector</th>
             <th className="px-3 py-2 text-right">EPS est.</th>
             <th className="px-3 py-2 text-right">Reported</th>
             <th className="px-3 py-2 text-right">Surprise</th>
@@ -57,7 +58,7 @@ export default function EarningsTable({
         <tbody>
           {loading && (
             <tr>
-              <td colSpan={5} className="px-4 py-10 text-center text-muted">
+              <td colSpan={6} className="px-4 py-10 text-center text-muted">
                 Loading market-wide earnings...
               </td>
             </tr>
@@ -89,6 +90,9 @@ export default function EarningsTable({
                     </span>
                   )}
                 </td>
+                <td className="whitespace-nowrap px-3 py-2 text-xs text-muted">
+                  {event.group ?? "—"}
+                </td>
                 <td className="px-3 py-2 text-right font-mono text-muted">
                   {formatNumber(event.eps_estimate)}
                 </td>
@@ -112,7 +116,7 @@ export default function EarningsTable({
             ))}
           {!loading && !events.length && (
             <tr>
-              <td colSpan={5} className="px-4 py-10 text-center text-muted">
+              <td colSpan={6} className="px-4 py-10 text-center text-muted">
                 {emptyMessage}
               </td>
             </tr>

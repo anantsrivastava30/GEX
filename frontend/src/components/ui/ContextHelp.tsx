@@ -157,7 +157,9 @@ const HELP: Record<string, HelpContent> = {
     label: "Market Calendar",
     sections: [{ bullets: [
       "The page opens on the next 7 days and repeats the last 7 days underneath. The window control widens both halves at once; ticker text changes the calendar only after Apply.",
-      "Add comma-separated symbols only when you want to narrow the market-wide earnings list.",
+      "Earnings default to Focus: the holdings of every tracked sector ETF (semis, tech, and the rest) plus the snapshot and watchlist tickers, tagged with the sector each name was found in. Large cap is a plain market-cap floor; All is the raw Nasdaq feed.",
+      "The sector chips filter to what actually reports in the window, so \"who in semis reports this week\" is one click.",
+      "Add comma-separated symbols only when you want to narrow the earnings list further.",
       "Date-only earnings entries show the supplied session or time TBD. Confirm timing through the Nasdaq source link.",
       "Each macro row carries its headline FRED reading. A past release shows the value that release first published; an upcoming one shows the last reading for context, labelled as such.",
       "FRED publishes no consensus, so there is no beat or miss anywhere on this page. Every comparison is against the prior period, and colour only marks the direction a move is conventionally read as good or bad.",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -15,6 +16,8 @@ from backend.app.cache import cache
 from backend.app.config import get_settings
 from quant_analysis.config import CONFIG
 
+logger = logging.getLogger(__name__)
+
 TTL_CALENDAR = 6 * 3600
 _HTTP_TIMEOUT = 20
 _MARKET_TZ = ZoneInfo("America/New_York")
@@ -27,6 +30,16 @@ _NASDAQ_HEADERS = {
 }
 _CALENDAR_CONFIG = CONFIG.get("calendar", {}) if isinstance(CONFIG, dict) else {}
 _DEFAULT_EARNINGS_TICKERS = _CALENDAR_CONFIG.get("earnings_tickers", [])
+# Nasdaq's market-wide feed runs to thousands of names per fortnight, most of
+# them micro caps nobody here trades. "focus" keeps the companies this app
+# already tracks - the holdings of every tracked sector ETF (semis, tech, and
+# the rest), plus the snapshot and watchlist tickers - and tags each row with
+# the sector it came from. "large" is a plain market-cap floor. "all" is the
+# raw feed.
+EARNINGS_SCOPES = ("focus", "large", "all")
+TTL_FOCUS_UNIVERSE = 12 * 3600
+_LARGE_CAP_FLOOR = float(_CALENDAR_CONFIG.get("large_cap_floor_usd", 10_000_000_000))
+_TRACKED_LABEL = "Tracked"
 _FRED_RELEASE_IDS = {
     int(release_id) for release_id in _CALENDAR_CONFIG.get("fred_release_ids", [])
 }
@@ -253,6 +266,92 @@ def _nasdaq_earnings_for_date(earnings_date: date) -> List[Dict[str, Any]]:
                 ),
             }
         )
+    return rows
+
+
+def _failed_source(message: str) -> Dict[str, Any]:
+    return {
+        "configured": True,
+        "available": False,
+        "partial": False,
+        "unavailable": ["error"],
+        "message": message,
+    }
+
+
+def _focus_universe() -> Dict[str, str]:
+    """Symbol -> sector label for the companies this app tracks.
+
+    Built from the same tracked-ETF holdings the CAN SLIM scan uses, so the
+    calendar and the leaders screen talk about the same universe. Holdings are
+    already cached per ETF for a day; no bars or fundamentals are fetched here.
+    """
+
+    def compute() -> Dict[str, str]:
+        from backend.app.services_canslim import canslim_config, get_etf_constituents
+        from backend.app.services_direction import direction_config
+
+        cfg = canslim_config()
+        exclude = set(cfg["exclude"])
+        labels: Dict[str, str] = {}
+        groups: Dict[str, str] = {}
+
+        for entry in direction_config()["indices"]:
+            etf = entry["symbol"]
+            holdings = get_etf_constituents(
+                etf,
+                cfg["max_constituents_per_etf"],
+                cfg["fallback_constituents"].get(etf, []),
+            )["symbols"]
+            for symbol in holdings:
+                if symbol in exclude:
+                    continue
+                # A sector label ("Semiconductors") beats a broad-market one.
+                if symbol in labels and groups.get(symbol) == "Sector":
+                    continue
+                labels[symbol] = entry["label"]
+                groups[symbol] = entry["group"]
+
+        # Anything the app already snapshots or watches stays on the calendar
+        # even when it is too small to be an ETF top holding.
+        tracked: List[str] = [str(s).upper() for s in _DEFAULT_EARNINGS_TICKERS]
+        try:
+            from backend.app.services_watchlists import snapshot_symbols
+
+            tracked.extend(str(s).upper() for s in snapshot_symbols())
+        except Exception:
+            logger.info("Snapshot symbols unavailable for the calendar focus list")
+        for symbol in tracked:
+            if symbol and symbol not in exclude:
+                labels.setdefault(symbol, _TRACKED_LABEL)
+        return labels
+
+    return cache.get_or_compute("calendar:focus-universe", TTL_FOCUS_UNIVERSE, compute)
+
+
+def _apply_earnings_scope(
+    rows: List[Dict[str, Any]], scope: str
+) -> List[Dict[str, Any]]:
+    """Narrow the market-wide feed and tag each row with its sector."""
+
+    universe: Dict[str, str] = {}
+    if scope == "focus":
+        try:
+            universe = _focus_universe()
+        except Exception:
+            logger.exception("Calendar focus universe unavailable; showing all names")
+            scope = "all"
+
+    if scope == "focus":
+        rows = [row for row in rows if row["symbol"] in universe]
+    elif scope == "large":
+        rows = [
+            row
+            for row in rows
+            if (row.get("market_cap") or 0) >= _LARGE_CAP_FLOOR
+        ]
+    for row in rows:
+        row["group"] = universe.get(row["symbol"])
     return rows
 
 
@@ -562,37 +661,70 @@ def _attach_release_series(rows: List[Dict[str, Any]], today: date) -> None:
 
 
 def get_calendar(
-    start_date: date, end_date: date, symbols: Optional[List[str]] = None
+    start_date: date,
+    end_date: date,
+    symbols: Optional[List[str]] = None,
+    scope: str = "all",
 ) -> Dict[str, Any]:
     """Return independently degradable earnings and economic calendars."""
 
     selected = _normalise_symbols(symbols)
+    if scope not in EARNINGS_SCOPES:
+        scope = "all"
     # Released-vs-scheduled is relative to today, so today is part of the key.
     key = (
         f"calendar:{datetime.now(_MARKET_TZ).date()}"
-        f":{start_date}:{end_date}:{','.join(selected)}"
+        f":{start_date}:{end_date}:{scope}:{','.join(selected)}"
     )
 
     def load() -> Dict[str, Any]:
         today = datetime.now(_MARKET_TZ).date()
-        earnings, nasdaq_status = _load_market_earnings(
-            start_date, end_date, selected
-        )
-        sources = {"nasdaq": nasdaq_status}
-        if not nasdaq_status["available"]:
-            fallback_symbols = selected or list(_DEFAULT_EARNINGS_TICKERS)
-            earnings, yahoo_status = _load_yahoo_earnings(
-                start_date, end_date, fallback_symbols
+        sources: Dict[str, Any] = {}
+
+        # The two halves degrade independently and neither may take the page
+        # down: an unreachable provider is reported through `sources`, which
+        # the UI already renders, rather than as a 500.
+        earnings: List[Dict[str, Any]] = []
+        total_earnings = 0
+        try:
+            earnings, nasdaq_status = _load_market_earnings(
+                start_date, end_date, selected
             )
-            sources["yfinance"] = yahoo_status
-        releases, fred_status = _load_fred_releases(start_date, end_date, today)
-        _attach_release_series(releases, today)
-        sources["fred"] = fred_status
+            sources["nasdaq"] = nasdaq_status
+            if not nasdaq_status["available"]:
+                fallback_symbols = selected or list(_DEFAULT_EARNINGS_TICKERS)
+                earnings, yahoo_status = _load_yahoo_earnings(
+                    start_date, end_date, fallback_symbols
+                )
+                sources["yfinance"] = yahoo_status
+            total_earnings = len(earnings)
+            earnings = _apply_earnings_scope(earnings, scope)
+        except Exception:
+            logger.exception("Earnings calendar failed for %s..%s", start_date, end_date)
+            earnings = []
+            total_earnings = 0
+            sources["nasdaq"] = _failed_source("The earnings calendar failed to load.")
+
+        releases: List[Dict[str, Any]] = []
+        try:
+            releases, fred_status = _load_fred_releases(start_date, end_date, today)
+            sources["fred"] = fred_status
+        except Exception:
+            logger.exception("FRED releases failed for %s..%s", start_date, end_date)
+            sources["fred"] = _failed_source("The economic release calendar failed to load.")
+        try:
+            _attach_release_series(releases, today)
+        except Exception:
+            # Dates without readings still beat no calendar at all.
+            logger.exception("Release readings unavailable; showing dates only")
+
         return {
             "start_date": start_date.isoformat(),
             "end_date": end_date.isoformat(),
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "earnings": earnings,
+            "earnings_scope": scope,
+            "earnings_total": total_earnings,
             "economic_releases": releases,
             "sources": sources,
         }

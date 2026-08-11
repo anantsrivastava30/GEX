@@ -239,6 +239,8 @@ class EarningsEvent(BaseModel):
     market_cap: Optional[float] = None
     fiscal_quarter: Optional[str] = None
     estimate_count: Optional[int] = None
+    # Sector this name is tracked under, when it is in the focus universe.
+    group: Optional[str] = None
     url: str
 
 
@@ -272,6 +274,9 @@ class CalendarResponse(BaseModel):
     end_date: str
     generated_at: str
     earnings: List[EarningsEvent]
+    earnings_scope: Literal["focus", "large", "all"] = "all"
+    # Rows the market-wide feed returned before the scope filter.
+    earnings_total: int = 0
     economic_releases: List[EconomicRelease]
     sources: Dict[str, CalendarSourceStatus]
 
