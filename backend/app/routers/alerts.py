@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from backend.app.schemas import (
+    AlertEventReadRequest,
     AlertEventsResponse,
     AlertRule,
     AlertRuleMutation,
@@ -17,6 +18,7 @@ from backend.app.services_alerts import (
     list_alert_rules,
     mark_all_events_read,
     mark_event_read,
+    mark_events_read,
     update_alert_rule,
 )
 
@@ -86,6 +88,15 @@ def read_event(event_id: int, _: None = Depends(require_workspace_pin)):
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Alert event not found") from exc
     return {"status": "ok"}
+
+
+@router.post("/events/read", response_model=dict)
+def read_events(
+    request: AlertEventReadRequest, _: None = Depends(require_workspace_pin)
+):
+    """Mark a selected batch of events read in one call (thread triage)."""
+
+    return {"updated": mark_events_read(request.ids)}
 
 
 @router.post("/events/read-all", response_model=dict)

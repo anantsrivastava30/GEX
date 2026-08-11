@@ -47,6 +47,75 @@ _FRED_RELEASE_NAMES = {
     192: "Job Openings and Labor Turnover Survey",
     291: "Existing Home Sales",
 }
+# FRED lists these releases on every calendar day rather than on their actual
+# announcement dates, so they cannot be rendered as calendar rows without
+# burying the real releases. FOMC decision dates are not available from FRED.
+_DENSE_RELEASE_IDS = {101}
+
+# Headline FRED series behind each curated release, so a calendar row carries a
+# number instead of just a date. `mode` is "vintage" for series whose ALFRED
+# vintages let us pin the value a given release published (output_type=4 returns
+# each period's first-published value, which is what the market traded), and
+# "latest" for series with no vintage history, where we can only show the most
+# recent reading. FRED publishes no consensus figure, so "favorable" only says
+# which direction of a move is generally read as good; there is no beat/miss.
+_FRED_LOOKBACK_DAYS = 900
+_MAX_RELEASE_SERIES_WORKERS = 6
+_RELEASE_SERIES: Dict[int, List[Dict[str, Any]]] = {
+    9: [{"id": "RSAFS", "label": "Advance retail sales", "units": "$M", "favorable": "up"}],
+    10: [
+        {"id": "CPIAUCSL", "label": "CPI", "units": "index", "favorable": "down", "yoy": True},
+        {"id": "CPILFESL", "label": "Core CPI", "units": "index", "favorable": "down", "yoy": True},
+    ],
+    11: [{"id": "ECIALLCIV", "label": "Employment cost index", "units": "index"}],
+    13: [
+        {"id": "INDPRO", "label": "Industrial production", "units": "index", "favorable": "up"},
+        {"id": "TCU", "label": "Capacity utilization", "units": "%", "favorable": "up"},
+    ],
+    27: [
+        {"id": "HOUST", "label": "Housing starts", "units": "K SAAR", "favorable": "up"},
+        {"id": "PERMIT", "label": "Building permits", "units": "K SAAR", "favorable": "up"},
+    ],
+    46: [
+        {"id": "PPIFIS", "label": "PPI final demand", "units": "index", "favorable": "down", "yoy": True},
+    ],
+    50: [
+        {"id": "PAYEMS", "label": "Nonfarm payrolls", "units": "K jobs", "favorable": "up"},
+        {"id": "UNRATE", "label": "Unemployment rate", "units": "%", "favorable": "down"},
+    ],
+    51: [{"id": "BOPGSTB", "label": "Trade balance", "units": "$M", "favorable": "up"}],
+    53: [
+        {"id": "A191RL1Q225SBEA", "label": "Real GDP growth", "units": "% annualized", "favorable": "up"},
+    ],
+    54: [
+        {"id": "PCEPI", "label": "PCE price index", "units": "index", "favorable": "down", "yoy": True},
+        {"id": "PCEPILFE", "label": "Core PCE price index", "units": "index", "favorable": "down", "yoy": True},
+        {"id": "PI", "label": "Personal income", "units": "$B", "favorable": "up"},
+    ],
+    97: [{"id": "HSN1F", "label": "New home sales", "units": "K SAAR", "favorable": "up"}],
+    101: [
+        {
+            "id": "DFEDTARU",
+            "label": "Fed funds target (upper)",
+            "units": "%",
+            "mode": "latest",
+        },
+    ],
+    180: [
+        {"id": "ICSA", "label": "Initial jobless claims", "units": "claims", "favorable": "down"},
+        {"id": "CCSA", "label": "Continuing claims", "units": "claims", "favorable": "down"},
+    ],
+    192: [{"id": "JTSJOL", "label": "Job openings", "units": "K", "favorable": "up"}],
+    291: [
+        {
+            "id": "EXHOSLUSM495S",
+            "label": "Existing home sales",
+            "units": "K SAAR",
+            "mode": "latest",
+            "favorable": "up",
+        },
+    ],
+}
 
 
 def _number(value: Any) -> Optional[float]:
@@ -264,7 +333,7 @@ def _load_yahoo_earnings(
 
 
 def _load_fred_releases(
-    start_date: date, end_date: date
+    start_date: date, end_date: date, today: date
 ) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
     settings = get_settings()
     if not settings.fred_api_key:
@@ -285,7 +354,12 @@ def _load_fred_releases(
                 "file_type": "json",
                 "include_release_dates_with_no_data": "true",
                 "sort_order": "desc",
-                "limit": 20,
+                # FRED publishes each release's schedule to the end of the
+                # calendar year, so the newest 20 dates are months in the
+                # future and a window near today matches nothing. 400 spans
+                # from FRED's furthest scheduled date back well past a year
+                # even for the daily and weekly releases.
+                "limit": 400,
             },
             timeout=_HTTP_TIMEOUT,
         )
@@ -294,7 +368,9 @@ def _load_fred_releases(
 
     records: List[Dict[str, Any]] = []
     unavailable: List[str] = []
-    release_ids = sorted(_FRED_RELEASE_IDS or _FRED_RELEASE_NAMES)
+    release_ids = sorted(
+        set(_FRED_RELEASE_IDS or _FRED_RELEASE_NAMES) - _DENSE_RELEASE_IDS
+    )
     with ThreadPoolExecutor(max_workers=5) as executor:
         futures = {
             executor.submit(fetch_release, release_id): release_id
@@ -324,6 +400,8 @@ def _load_fred_releases(
             release_date = date.fromisoformat(str(record.get("date")))
         except (TypeError, ValueError):
             continue
+        if release_id in _DENSE_RELEASE_IDS:
+            continue
         if _FRED_RELEASE_IDS and release_id not in _FRED_RELEASE_IDS:
             continue
         if not start_date <= release_date <= end_date:
@@ -340,6 +418,8 @@ def _load_fred_releases(
                 ),
                 "release_date": release_date.isoformat(),
                 "url": f"https://fred.stlouisfed.org/release?rid={release_id}",
+                "status": "released" if release_date < today else "scheduled",
+                "series": [],
             }
         )
     rows.sort(key=lambda row: (row["release_date"], row["release_name"]))
@@ -356,15 +436,145 @@ def _load_fred_releases(
     }
 
 
+def _fred_value(raw: Any) -> Optional[float]:
+    # FRED writes "." for a missing observation.
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _fred_observations(spec: Dict[str, Any], today: date) -> List[Dict[str, Any]]:
+    """Ascending [{period, value, published}] for one headline series."""
+
+    settings = get_settings()
+    window_start = (today - timedelta(days=_FRED_LOOKBACK_DAYS)).isoformat()
+    params: Dict[str, Any] = {
+        "series_id": spec["id"],
+        "api_key": settings.fred_api_key,
+        "file_type": "json",
+        "observation_start": window_start,
+        "sort_order": "asc",
+    }
+    if spec.get("mode", "vintage") == "vintage":
+        # output_type=4 is each period's first published value, stamped with the
+        # date it was published - the join key back to the release calendar.
+        params["output_type"] = 4
+        params["realtime_start"] = window_start
+        params["realtime_end"] = today.isoformat()
+
+    response = requests.get(
+        f"{settings.fred_api_url.rstrip('/')}/series/observations",
+        params=params,
+        timeout=_HTTP_TIMEOUT,
+    )
+    response.raise_for_status()
+    rows: List[Dict[str, Any]] = []
+    for record in response.json().get("observations", []):
+        value = _fred_value(record.get("value"))
+        if value is None:
+            continue
+        rows.append(
+            {
+                "period": str(record.get("date") or ""),
+                "value": value,
+                "published": str(record.get("realtime_start") or ""),
+            }
+        )
+    return rows
+
+
+def _series_entry(
+    spec: Dict[str, Any], observations: List[Dict[str, Any]], release_date: str
+) -> Optional[Dict[str, Any]]:
+    if not observations:
+        return None
+
+    index: Optional[int] = None
+    if spec.get("mode", "vintage") == "vintage":
+        for position, record in enumerate(observations):
+            if record["published"] == release_date:
+                index = position
+    matched = index is not None
+    if index is None:
+        index = len(observations) - 1
+
+    actual = observations[index]["value"]
+    prior = observations[index - 1]["value"] if index > 0 else None
+    change = None if prior is None else actual - prior
+    change_pct = None if not prior else (actual - prior) / abs(prior) * 100.0
+
+    change_yoy_pct = None
+    if spec.get("yoy") and index >= 12:
+        year_ago = observations[index - 12]["value"]
+        if year_ago:
+            change_yoy_pct = (actual - year_ago) / abs(year_ago) * 100.0
+
+    return {
+        "series_id": spec["id"],
+        "label": spec["label"],
+        "units": spec["units"],
+        "period": observations[index]["period"],
+        "actual": actual,
+        "prior": prior,
+        "change": change,
+        "change_pct": change_pct,
+        "change_yoy_pct": change_yoy_pct,
+        "matched": matched,
+        "favorable": spec.get("favorable"),
+    }
+
+
+def _attach_release_series(rows: List[Dict[str, Any]], today: date) -> None:
+    """Fill each release row with its headline readings, in place."""
+
+    if not rows or not get_settings().fred_api_key:
+        return
+    specs: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        for spec in _RELEASE_SERIES.get(row["release_id"], []):
+            specs.setdefault(spec["id"], spec)
+    if not specs:
+        return
+
+    history: Dict[str, List[Dict[str, Any]]] = {}
+    with ThreadPoolExecutor(max_workers=_MAX_RELEASE_SERIES_WORKERS) as executor:
+        futures = {
+            executor.submit(_fred_observations, spec, today): series_id
+            for series_id, spec in specs.items()
+        }
+        for future in as_completed(futures):
+            series_id = futures[future]
+            try:
+                history[series_id] = future.result()
+            except Exception:
+                history[series_id] = []
+
+    for row in rows:
+        entries = []
+        for spec in _RELEASE_SERIES.get(row["release_id"], []):
+            entry = _series_entry(
+                spec, history.get(spec["id"], []), row["release_date"]
+            )
+            if entry:
+                entries.append(entry)
+        row["series"] = entries
+
+
 def get_calendar(
     start_date: date, end_date: date, symbols: Optional[List[str]] = None
 ) -> Dict[str, Any]:
     """Return independently degradable earnings and economic calendars."""
 
     selected = _normalise_symbols(symbols)
-    key = f"calendar:{start_date}:{end_date}:{','.join(selected)}"
+    # Released-vs-scheduled is relative to today, so today is part of the key.
+    key = (
+        f"calendar:{datetime.now(_MARKET_TZ).date()}"
+        f":{start_date}:{end_date}:{','.join(selected)}"
+    )
 
     def load() -> Dict[str, Any]:
+        today = datetime.now(_MARKET_TZ).date()
         earnings, nasdaq_status = _load_market_earnings(
             start_date, end_date, selected
         )
@@ -375,7 +585,8 @@ def get_calendar(
                 start_date, end_date, fallback_symbols
             )
             sources["yfinance"] = yahoo_status
-        releases, fred_status = _load_fred_releases(start_date, end_date)
+        releases, fred_status = _load_fred_releases(start_date, end_date, today)
+        _attach_release_series(releases, today)
         sources["fred"] = fred_status
         return {
             "start_date": start_date.isoformat(),

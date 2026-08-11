@@ -29,6 +29,15 @@ export const IconMarket = base(
   </>,
 );
 
+export const IconRadar = base(
+  <>
+    <circle cx="12" cy="12" r="9" />
+    <circle cx="12" cy="12" r="4.5" />
+    <path d="M12 12l6-4" />
+    <circle cx="12" cy="12" r="1" />
+  </>,
+);
+
 export const IconFlow = base(
   <>
     <path d="M4 7h10" />

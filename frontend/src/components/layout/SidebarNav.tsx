@@ -14,6 +14,7 @@ import {
   IconMarket,
   IconMore,
   IconNews,
+  IconRadar,
   IconScreener,
   IconTicker,
   IconTrackRecord,
@@ -34,6 +35,7 @@ const SECTIONS: { heading: string; items: NavItem[] }[] = [
     heading: "Markets",
     items: [
       { href: "/market", label: "Market", icon: IconMarket },
+      { href: "/radar", label: "Radar", icon: IconRadar },
       { href: "/direction", label: "Direction", icon: IconDirection },
       { href: "/leaders", label: "Leaders", icon: IconLeaders },
       { href: "/flow", label: "Flow", icon: IconFlow },

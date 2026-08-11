@@ -1156,3 +1156,211 @@ endpoints degrade exactly as designed (200 with symbols listed unavailable).
 2. Track-record integration: score follow-through-day outcomes like gamma-gap
    signals once real FTDs accrue.
 3. Per-stock CAN SLIM fundamentals (yfinance C/A/ROE/13F) per the plan doc.
+
+### Session 21 - 2026-08-03 (Direction and Leaders methodology audit)
+
+- Audited Direction and Leaders against the O'Neil framework and removed
+  claims the available data could not support. Flat RSI is neutral, truncated
+  trend history is explicitly unconfirmed, durability uses active distribution
+  days, breadth is labeled as current participation, and price/volume demand is
+  described as a proxy rather than identified institutional activity.
+- Tightened Leaders inputs and setup gating. RS now requires 252 sessions and
+  uses tie-aware percentiles, 52-week metrics require full history, breakout
+  date/price/volume come from one trigger session, annual EPS needs at least
+  three positive fiscal years, C/A data must be available, and price below the
+  trigger cannot receive a qualified setup label. Qualified setups also require
+  a measurable proper base and top-20% relative strength. Stops are measured
+  from the assumed current purchase price rather than an older pivot.
+- Added explicit leader ranks and sortable headers for every Leaders result
+  column and every Direction outcome column. Missing values remain last and
+  ties resolve by symbol. The C-A-N-S-L-I-M scorecard stays in semantic order.
+- Updated help and methodology copy to disclose the top-holdings universe,
+  lagged institutional data, trigger-relative entry math, and remaining need
+  for chart review.
+- Hardened the shared daily-bar boundary after live Yahoo data returned NaN
+  OHLC rows that caused the Docker JSON serializer to return 500 on Leaders.
+  Invalid bars and non-finite fundamentals are now excluded, Tradier
+  `history: null` is handled as no data, and expected Tradier-to-Yahoo
+  fallbacks log their actual reason without warning noise.
+- Fixed technical-only Leaders rows remaining stale after an on-demand
+  fundamentals fetch. The full detail now replaces the browser row and the
+  cached backend item, including its score, seven-letter scorecard, readiness,
+  and recalculated rank. Partial scores are labeled `partial`, and compact
+  status dots are now labeled C-A-N-S-L-I-M chips.
+- Leaders now polls the cached scan while fundamental coverage is incomplete,
+  so background-warmed C, A, and I colors appear without clicking rows. Cache
+  invalidation now belongs to the warm-up service itself and therefore applies
+  consistently to startup, scheduled, and admin-triggered warm-ups.
+
+**Verified:** Python compilation; focused synthetic checks for flat RSI,
+unconfirmed seeded trends, 252-session RS requirements, coherent breakout
+fields, and tie-aware percentiles; frontend ESLint, TypeScript, and production
+build; `git diff --check`. Existing tests were not modified.
+The live-source Leaders endpoint also returned 130 rows with zero non-finite
+values after the provider-boundary fix.
+An on-demand hydration check also confirmed a partial `2/4` row and its cached
+scan entry converged on the same full `2/7` scorecard and rank.
+
+## Track Record customer reframe (2026-08-10)
+
+Made the Track Record page usable in week one instead of a wall of "Pending"
+and jargon.
+
+- Metrics: `evaluate_direction_signal_outcome` now returns a live read for
+  not-yet-decided O'Neil calls - `status` (working/at_risk/held/failed),
+  `sessions_remaining`, and `cushion_pct` (percent the latest close sits above
+  its invalidation line). `summarize_direction_outcomes` adds `working`,
+  `at_risk`, `avg_pending_gain_pct`, and `next_confirmation_sessions`. The
+  25-session horizon still defines a confirmed "held", but a pending call is now
+  legible from day one rather than a black box. Added keys only; no field
+  removed or renamed.
+- Gamma-gap `get_gamma_gap_outcomes` now dedups repeated scheduler scans into
+  one logical call per (ticker, magnet, session), keeping `scan_count`, and
+  adds plain `direction` and `gap_pct` so the UI can say "pull up to 455, 0.7%
+  away".
+- Frontend: gamma-gap signal log reworked to a "The call" column, "Pin strength"
+  and "Behavior (pins/drifts)" instead of raw magnet/distance/dealer-zone; O'Neil
+  panel shows adaptive week-one tiles (working, at risk, avg move, first
+  confirmation countdown) when nothing is decided, and a legible Working/At
+  risk/Confirmed badge with live gain per row. Help text and copy rewritten in
+  plain language.
+
+**Verified:** `py_compile` + venv import of the changed backend modules;
+synthetic checks of the new direction metrics (working, at_risk, failed,
+summary); `tests/test_track_record.py` (7 passed); frontend `tsc --noEmit`
+clean. Tests were not modified.
+
+## Post-week audit + four improvements (2026-08-10)
+
+Reviewed the whole surface against the first live week of data (live gamma-gap
+db `data/ai_analysis.db`: 1362 scans / 21 tickers / 5 sessions; app db
+`data/gex_app.db`: 27 direction signals, 524 fundamentals rows, 6510 price
+bars). Findings and the four changes made:
+
+- Gamma Gap Radar page (new): the plan's #1 hero feature had no destination.
+  Added `GET /api/history/gamma-gap/radar` (latest scan per ticker, ranked by
+  score, with direction/gap_pct/stale flag and a one-line plain read) and a
+  `/radar` page + sidebar entry. 21 tickers ranked; top pin AMZN score 86.
+- Score-bucket recalibration: the featured "high-conviction hit rate · Score
+  >= 80" tile was permanently blank - only 1 of 1362 scans reached 80 (p95 is
+  ~44). `SCORE_BUCKETS` changed to [0-20, 20-35, 35+]; the tile/chip now read
+  the top bucket's threshold dynamically ("Score >= 35"). NOTE: this breaks
+  `tests/test_track_record.py::test_summary_hit_rate_excludes_pending`, which
+  hardcodes the old >=80 boundary (now 3 signals in the top bucket, not 2). The
+  test pins the old design; it needs updating but was left untouched per repo
+  rule (no test edits without an explicit ask).
+- Breakout empty-state: 0 of 27 direction signals were stock_breakouts (market
+  gate suppresses new buys outside uptrends - correct behavior). O'Neil panel
+  now explains why breakouts are absent instead of just looking empty.
+- Data freshness badge: new `GET /api/history/coverage` + `DataFreshness`
+  component ("Data through <date> · N sessions · N tickers"), wired into Radar
+  and Track Record so snapshot gaps (e.g. the 07-13 -> 08-03 gap) are visible.
+
+**Verified:** `py_compile` + full `backend.app.main` import; TestClient hits on
+`/api/history/gamma-gap/radar`, `?min_score=35`, and `/api/history/coverage`
+(all 200, correct data) against the live db; frontend `tsc --noEmit`, `eslint`,
+and `next build` (18 routes incl. `/radar`) all clean. One pre-existing test now
+fails by design (see above); no tests were modified.
+
+**Next up:**
+1. Decide on the failing bucket test: update it to the new [0-20, 20-35, 35+]
+   boundaries (needs an explicit go-ahead to edit tests).
+2. Exercise the new Track Record and Radar panels against the live deployment's
+   logged signals (local db has none) to confirm dedup counts and week-one
+   framing.
+3. Exercise Direction and Leaders against live provider data on the self-hosted
+   deployment and inspect representative fundamentals payloads.
+4. Add proper base geometry and a true industry-group universe before treating
+   the Leaders rank as broader than the configured ETF/watchlist screen.
+5. Tune RS and minimum-score thresholds only after enough persisted breakout
+   outcomes accrue.
+
+## Alerts inbox rework (2026-08-10)
+
+**Problem:** the alert event inbox was a flat, non-interactive list. One rule
+firing on a busy snapshot emits a row per matched contract, so the page filled
+with near-identical lines. Rows were buttons only for "mark read", every action
+refetched the whole list, and a permanently expanded rule form pushed the inbox
+below the fold.
+
+**Changes:**
+- Threaded inbox (`frontend/src/components/alerts/AlertInbox.tsx`): events group
+  by ticker + snapshot date, mail-client style. The list shows one line per
+  ticker with a match count, unread dot, contributing rules, and relative time,
+  sectioned under Today / Yesterday / date headers.
+- Master-detail: selecting a thread opens the matched rows in a detail pane with
+  the full `payload.values` grid, per-event mark-read, delivery status, and a
+  link to `/stock/<symbol>`. Single-pane with a Back button below `lg`.
+- Triage controls: text filter (ticker/rule/message), rule dropdown, unread
+  toggle, mark-all. Keyboard: `j`/`k` move, `e` marks the open thread read, `u`
+  toggles unread only, `/` focuses search, `Esc` closes.
+- Optimistic mark-read with rollback on failure, replacing the full refetch.
+- Page split into Inbox / Rules tabs (`AlertRulesPanel.tsx`); the rule editor
+  now opens on demand and rules gained a Pause/Resume quick action. The amber
+  banner and standalone PIN field collapsed into a status chip row and an inline
+  Locked/Unlocked control.
+- Backend: `POST /api/alerts/events/read` with `{ids: [...]}` plus
+  `storage.mark_alert_events_read()` so thread triage is one call. Existing
+  single and read-all endpoints untouched.
+
+**Verified:** frontend `tsc --noEmit`, `eslint` on the changed files, and
+`next build` (17 routes) all clean; `backend.app.main` imports and OpenAPI lists
+`/api/alerts/events/read`; scratch script against a temp sqlite db confirmed the
+bulk update is idempotent (3 unread -> mark 2 -> 1 unread, repeat returns 0). No
+tests were added or modified.
+
+**Next up:** consider server-side thread pagination if the 300-event fetch gets
+heavy, and a per-rule mute/snooze so noisy rules can be quieted without pausing.
+
+## Calendar rework: forward-looking split + real macro readings (2026-08-10)
+
+**Problems:**
+1. The page opened on the past and showed one direction at a time.
+2. The economic-releases panel was near-empty: date and name only, and usually
+   not even that.
+3. Root cause of (2): `_load_fred_releases` fetched each release's dates with
+   `sort_order=desc&limit=20`. FRED schedules releases to the end of the
+   calendar year, so the 20 newest dates were all Nov/Dec 2026 and a window
+   near today matched almost nothing. Weekly claims never appeared at all.
+
+**Changes:**
+- Page defaults to the next 7 days on top with the last 7 days beneath it. One
+  request spans `today ± days`; the page splits on today. The window control is
+  now `±7d / ±14d / ±30d` and the past/upcoming toggle is gone.
+- Release-date fetch limit 20 -> 400, which spans back past a year even for the
+  daily and weekly releases. This alone took a +/-7d window from 6 rows to 8 and
+  restored Unemployment Insurance Weekly Claims.
+- Release 101 (FOMC Press Release) excluded via `_DENSE_RELEASE_IDS`: FRED lists
+  it on every calendar day, so it would emit a row per day and bury the real
+  releases. FOMC meeting dates are not obtainable from FRED.
+- Each release now carries its headline FRED series (`_RELEASE_SERIES`, ~20
+  series across 14 releases) with period, actual, prior, change, change %, and
+  y/y for the inflation series. Values come from `series/observations` with
+  `output_type=4` (each period's first-published value stamped with its
+  publication date), so a past release's `realtime_start` joins exactly to the
+  calendar date and shows the number that release actually printed. Releases
+  with no vintage match - upcoming rows, revision releases like the GDP second
+  estimate, and series with no ALFRED history - fall back to the latest reading
+  and are labelled `matched: false` in the API and in the UI.
+- Frontend: `EconomicReleaseList.tsx` renders each release with its readings;
+  `EarningsTable.tsx` extracted and capped at 150 rendered rows with a show-all
+  toggle, since the page now renders two earnings tables at once (the market-wide
+  Nasdaq feed returns ~2,800 rows for a fortnight).
+
+**No consensus data anywhere.** FRED does not publish expectations, and FMP's
+economic-calendar endpoint (which does carry estimate/actual/previous) returns
+"Restricted Endpoint" on the configured key. So the page compares against the
+prior period, never against a forecast; there is no beat/miss. Colour marks only
+the conventionally-good direction of a move (`favorable` per series) and both
+the page footnote and the context help say so.
+
+**Verified:** `/api/calendar?start=today-7&end=today+7` via TestClient returned
+200 with 8 releases (4 upcoming / 4 past) and 2,779 earnings; all four past
+releases matched a published vintage (claims 199,000 vs 197,000 prior; payrolls
+158,858K; unemployment 4.1% vs 4.2%), all four upcoming fell back to the last
+reading as designed. Frontend `tsc --noEmit`, `eslint`, and `next build` clean.
+No tests were added or modified.
+
+**Next up:** a paid consensus feed is the only way to add true beat/miss; until
+then consider mapping the remaining releases (existing home sales has no ALFRED
+vintages) and surfacing FOMC dates from a non-FRED source.

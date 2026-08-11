@@ -242,11 +242,29 @@ class EarningsEvent(BaseModel):
     url: str
 
 
+class EconomicReleaseSeries(BaseModel):
+    series_id: str
+    label: str
+    units: str
+    period: Optional[str] = None
+    actual: Optional[float] = None
+    prior: Optional[float] = None
+    change: Optional[float] = None
+    change_pct: Optional[float] = None
+    change_yoy_pct: Optional[float] = None
+    # True when the value is the one this release published; False when FRED has
+    # no vintage for that date and the row falls back to the latest reading.
+    matched: bool = False
+    favorable: Optional[Literal["up", "down"]] = None
+
+
 class EconomicRelease(BaseModel):
     release_id: int
     release_name: str
     release_date: str
     url: str
+    status: Literal["released", "scheduled"] = "released"
+    series: List[EconomicReleaseSeries] = Field(default_factory=list)
 
 
 class CalendarResponse(BaseModel):
@@ -333,6 +351,10 @@ class AlertEvent(BaseModel):
 class AlertEventsResponse(BaseModel):
     unread: int
     items: List[AlertEvent]
+
+
+class AlertEventReadRequest(BaseModel):
+    ids: List[int] = Field(min_length=1, max_length=500)
 
 
 class NewsItem(BaseModel):

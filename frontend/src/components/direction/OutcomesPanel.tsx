@@ -165,34 +165,81 @@ export default function OutcomesPanel() {
 
       {data && summary && summary.signals > 0 && (
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <div className="rounded-md border border-border bg-surface-2 p-3">
-              <div className="text-[11px] uppercase tracking-wide text-muted">Hold rate</div>
-              <div className="font-mono text-lg">{pct(summary.hold_rate)}</div>
-              <div className="text-[11px] text-muted">
-                {summary.held} of {summary.decided} decided
+          <p className="max-w-3xl text-sm text-muted">
+            These are the app&apos;s market-direction calls: a{" "}
+            <span className="text-foreground">market-turn</span> call says a
+            downtrend has flipped up, and a{" "}
+            <span className="text-foreground">breakout</span> call says a stock
+            cleared its base. Each is graded against the price that would prove
+            it wrong. A call needs {data.horizon_sessions} sessions (about{" "}
+            {Math.round(data.horizon_sessions / 5)} weeks) to be{" "}
+            <span className="text-positive">confirmed</span>; until then it shows
+            live as working or at risk.
+          </p>
+
+          {summary.decided === 0 ? (
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <div className="rounded-md border border-border bg-surface-2 p-3">
+                <div className="text-[11px] uppercase tracking-wide text-muted">Working</div>
+                <div className="font-mono text-lg text-positive">{summary.working ?? 0}</div>
+                <div className="text-[11px] text-muted">still above their line</div>
+              </div>
+              <div className="rounded-md border border-border bg-surface-2 p-3">
+                <div className="text-[11px] uppercase tracking-wide text-muted">At risk</div>
+                <div className="font-mono text-lg">{summary.at_risk ?? 0}</div>
+                <div className="text-[11px] text-muted">cushion under 2%</div>
+              </div>
+              <div className="rounded-md border border-border bg-surface-2 p-3">
+                <div className="text-[11px] uppercase tracking-wide text-muted">
+                  Avg move so far
+                </div>
+                <div className="font-mono text-lg">{signed(summary.avg_pending_gain_pct)}</div>
+                <div className="text-[11px] text-muted">vs entry, latest close</div>
+              </div>
+              <div className="rounded-md border border-border bg-surface-2 p-3">
+                <div className="text-[11px] uppercase tracking-wide text-muted">
+                  First confirmation
+                </div>
+                <div className="font-mono text-lg">
+                  {summary.next_confirmation_sessions != null
+                    ? `${summary.next_confirmation_sessions}s`
+                    : "—"}
+                </div>
+                <div className="text-[11px] text-muted">sessions away</div>
               </div>
             </div>
-            <div className="rounded-md border border-border bg-surface-2 p-3">
-              <div className="text-[11px] uppercase tracking-wide text-muted">
-                Avg max drawdown
+          ) : (
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <div className="rounded-md border border-border bg-surface-2 p-3">
+                <div className="text-[11px] uppercase tracking-wide text-muted">Hold rate</div>
+                <div className="font-mono text-lg">{pct(summary.hold_rate)}</div>
+                <div className="text-[11px] text-muted">
+                  {summary.held} of {summary.decided} confirmed
+                </div>
               </div>
-              <div className="font-mono text-lg">{signed(summary.avg_max_drawdown_pct)}</div>
-              <div className="text-[11px] text-muted">worst dip after entry</div>
-            </div>
-            <div className="rounded-md border border-border bg-surface-2 p-3">
-              <div className="text-[11px] uppercase tracking-wide text-muted">Avg max gain</div>
-              <div className="font-mono text-lg">{signed(summary.avg_max_gain_pct)}</div>
-              <div className="text-[11px] text-muted">best move after entry</div>
-            </div>
-            <div className="rounded-md border border-border bg-surface-2 p-3">
-              <div className="text-[11px] uppercase tracking-wide text-muted">
-                {data.stop_pct}% stop fired
+              <div className="rounded-md border border-border bg-surface-2 p-3">
+                <div className="text-[11px] uppercase tracking-wide text-muted">
+                  Avg max drawdown
+                </div>
+                <div className="font-mono text-lg">{signed(summary.avg_max_drawdown_pct)}</div>
+                <div className="text-[11px] text-muted">worst dip after entry</div>
               </div>
-              <div className="font-mono text-lg">{pct(summary.stop_hit_rate)}</div>
-              <div className="text-[11px] text-muted">{summary.pending} pending</div>
+              <div className="rounded-md border border-border bg-surface-2 p-3">
+                <div className="text-[11px] uppercase tracking-wide text-muted">Avg max gain</div>
+                <div className="font-mono text-lg">{signed(summary.avg_max_gain_pct)}</div>
+                <div className="text-[11px] text-muted">best move after entry</div>
+              </div>
+              <div className="rounded-md border border-border bg-surface-2 p-3">
+                <div className="text-[11px] uppercase tracking-wide text-muted">
+                  {data.stop_pct}% stop fired
+                </div>
+                <div className="font-mono text-lg">{pct(summary.stop_hit_rate)}</div>
+                <div className="text-[11px] text-muted">
+                  {summary.working ?? summary.pending} still working
+                </div>
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="overflow-x-auto">
             <table className="w-full min-w-[720px] text-left text-xs">
@@ -223,7 +270,7 @@ export default function OutcomesPanel() {
                     sortKey="invalidation"
                     active={sortKey}
                     ascending={sortAscending}
-                    label="Invalidation"
+                    label="Fails below"
                     onSort={toggleSort}
                   />
                   <SortHeader
@@ -263,7 +310,7 @@ export default function OutcomesPanel() {
                       <span className="font-mono font-semibold">{row.symbol}</span>{" "}
                       <span className="text-muted">
                         {row.signal_type === "follow_through_day"
-                          ? "follow-through"
+                          ? "market turned up"
                           : "breakout"}
                       </span>
                     </td>
@@ -277,15 +324,25 @@ export default function OutcomesPanel() {
                             ? "border-positive/40 bg-positive/10 text-positive"
                             : row.outcome === "failed"
                               ? "border-negative/40 bg-negative/10 text-negative"
-                              : "border-border bg-surface-2 text-muted"
+                              : row.status === "at_risk"
+                                ? "border-warning/40 bg-warning/10 text-warning"
+                                : "border-border bg-surface-2 text-muted"
                         }`}
                       >
                         {row.outcome === "held"
-                          ? "Held"
+                          ? "Confirmed"
                           : row.outcome === "failed"
                             ? `Failed (${row.sessions_to_fail}s)`
-                            : `Pending (${row.evaluated_sessions}s in)`}
+                            : row.status === "at_risk"
+                              ? "At risk"
+                              : "Working"}
                       </span>
+                      {row.outcome === "pending" && (
+                        <div className="mt-0.5 text-[10px] text-muted">
+                          {signed(row.latest_gain_pct)} · {row.evaluated_sessions}/
+                          {data.horizon_sessions}s
+                        </div>
+                      )}
                     </td>
                     <td className="py-2 pr-2 font-mono text-positive">
                       {signed(row.max_gain_pct)}
@@ -302,13 +359,26 @@ export default function OutcomesPanel() {
             </table>
           </div>
 
+          {!sortedRows.some((r) => r.signal_type === "stock_breakout") && (
+            <p className="rounded-md border border-border bg-surface-2 px-3 py-2 text-[11px] text-muted">
+              No stock breakouts here yet. O&apos;Neil made no new buys during
+              corrections, so breakout calls are only logged when the market is
+              in a confirmed uptrend. The calls above are index market-turn
+              signals; breakouts will appear as uptrends produce them.
+            </p>
+          )}
+
           <p className="text-[11px] text-muted">
-            A follow-through fails when the index closes back below its
-            rally-attempt low; a breakout fails when the stock closes below its
-            stop. The signal day never counts and signals without a full
-            horizon stay pending, excluded from the rates. O&apos;Neil expected
-            a share of follow-throughs to fail - that cost is the price of
-            being early enough to catch the real move.
+            <span className="text-foreground">Working</span> means the call is
+            still above its &quot;fails below&quot; price;{" "}
+            <span className="text-warning">at risk</span> means its cushion is
+            under 2%; <span className="text-positive">confirmed</span> means it
+            survived the full {data.horizon_sessions}-session window;{" "}
+            <span className="text-negative">failed</span> means it closed below
+            that price first. The day a call fires never counts, and unresolved
+            calls stay out of the hold rate. Some market-turn calls are expected
+            to fail - that is the cost of being early enough to catch the real
+            move.
           </p>
         </div>
       )}

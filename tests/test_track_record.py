@@ -79,9 +79,9 @@ def test_summary_hit_rate_excludes_pending():
     assert summary["hit_rate"] == pytest.approx(2 / 3)
     assert summary["avg_sessions_to_hit"] == pytest.approx(3.0)
 
-    top_bucket = summary["by_score"][2]
-    assert top_bucket["signals"] == 2  # score 90 hit + score 100 pending
-    assert top_bucket["decided"] == 1
+    top_bucket = summary["by_score"][2]  # score >= 35
+    assert top_bucket["signals"] == 3  # score 90 hit + 55 hit + 100 pending
+    assert top_bucket["decided"] == 2
     assert top_bucket["hit_rate"] == pytest.approx(1.0)
 
 

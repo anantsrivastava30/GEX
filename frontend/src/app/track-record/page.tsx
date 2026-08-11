@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, GammaGapOutcomeRow, GammaGapOutcomesResponse } from "@/lib/api";
 import Panel from "@/components/ui/Panel";
 import StatTile from "@/components/ui/StatTile";
+import DataFreshness from "@/components/ui/DataFreshness";
 import OutcomesPanel from "@/components/direction/OutcomesPanel";
 
 // The public differentiator: every gamma-gap scan is logged, then scored
@@ -98,23 +99,29 @@ export default function TrackRecordPage() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-lg font-semibold">Track Record</h1>
-        <p className="mt-1 text-sm text-muted">
-          Logged signals scored against what actually happened - gamma-gap
-          magnets below, O&apos;Neil follow-throughs and breakouts at the
-          bottom of the page.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-lg font-semibold">Track Record</h1>
+          <p className="mt-1 max-w-3xl text-sm text-muted">
+            Every call this app makes is written down when it fires, then graded
+            against what the market actually did - no cherry-picking. Gamma-gap
+            price magnets are below; O&apos;Neil market-turn and breakout calls
+            are at the bottom.
+          </p>
+        </div>
+        <DataFreshness />
       </div>
 
       <div>
         <h2 className="text-base font-semibold">Gamma Gap</h2>
         <p className="mt-1 max-w-3xl text-sm text-muted">
-          Every scheduler scan is logged, then scored against realized daily
-          ranges: a hit means the magnet strike traded within{" "}
-          {data?.horizon_sessions ?? 5} sessions after the signal date. The
-          signal day itself never counts, and signals without a full horizon
-          stay pending and are excluded from the hit rate.
+          A gamma-gap call predicts that a stock gets pulled toward a nearby
+          options &quot;magnet&quot; price. It counts as a{" "}
+          <span className="text-positive">hit</span> if the stock trades at that
+          magnet within {data?.horizon_sessions ?? 5} trading days of the call.
+          The day the call fires never counts, and a call still inside its
+          window stays <span className="text-muted">pending</span> - shown here
+          but left out of the hit rate until it resolves.
         </p>
       </div>
 
@@ -184,7 +191,7 @@ export default function TrackRecordPage() {
           }
         />
         <StatTile
-          label="High-score hit rate"
+          label="High-conviction hit rate"
           value={
             summary?.by_score?.[2]?.hit_rate != null
               ? `${(summary.by_score[2].hit_rate * 100).toFixed(0)}%`
@@ -192,20 +199,33 @@ export default function TrackRecordPage() {
           }
           sub={
             summary?.by_score?.[2]
-              ? `Score ≥ 80 · ${summary.by_score[2].decided} decided`
-              : "Score ≥ 80"
+              ? `Score ≥ ${summary.by_score[2].score_min.toFixed(0)} · ${summary.by_score[2].decided} decided`
+              : "Top score bucket"
           }
         />
       </div>
 
+      {summary && summary.decided === 0 && summary.pending > 0 && (
+        <p className="rounded-md border border-border bg-surface px-4 py-3 text-sm text-muted">
+          Tracking {summary.pending} call{summary.pending === 1 ? "" : "s"}. None
+          have finished their {data?.horizon_sessions ?? 5}-session window yet, so
+          there is no hit rate to show. Calls resolve as the sessions complete -
+          check back over the next week.
+        </p>
+      )}
+
       {summary && summary.decided > 0 && (
         <div className="flex flex-wrap gap-2 text-xs">
-          {summary.by_score.map((bucket) => (
+          {summary.by_score.map((bucket, index) => (
             <span
               key={bucket.score_min}
               className="rounded border border-border bg-surface px-2 py-1 font-mono text-muted"
             >
-              Score {bucket.score_min.toFixed(0)}–{bucket.score_max.toFixed(0)}:{" "}
+              Score{" "}
+              {index === summary.by_score.length - 1
+                ? `≥ ${bucket.score_min.toFixed(0)}`
+                : `${bucket.score_min.toFixed(0)}–${bucket.score_max.toFixed(0)}`}
+              :{" "}
               {bucket.hit_rate != null
                 ? `${(bucket.hit_rate * 100).toFixed(0)}% (${bucket.hits}/${bucket.decided})`
                 : "no decided signals"}
@@ -246,13 +266,12 @@ export default function TrackRecordPage() {
             <table className="w-full min-w-[820px] text-sm">
               <thead className="sticky top-0 bg-surface-2 text-left text-xs text-muted">
                 <tr>
-                  <th className="px-4 py-2 font-medium">Time</th>
+                  <th className="px-4 py-2 font-medium">Date</th>
                   <th className="px-4 py-2 font-medium">Ticker</th>
-                  <th className="px-4 py-2 text-right font-medium">Spot</th>
-                  <th className="px-4 py-2 text-right font-medium">Magnet</th>
-                  <th className="px-4 py-2 text-right font-medium">Distance</th>
-                  <th className="px-4 py-2 text-right font-medium">Score</th>
-                  <th className="px-4 py-2 text-right font-medium">Dealer zone</th>
+                  <th className="px-4 py-2 font-medium">The call</th>
+                  <th className="px-4 py-2 text-right font-medium">Price then</th>
+                  <th className="px-4 py-2 text-right font-medium">Pin strength</th>
+                  <th className="px-4 py-2 font-medium">Behavior</th>
                   <th className="px-4 py-2 text-right font-medium">Outcome</th>
                 </tr>
               </thead>
@@ -266,25 +285,38 @@ export default function TrackRecordPage() {
                       {formatTimestamp(row.ts)}
                     </td>
                     <td className="px-4 py-2 font-mono text-foreground">{row.ticker}</td>
+                    <td className="px-4 py-2">
+                      <div className="text-foreground">
+                        {row.direction === "down" ? "Pull down to" : "Pull up to"}{" "}
+                        <span className="font-mono">{formatNumber(row.magnet_strike, 1)}</span>
+                      </div>
+                      <div className="text-xs text-muted">
+                        {row.gap_pct != null
+                          ? `${Math.abs(row.gap_pct).toFixed(1)}% away`
+                          : "—"}
+                        {row.scan_count && row.scan_count > 1
+                          ? ` · seen in ${row.scan_count} scans`
+                          : ""}
+                      </div>
+                    </td>
                     <td className="px-4 py-2 text-right font-mono">
                       {formatNumber(row.spot, 2)}
                     </td>
                     <td className="px-4 py-2 text-right font-mono">
-                      {formatNumber(row.magnet_strike, 1)}
-                    </td>
-                    <td className="px-4 py-2 text-right font-mono">
-                      {formatNumber(row.distance, 2)}
-                    </td>
-                    <td className="px-4 py-2 text-right font-mono">
                       {formatNumber(row.score, 0)}
                     </td>
-                    <td className="px-4 py-2 text-right text-xs">
+                    <td className="px-4 py-2 text-xs">
                       <span
                         className={
                           row.positive_zone === 1 ? "text-positive" : "text-negative"
                         }
+                        title={
+                          row.positive_zone === 1
+                            ? "Long gamma: dealers dampen moves, so price tends to get pinned toward the magnet."
+                            : "Short gamma: dealers amplify moves, so the pull is weaker and price can run."
+                        }
                       >
-                        {row.positive_zone === 1 ? "Long gamma" : "Short gamma"}
+                        {row.positive_zone === 1 ? "Pins (long gamma)" : "Drifts (short gamma)"}
                       </span>
                     </td>
                     <td className="whitespace-nowrap px-4 py-2 text-right">

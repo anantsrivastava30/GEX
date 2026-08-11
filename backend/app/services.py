@@ -679,30 +679,171 @@ def get_gamma_gap_outcomes(
     with zero evaluated sessions rather than being dropped or guessed.
     """
 
-    signals = get_gamma_gap_history(ticker, limit)
-    candles_by_ticker: Dict[str, List[Dict[str, Any]]] = {}
-    rows: List[Dict[str, Any]] = []
+    # Pull extra history because we collapse repeated scans of one setup into
+    # a single logged call below; the raw table holds many scans per call.
+    signals = get_gamma_gap_history(ticker, max(limit * 8, limit))
 
+    # Dedup to distinct calls: one (ticker, magnet, session) is a single
+    # prediction, not one per scheduler scan. Keep the newest scan's numbers
+    # (history is newest-first) and remember how many scans backed it.
+    distinct: Dict[tuple, Dict[str, Any]] = {}
     for signal in signals:
         symbol = str(signal.get("ticker", "")).upper()
         magnet = signal.get("magnet_strike")
         ts = str(signal.get("ts", ""))
         if not symbol or magnet is None or not ts:
             continue
+        key = (symbol, round(float(magnet), 4), ts[:10])
+        existing = distinct.get(key)
+        if existing is None:
+            distinct[key] = {**signal, "scan_count": 1}
+        else:
+            existing["scan_count"] += 1
+    ordered = sorted(
+        distinct.values(), key=lambda s: str(s.get("ts", "")), reverse=True
+    )[:limit]
+
+    candles_by_ticker: Dict[str, List[Dict[str, Any]]] = {}
+    rows: List[Dict[str, Any]] = []
+
+    for signal in ordered:
+        symbol = str(signal.get("ticker", "")).upper()
+        magnet = float(signal["magnet_strike"])
+        ts = str(signal.get("ts", ""))
         if symbol not in candles_by_ticker:
             try:
                 candles_by_ticker[symbol] = get_candles(symbol, 365)
             except HTTPException:
                 candles_by_ticker[symbol] = []
         result = evaluate_gamma_gap_outcome(
-            ts[:10], float(magnet), candles_by_ticker[symbol], horizon
+            ts[:10], magnet, candles_by_ticker[symbol], horizon
         )
-        rows.append({**signal, **result})
+        # Plain-language direction of the call: is the magnet above or below
+        # spot, and how far, as a percentage a customer can read at a glance.
+        spot = signal.get("spot")
+        direction = None
+        gap_pct = None
+        if spot not in (None, 0):
+            direction = "up" if magnet >= float(spot) else "down"
+            gap_pct = round((magnet / float(spot) - 1.0) * 100.0, 2)
+        rows.append({**signal, **result, "direction": direction, "gap_pct": gap_pct})
 
     return {
         "horizon_sessions": horizon,
         "summary": summarize_outcomes(rows),
         "rows": rows,
+    }
+
+
+def _gamma_gap_read(
+    direction: Optional[str],
+    magnet: float,
+    gap_pct: Optional[float],
+    positive_zone: Optional[int],
+) -> str:
+    """One-sentence plain-English read for a radar row."""
+
+    where = (
+        f"toward {magnet:.1f}"
+        if gap_pct is None
+        else f"{'up' if direction == 'up' else 'down'} to {magnet:.1f} "
+        f"({abs(gap_pct):.1f}% {'above' if direction == 'up' else 'below'} spot)"
+    )
+    if positive_zone == 1:
+        posture = "dealers are long gamma here, so a pin to the magnet is more likely"
+    else:
+        posture = "dealers are short gamma here, so the pull is weaker and price can run"
+    return f"Pull {where}; {posture}."
+
+
+def get_gamma_gap_radar(min_score: float = 0.0) -> Dict[str, Any]:
+    """Latest gamma-gap read per ticker, ranked by score - the pin radar.
+
+    Collapses the raw scan log to one row per ticker (its most recent scan),
+    ranks by gap-fill score, and attaches a plain-English read and the
+    direction of the expected move. Rows whose latest scan predates the newest
+    session are flagged stale rather than dropped.
+    """
+
+    history = get_gamma_gap_history(None, 3000)
+    latest_by_ticker: Dict[str, Dict[str, Any]] = {}
+    sessions: set = set()
+    for signal in history:  # newest-first
+        ticker = str(signal.get("ticker", "")).upper()
+        ts = str(signal.get("ts", ""))
+        if ts:
+            sessions.add(ts[:10])
+        if not ticker or ticker in latest_by_ticker:
+            continue
+        latest_by_ticker[ticker] = signal
+
+    as_of = max(sessions) if sessions else None
+    rows: List[Dict[str, Any]] = []
+    for ticker, signal in latest_by_ticker.items():
+        magnet = signal.get("magnet_strike")
+        spot = signal.get("spot")
+        score = signal.get("score")
+        ts = str(signal.get("ts", ""))
+        if magnet is None:
+            continue
+        if score is not None and float(score) < min_score:
+            continue
+        direction = None
+        gap_pct = None
+        if spot not in (None, 0):
+            direction = "up" if float(magnet) >= float(spot) else "down"
+            gap_pct = round((float(magnet) / float(spot) - 1.0) * 100.0, 2)
+        rows.append(
+            {
+                **signal,
+                "direction": direction,
+                "gap_pct": gap_pct,
+                "stale": bool(as_of and ts[:10] < as_of),
+                "read": _gamma_gap_read(direction, float(magnet), gap_pct, signal.get("positive_zone")),
+            }
+        )
+
+    rows.sort(
+        key=lambda r: (r.get("score") is not None, r.get("score") or 0.0),
+        reverse=True,
+    )
+    return {
+        "as_of": as_of,
+        "sessions": len(sessions),
+        "tickers": len(rows),
+        "rows": rows,
+    }
+
+
+def get_data_coverage() -> Dict[str, Any]:
+    """Freshness summary sourced from logged gamma-gap scans.
+
+    Answers "how current is this?" - the latest session we have data for, how
+    many distinct sessions are logged, and how many tickers the newest session
+    covered - so history-dependent pages can show an honest freshness badge.
+    """
+
+    history = get_gamma_gap_history(None, 3000)
+    sessions: set = set()
+    latest_tickers: set = set()
+    as_of = None
+    for signal in history:
+        ts = str(signal.get("ts", ""))
+        if not ts:
+            continue
+        day = ts[:10]
+        sessions.add(day)
+        as_of = max(as_of, day) if as_of else day
+    if as_of:
+        latest_tickers = {
+            str(s.get("ticker", "")).upper()
+            for s in history
+            if str(s.get("ts", ""))[:10] == as_of and s.get("ticker")
+        }
+    return {
+        "as_of": as_of,
+        "sessions": len(sessions),
+        "latest_ticker_count": len(latest_tickers),
     }
 
 

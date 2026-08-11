@@ -40,6 +40,22 @@ def gamma_gap_outcomes(
     return services.get_gamma_gap_outcomes(ticker, horizon, limit)
 
 
+@router.get("/gamma-gap/radar", response_model=Dict[str, Any])
+def gamma_gap_radar(
+    min_score: float = Query(0.0, ge=0.0, le=120.0),
+):
+    """Latest gamma-gap read per ticker, ranked by score - the pin radar."""
+
+    return services.get_gamma_gap_radar(min_score)
+
+
+@router.get("/coverage", response_model=Dict[str, Any])
+def data_coverage():
+    """Freshness summary: latest logged session, session count, ticker count."""
+
+    return services.get_data_coverage()
+
+
 @router.get("/{symbol}/iv-rank", response_model=IVRankResponse)
 def iv_rank(symbol: str):
     return services.get_iv_rank(symbol.upper())

@@ -28,8 +28,12 @@ OUTCOME_PENDING = "pending"
 
 DEFAULT_HORIZON_SESSIONS = 5
 
-# Score buckets for the hit-rate breakdown (0-120 scale).
-SCORE_BUCKETS = [(0.0, 40.0), (40.0, 80.0), (80.0, 120.0 + 1e-9)]
+# Score buckets for the hit-rate breakdown. The gamma-gap score runs a 0-120
+# scale in theory, but in practice almost everything lands under 45 (a week of
+# live scans: median ~18, p95 ~44, one scan in 1362 above 80). Buckets are set
+# to the real distribution so the top "high conviction" bucket actually holds
+# calls instead of reading blank.
+SCORE_BUCKETS = [(0.0, 20.0), (20.0, 35.0), (35.0, 120.0 + 1e-9)]
 
 
 def evaluate_gamma_gap_outcome(
@@ -155,6 +159,7 @@ def evaluate_direction_signal_outcome(
     max_gain = None
     max_drawdown = None
     latest_gain = None
+    latest_close = None
     stop_hit = False
     failed_at = None
     stop_level = entry_price * (1.0 - stop_pct / 100.0)
@@ -171,22 +176,44 @@ def evaluate_direction_signal_outcome(
         max_gain = gain if max_gain is None else max(max_gain, gain)
         max_drawdown = drawdown if max_drawdown is None else min(max_drawdown, drawdown)
         latest_gain = (close / entry_price - 1.0) * 100.0
+        latest_close = close
         if low <= stop_level:
             stop_hit = True
         if failed_at is None and close < invalidation_level:
             failed_at = index
 
     evaluated = len(window)
+    sessions_remaining = max(horizon_sessions - evaluated, 0)
+    # Cushion: how far the latest close sits above the line that would kill
+    # the signal. Positive means still alive; the smaller it is, the closer
+    # the signal is to failing.
+    cushion_pct = (
+        round((latest_close / invalidation_level - 1.0) * 100.0, 2)
+        if latest_close is not None and invalidation_level
+        else None
+    )
     if failed_at is not None:
         outcome = DIRECTION_OUTCOME_FAILED
+        status = DIRECTION_OUTCOME_FAILED
     elif evaluated >= horizon_sessions:
         outcome = DIRECTION_OUTCOME_HELD
+        status = DIRECTION_OUTCOME_HELD
     else:
         outcome = OUTCOME_PENDING
+        # A pending signal is still above its line by construction. Flag the
+        # ones sitting on a thin cushion so "working" does not oversell them.
+        status = (
+            "at_risk"
+            if cushion_pct is not None and cushion_pct < 2.0
+            else "working"
+        )
     return {
         "outcome": outcome,
+        "status": status,
         "sessions_to_fail": failed_at,
         "evaluated_sessions": evaluated,
+        "sessions_remaining": sessions_remaining,
+        "cushion_pct": cushion_pct,
         "max_gain_pct": round(max_gain, 2) if max_gain is not None else None,
         "max_drawdown_pct": round(max_drawdown, 2) if max_drawdown is not None else None,
         "latest_gain_pct": round(latest_gain, 2) if latest_gain is not None else None,
@@ -215,14 +242,33 @@ def summarize_direction_outcomes(rows: Sequence[Dict[str, Any]]) -> Dict[str, An
     ]
     stops = [r for r in decided if r.get("stop_hit") is not None]
     stop_hits = sum(1 for r in stops if r["stop_hit"])
+
+    # Live read for the pending pile, so week 1 says something useful before
+    # any signal has reached its horizon: how many are still working, how they
+    # are doing so far, and how soon the first one grades out.
+    at_risk = [r for r in pending if r.get("status") == "at_risk"]
+    pending_gains = [
+        float(r["latest_gain_pct"])
+        for r in pending
+        if r.get("latest_gain_pct") is not None
+    ]
+    remaining = [
+        int(r["sessions_remaining"])
+        for r in pending
+        if r.get("sessions_remaining") is not None
+    ]
     return {
         "signals": len(rows),
         "decided": len(decided),
         "held": len(held),
         "failed": len(failed),
         "pending": len(pending),
+        "working": len(pending) - len(at_risk),
+        "at_risk": len(at_risk),
         "hold_rate": round(len(held) / len(decided), 3) if decided else None,
         "avg_max_drawdown_pct": _avg(drawdowns),
         "avg_max_gain_pct": _avg(gains),
+        "avg_pending_gain_pct": _avg(pending_gains),
+        "next_confirmation_sessions": min(remaining) if remaining else None,
         "stop_hit_rate": round(stop_hits / len(stops), 3) if stops else None,
     }

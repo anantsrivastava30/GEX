@@ -7,7 +7,7 @@ import json
 import logging
 import smtplib
 from email.message import EmailMessage
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Sequence
 from urllib.parse import urlparse
 
 import requests
@@ -281,6 +281,10 @@ def list_alert_events(unread_only: bool, limit: int) -> Dict[str, Any]:
 def mark_event_read(event_id: int) -> None:
     if not storage.mark_alert_event_read(event_id):
         raise KeyError(event_id)
+
+
+def mark_events_read(event_ids: Sequence[int]) -> int:
+    return storage.mark_alert_events_read(event_ids)
 
 
 def mark_all_events_read() -> int:

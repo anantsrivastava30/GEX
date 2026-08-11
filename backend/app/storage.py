@@ -7,7 +7,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Sequence
 
 from backend.app.config import get_settings
 
@@ -399,6 +399,20 @@ def mark_alert_event_read(event_id: int) -> bool:
             (_now(), event_id),
         )
     return bool(cursor.rowcount)
+
+
+def mark_alert_events_read(event_ids: Sequence[int]) -> int:
+    ids = [int(value) for value in event_ids]
+    if not ids:
+        return 0
+    placeholders = ",".join("?" * len(ids))
+    with connection() as conn:
+        cursor = conn.execute(
+            "UPDATE alert_events SET read_at = ? "
+            f"WHERE read_at IS NULL AND id IN ({placeholders})",
+            (_now(), *ids),
+        )
+    return int(cursor.rowcount)
 
 
 def mark_all_alert_events_read() -> int:

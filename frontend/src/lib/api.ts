@@ -157,6 +157,9 @@ export interface GammaGapOutcomeRow extends GammaGapHistoryRow {
   outcome: GammaGapOutcome;
   sessions_to_hit?: number | null;
   evaluated_sessions: number;
+  direction?: "up" | "down" | null;
+  gap_pct?: number | null;
+  scan_count?: number;
 }
 
 export interface GammaGapScoreBucket {
@@ -183,6 +186,26 @@ export interface GammaGapOutcomesResponse {
   horizon_sessions: number;
   summary: GammaGapOutcomeSummary;
   rows: GammaGapOutcomeRow[];
+}
+
+export interface GammaGapRadarRow extends GammaGapHistoryRow {
+  direction?: "up" | "down" | null;
+  gap_pct?: number | null;
+  stale: boolean;
+  read: string;
+}
+
+export interface GammaGapRadarResponse {
+  as_of: string | null;
+  sessions: number;
+  tickers: number;
+  rows: GammaGapRadarRow[];
+}
+
+export interface DataCoverage {
+  as_of: string | null;
+  sessions: number;
+  latest_ticker_count: number;
 }
 
 export type ScreenerPreset = "high_vol_oi" | "unusually_bullish" | "gamma_squeeze";
@@ -276,11 +299,28 @@ export interface EarningsEvent {
   url: string;
 }
 
+export interface EconomicReleaseSeries {
+  series_id: string;
+  label: string;
+  units: string;
+  period?: string | null;
+  actual?: number | null;
+  prior?: number | null;
+  change?: number | null;
+  change_pct?: number | null;
+  change_yoy_pct?: number | null;
+  /** True when this is the reading the release published, false for a fallback. */
+  matched: boolean;
+  favorable?: "up" | "down" | null;
+}
+
 export interface EconomicRelease {
   release_id: number;
   release_name: string;
   release_date: string;
   url: string;
+  status: "released" | "scheduled";
+  series: EconomicReleaseSeries[];
 }
 
 export interface CalendarResponse {
@@ -843,8 +883,11 @@ export interface DirectionOutcomeRow {
   entry_price: number;
   invalidation_level: number;
   outcome: "held" | "failed" | "pending";
+  status?: "working" | "at_risk" | "held" | "failed";
   sessions_to_fail?: number | null;
   evaluated_sessions: number;
+  sessions_remaining?: number | null;
+  cushion_pct?: number | null;
   max_gain_pct?: number | null;
   max_drawdown_pct?: number | null;
   latest_gain_pct?: number | null;
@@ -857,9 +900,13 @@ export interface DirectionOutcomeSummary {
   held: number;
   failed: number;
   pending: number;
+  working?: number;
+  at_risk?: number;
   hold_rate?: number | null;
   avg_max_drawdown_pct?: number | null;
   avg_max_gain_pct?: number | null;
+  avg_pending_gain_pct?: number | null;
+  next_confirmation_sessions?: number | null;
   stop_hit_rate?: number | null;
 }
 
@@ -1075,6 +1122,13 @@ export const api = {
       `/api/alerts/events${qs({ unread_only: String(unreadOnly), limit })}`,
       signal,
     ),
+  markAlertsRead: (ids: number[], pin: string) =>
+    postJSON<{ updated: number }>(
+      "/api/alerts/events/read",
+      { ids },
+      undefined,
+      workspaceHeaders(pin),
+    ),
   markAlertRead: (id: number, pin: string) =>
     postJSON<{ status: string }>(
       `/api/alerts/events/${id}/read`,
@@ -1173,6 +1227,15 @@ export const api = {
       )}`,
       signal,
     ),
+
+  gammaGapRadar: (minScore = 0, signal?: AbortSignal) =>
+    getJSON<GammaGapRadarResponse>(
+      `/api/history/gamma-gap/radar${qs(minScore ? { min_score: minScore } : {})}`,
+      signal,
+    ),
+
+  dataCoverage: (signal?: AbortSignal) =>
+    getJSON<DataCoverage>(`/api/history/coverage`, signal),
 
   exposure: (
     symbol: string,

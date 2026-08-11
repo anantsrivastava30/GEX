@@ -105,6 +105,8 @@ const HELP: Record<string, HelpContent> = {
       "Create a watchlist, then attach contract- or ticker-level conditions to it.",
       "Rules evaluate scheduled snapshots, not live ticks. Stale or incomplete snapshots are skipped.",
       "In-app events are retained; Discord and email require server configuration.",
+      "The inbox threads events by ticker and snapshot date. Open a thread to see every matched row and its values.",
+      "Keyboard: j and k move between threads, e marks the open thread read, u toggles unread only, / focuses search.",
       "Use the workspace PIN to change rules or mark inbox events as read.",
     ] }],
   },
@@ -116,19 +118,29 @@ const HELP: Record<string, HelpContent> = {
       "Confirm market-moving claims with primary reporting before using them in a decision.",
     ] }],
   },
+  radar: {
+    label: "Gamma Gap Radar",
+    sections: [{ bullets: [
+      "Each row is the latest read on one ticker: the options magnet price dealer hedging tends to pull it toward, ranked by gap-fill score (highest conviction first).",
+      "'Pins (long gamma)' means dealers dampen moves so the magnet tends to hold; 'drifts (short gamma)' means the pull is weaker and price can run. Pin strength is the model score, not a probability.",
+      "A 'stale' tag means that ticker's newest scan predates the latest session, so treat its read as older than the rest.",
+      "Every call shown here is logged and later graded on the Track Record page. This is research tooling, not investment advice.",
+    ] }],
+  },
   "track-record": {
     label: "Track Record",
     sections: [
       { heading: "Gamma gap", bullets: [
-        "A Hit means the magnet traded within the next five sessions; the signal day never counts.",
-        "Pending signals are excluded from hit rate until their full evaluation window closes.",
-        "Compare score buckets and use the ticker filter to test whether performance is concentrated.",
-        "Repeated scans of one setup are observations, not independent trades.",
+        "A gamma-gap call predicts a stock gets pulled to a nearby options magnet price. Hit means it traded there within five sessions; the day the call fires never counts.",
+        "Pending calls are still inside their window and are left out of the hit rate until they resolve, so week-one shows mostly pending by design.",
+        "'Pins (long gamma)' means dealers dampen moves and the pull is stronger; 'drifts (short gamma)' means the pull is weaker. Pin strength is the model's conviction score, not a probability.",
+        "Repeated scans of one setup are collapsed into a single call; 'seen in N scans' shows how many times it was observed.",
       ] },
       { heading: "O'Neil signal outcomes", bullets: [
-        "Each follow-through and breakout is scored against its own invalidation level: the rally-attempt low for an index, the stop price for a stock.",
-        "Hold rate, average max drawdown, and how often a mechanical stop fired are measured from logged signals, so the whipsaw rate is a number rather than an assumption.",
-        "O'Neil expected a share of follow-throughs to fail; the panel exists to show that cost honestly as history accrues.",
+        "Market-turn (follow-through) calls say a downtrend flipped up; breakout calls say a stock cleared its base. Each is graded against the 'fails below' price that would prove it wrong.",
+        "A call needs the full session window (about five weeks) to be Confirmed. Until then it reads live as Working, or At risk when its cushion is under 2%.",
+        "Once calls confirm, hold rate, average drawdown, and how often a mechanical stop fired turn the whipsaw rate into a measured number instead of an assumption.",
+        "Some market-turn calls are expected to fail; the panel exists to show that cost honestly as history accrues.",
       ] },
     ],
   },
@@ -144,11 +156,13 @@ const HELP: Record<string, HelpContent> = {
   calendar: {
     label: "Market Calendar",
     sections: [{ bullets: [
-      "Past/Upcoming and 7/14/30-day controls load immediately. Ticker text changes the calendar only after Apply; leave it blank for all Nasdaq companies.",
+      "The page opens on the next 7 days and repeats the last 7 days underneath. The window control widens both halves at once; ticker text changes the calendar only after Apply.",
       "Add comma-separated symbols only when you want to narrow the market-wide earnings list.",
       "Date-only earnings entries show the supplied session or time TBD. Confirm timing through the Nasdaq source link.",
-      "FRED supplies curated release dates, not consensus, actual, prior, impact, or exact publication time.",
-      "Yahoo and FRED fail independently, so check both source-status badges.",
+      "Each macro row carries its headline FRED reading. A past release shows the value that release first published; an upcoming one shows the last reading for context, labelled as such.",
+      "FRED publishes no consensus, so there is no beat or miss anywhere on this page. Every comparison is against the prior period, and colour only marks the direction a move is conventionally read as good or bad.",
+      "FOMC announcements are omitted: FRED lists that release on every calendar day rather than on meeting dates.",
+      "Nasdaq and FRED fail independently, so check both source-status badges.",
     ] }],
   },
   congress: {
